@@ -10,7 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const PORT = 9901;
+const PORT = Number(process.env.SMOKE_PORT || 9901); // 并发跑多份时用 SMOKE_PORT 错开
 const BASE = `http://localhost:${PORT}`;
 const DATA = path.join(ROOT, '.smoke-data');
 
