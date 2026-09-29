@@ -377,6 +377,10 @@ async function main() {
     ok('账号页出现待确认密钥与 otpauth 地址', startHtml.includes('otpauth://totp/'));
     const secretMatch = startHtml.match(/<b>密钥<\/b><span>([A-Z2-7]+)<\/span>/);
     ok('密钥以 base32 展示', !!secretMatch);
+    // crispEdges 仅二维码 SVG 携带,排除品牌图标等其它内联 SVG 的干扰
+    ok('开启两步验证页内嵌 QR SVG',
+      startHtml.includes('<svg') && startHtml.includes('shape-rendering="crispEdges"')
+      && !!secretMatch && startHtml.includes(secretMatch[1]));
     r = await call(aj, '/account/2fa/confirm', { method: 'POST', form: { code: totp.currentCode(secretMatch[1]), _csrf: ef._csrf } });
     const confirmHtml = await r.text();
     ok('确认后一次性展示恢复代码', confirmHtml.includes('恢复代码') && confirmHtml.includes('-'));

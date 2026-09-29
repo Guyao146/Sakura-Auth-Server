@@ -110,11 +110,16 @@ export function accountPage({ theme, siteName, user, csrf, msg, err, twoFa }) {
         <div class="actions"><button class="btn btn-danger" type="submit">关闭两步验证</button></div>
       </form>`;
   } else if (twoFa.pendingSecret) {
+    const scanStep = twoFa.qr
+      ? `<p class="small" style="margin-bottom:var(--s2)">1. 用验证器 App(Google Authenticator、1Password 等)扫描下方二维码:</p>
+      <div style="margin:0 0 var(--s3)">${twoFa.qr}</div>
+      <p class="small" style="margin-bottom:var(--s1)">2. 无法扫码时手动添加以下密钥:</p>`
+      : `<p class="small" style="margin-bottom:var(--s1)">1. 在验证器 App(Google Authenticator、1Password 等)中手动添加以下密钥:</p>`;
     twofaBlock = `
       <h3>开启两步验证</h3>
-      <p class="small" style="margin-bottom:var(--s2)">1. 在验证器 App(Google Authenticator、1Password 等)中手动添加以下密钥:</p>
+      ${scanStep}
       <div class="kv"><b>密钥</b><span>${esc(twoFa.pendingSecret)}</span></div>
-      <p class="muted small" style="word-break:break-all">2. 或复制此地址到 App: <code>${esc(twoFa.otpauth)}</code></p>
+      <p class="muted small" style="word-break:break-all">${twoFa.qr ? 3 : 2}. 或复制此地址到 App: <code>${esc(twoFa.otpauth)}</code></p>
       <form method="post" action="/account/2fa/confirm">
         ${hiddenInputs({ _csrf: csrf })}
         <label>输入 App 显示的 6 位验证码完成开启</label>

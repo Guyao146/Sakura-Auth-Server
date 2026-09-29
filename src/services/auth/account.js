@@ -2,6 +2,7 @@ import * as users from '../../models/users.js';
 import * as recovery from '../../models/recovery.js';
 import { hashPassword, verifyPassword } from '../../core/password.js';
 import { generateSecret, otpauthUri, verifyTotp } from '../../core/totp.js';
+import { qrSvg } from '../../core/qr.js';
 import { getRuntime } from '../../core/runtime.js';
 import { sendHtml } from '../../core/http.js';
 import { accountPage, recoveryCodesPage } from '../../views/auth.js';
@@ -10,13 +11,20 @@ import { logger } from '../../core/logger.js';
 /** 账号页 2FA 区块的状态组装 */
 function twoFaState(user) {
   const rt = getRuntime();
+  const otpauth = user.totp_secret
+    ? otpauthUri({ secret: user.totp_secret, username: user.username, issuer: rt.siteName })
+    : null;
+  // 待确认密钥阶段生成扫码二维码;内容超长等异常时降级为无二维码,不阻塞账号页
+  let qr = null;
+  if (otpauth && !user.totp_enabled) {
+    try { qr = qrSvg(otpauth); } catch { qr = null; }
+  }
   return {
     enabled: !!user.totp_enabled,
     pendingSecret: user.totp_secret && !user.totp_enabled ? user.totp_secret : null,
     secret: user.totp_secret || null,
-    otpauth: user.totp_secret
-      ? otpauthUri({ secret: user.totp_secret, username: user.username, issuer: rt.siteName })
-      : null,
+    otpauth,
+    qr,
     recoveryLeft: recovery.countValid(user.id),
     recoveryCodes: null,
   };
