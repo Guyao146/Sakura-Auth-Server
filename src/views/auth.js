@@ -17,13 +17,13 @@ export function loginPage({ theme, siteName, csrf, next, err, username = '' }) {
         <div class="actions">
           <button class="btn btn-primary" type="submit">登 录</button>
         </div>
-      </form>`,
+      </form>
+      <p class="muted small" style="margin:var(--s3) 0 0"><a href="/forgot-password">忘记密码?</a></p>`,
   });
 }
 
 /** 二步验证页(第二因子) */
-export function twofaPage({ theme, siteName, csrf, pending, next, username, err }) {
-  return authPage({
+export function twofaPage({ theme, siteName, csrf, pending, next, username, err }) {  return authPage({
     theme, siteName, title: `两步验证 · ${siteName}`,
     content: `
       ${banner(err ? esc(err) : '', 'err')}
@@ -39,6 +39,59 @@ export function twofaPage({ theme, siteName, csrf, pending, next, username, err 
           <a class="btn" href="/login">返回重新登录</a>
         </div>
       </form>`,
+  });
+}
+
+/** 找回密码页(输入邮箱;无论邮箱是否存在,提交后的提示都一致,防枚举) */
+export function forgotPasswordPage({ theme, siteName, csrf, err, msg, email = '' }) {
+  return authPage({
+    theme, siteName, title: `找回密码 · ${siteName}`,
+    content: `
+      ${banner(err ? esc(err) : '', 'err')}
+      ${banner(msg ? esc(msg) : '', 'ok')}
+      <h3 style="margin-top:0">找回密码</h3>
+      <p class="muted small">输入账号绑定的邮箱地址,我们会发送一封包含重置链接的邮件,链接 30 分钟内有效。</p>
+      <form method="post" action="/forgot-password">
+        ${hiddenInputs({ _csrf: csrf })}
+        <label for="email">邮箱地址</label>
+        <input type="email" id="email" name="email" value="${esc(email)}" required autofocus autocomplete="email" placeholder="you@example.com">
+        <div class="actions">
+          <button class="btn btn-primary" type="submit">发送重置邮件</button>
+          <a class="btn" href="/login">返回登录</a>
+        </div>
+      </form>`,
+  });
+}
+
+/** 设置新密码页(GET /reset-password?token=...,token 走 hidden 回传) */
+export function resetPasswordPage({ theme, siteName, csrf, token, err }) {
+  return authPage({
+    theme, siteName, title: `设置新密码 · ${siteName}`,
+    content: `
+      ${banner(err ? esc(err) : '', 'err')}
+      <h3 style="margin-top:0">设置新密码</h3>
+      <p class="muted small">请设置至少 8 位的新密码。重置成功后,该账号所有已登录的会话都会被退出。</p>
+      <form method="post" action="/reset-password">
+        ${hiddenInputs({ _csrf: csrf, token })}
+        <label for="password">新密码(至少 8 位)</label>
+        <input type="password" id="password" name="password" required minlength="8" autofocus autocomplete="new-password">
+        <label for="password2">确认新密码</label>
+        <input type="password" id="password2" name="password2" required minlength="8" autocomplete="new-password">
+        <div class="actions">
+          <button class="btn btn-primary" type="submit">重置密码</button>
+        </div>
+      </form>`,
+  });
+}
+
+/** 密码重置成功页(提示用新密码重新登录) */
+export function resetDonePage({ theme, siteName }) {
+  return authPage({
+    theme, siteName, title: `密码已重置 · ${siteName}`, footer: false,
+    content: `
+      <h3 style="margin-top:0">密码已重置</h3>
+      <p class="small">你的密码已更新,所有已登录的会话均已退出。请使用新密码重新登录。</p>
+      <div class="actions"><a class="btn btn-primary" href="/login">前往登录</a></div>`,
   });
 }
 

@@ -8,6 +8,7 @@ import * as introspect from './services/oauth/introspect.js';
 import * as login from './services/auth/login.js';
 import * as logout from './services/auth/logout.js';
 import * as account from './services/auth/account.js';
+import * as reset from './services/auth/reset.js';
 import * as admin from './services/admin/index.js';
 import * as wizard from './services/setup/wizard.js';
 import { showLanding } from './services/home.js';
@@ -33,6 +34,12 @@ export function registerRoutes() {
   r('POST', '/account/2fa/start', account.startTwoFa, { auth: 'user' });
   r('POST', '/account/2fa/confirm', account.confirmTwoFa, { auth: 'user' });
   r('POST', '/account/2fa/disable', account.disableTwoFa, { auth: 'user' });
+
+  // 邮件找回密码(匿名;防枚举由服务层保证)
+  r('GET', '/forgot-password', reset.showForgot);
+  r('POST', '/forgot-password', reset.handleForgot);
+  r('GET', '/reset-password', reset.showReset);
+  r('POST', '/reset-password', reset.handleReset);
 
   r('GET', '/setup', wizard.showSetup);
   r('POST', '/setup/step1', wizard.step1);

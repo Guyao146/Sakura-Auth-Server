@@ -19,6 +19,13 @@ export const config = {
   sessionTtl: Number(process.env.SESSION_TTL || 14 * 86400),            // 14 天
   authCodeTtl: 300,                                                     // 授权码 5 分钟
   bodyLimit: 100 * 1024,
+  // SMTP 邮件配置(找回密码用)。未配置 SMTP_HOST 时为开发模式:
+  // 不真正发信,邮件完整内容(含重置链接)打到日志。
+  smtpHost: process.env.SMTP_HOST || '',
+  smtpPort: Number(process.env.SMTP_PORT || 587),
+  smtpUser: process.env.SMTP_USER || '',
+  smtpPass: process.env.SMTP_PASS || '',
+  smtpFrom: process.env.SMTP_FROM || '',
 };
 
 /** 内置 scope 及其中文描述(向导/管理端/同意页共用) */
