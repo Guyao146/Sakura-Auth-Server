@@ -1,7 +1,7 @@
 /**
  * 零依赖 QR 编码器(ISO/IEC 18004 最小子集)。
  * 范围:byte mode(UTF-8 字节)/ 版本 1-10 自动选择 / 纠错等级 M / 掩码 0-7 按四条惩罚规则打分取最小。
- * 产出:布尔矩阵(第 0 行第 0 列起,true 为深色)与内联 SVG(深色用 var(--heading),背景透明)。
+ * 产出:布尔矩阵(第 0 行第 0 列起,true 为深色)与内联 SVG(固定白底深码,便于任何验证器识别)。
  * 全部为纯函数,除 GF 表初始化外无模块级状态。
  */
 
@@ -341,7 +341,7 @@ export function qrMatrix(text) {
 
 /**
  * 文本 → 内联 SVG(width/height = size 像素,viewBox 含 4 模块静区)。
- * 深色模块 fill 用 var(--heading) 随明暗主题切换,背景透明,shape-rendering 保证模块锐利。
+ * 固定白底深码:部分验证器 App 不识别反色码,不随明暗主题变色,shape-rendering 保证模块锐利。
  */
 export function qrSvg(text, size = 132) {
   const { matrix } = qrMatrix(text);
@@ -361,5 +361,5 @@ export function qrSvg(text, size = 132) {
     }
   }
   const dim = n + quiet * 2;
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${dim} ${dim}" shape-rendering="crispEdges" role="img" aria-label="两步验证二维码"><path style="fill:var(--heading)" d="${d}"/></svg>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${dim} ${dim}" shape-rendering="crispEdges" role="img" aria-label="两步验证二维码"><rect width="${dim}" height="${dim}" fill="#ffffff"/><path style="fill:#1f2330" d="${d}"/></svg>`;
 }

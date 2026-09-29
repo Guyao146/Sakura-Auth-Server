@@ -194,11 +194,11 @@ ok('qrMatrix 暴露 get(r,c) 且 (0,0) 为深色', typeof again.get(0, 0) === 'b
 const svg = qrSvg('https://sakura.example/otpauth?x=樱');
 ok('qrSvg 输出内联 SVG,shape-rendering=crispEdges',
   svg.startsWith('<svg ') && svg.includes('shape-rendering="crispEdges"'));
-ok('SVG 深色模块用 var(--heading)(随明暗主题切换)', svg.includes('var(--heading)'));
+ok('SVG 固定白底深码(部分验证器不识别反色)', svg.includes('fill="#ffffff"') && svg.includes('fill:#1f2330'));
 ok('SVG 默认 132px,自定义尺寸生效', svg.includes('width="132"') && svg.includes('height="132"')
   && qrSvg('x', 96).includes('width="96"'));
-ok('SVG 背景透明、无外部资源引用(仅内置 xmlns)',
-  !/<(rect|image|use|foreignObject|script)/.test(svg) && svg.includes('xmlns="http://www.w3.org/2000/svg"'));
+ok('SVG 无外部资源引用(仅内置 xmlns 与白色底 rect)',
+  !/<(image|use|foreignObject|script)/.test(svg) && svg.includes('xmlns="http://www.w3.org/2000/svg"'));
 ok('SVG 内容确定性(同输入两次相同)', svg === qrSvg('https://sakura.example/otpauth?x=樱'));
 
 /* ---------- otpauth URI 端到端(与账号页同一形状) ---------- */
