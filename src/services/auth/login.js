@@ -78,6 +78,7 @@ export function showLogin(ctx, { err, username = '' } = {}) {
   sendHtml(ctx.res, err ? 401 : 200, loginPage({
     theme: ctx.theme, siteName: ctx.runtime.siteName,
     csrf, next: safeNext(nextRaw, ''), err, username,
+    allowRegister: ctx.runtime.allowRegister,
   }));
 }
 

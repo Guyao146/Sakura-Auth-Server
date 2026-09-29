@@ -3,7 +3,7 @@ import { authPage } from './layout.js';
 import { banner, hiddenInputs, scopeList, scopeItems } from './components.js';
 
 /** 登录页 */
-export function loginPage({ theme, siteName, csrf, next, err, username = '' }) {
+export function loginPage({ theme, siteName, csrf, next, err, username = '', allowRegister = false }) {
   return authPage({
     theme, siteName, title: `登录 · ${siteName}`,
     content: `
@@ -18,7 +18,36 @@ export function loginPage({ theme, siteName, csrf, next, err, username = '' }) {
           <button class="btn btn-primary" type="submit">登 录</button>
         </div>
       </form>
-      <p class="muted small" style="margin:var(--s3) 0 0"><a href="/forgot-password">忘记密码?</a></p>`,
+      <p class="muted small" style="margin:var(--s3) 0 0"><a href="/forgot-password">忘记密码?</a></p>
+      ${allowRegister ? `<p class="muted small" style="text-align:center;margin:var(--s4) 0 0">还没有账号?<a href="/register">注册新账号</a></p>` : ''}`,
+  });
+}
+
+/** 注册页(自助注册开启时可用) */
+export function registerPage({ theme, siteName, csrf, err, values = {} }) {
+  const v = values;
+  return authPage({
+    theme, siteName, title: `注册新账号 · ${siteName}`,
+    content: `
+      ${banner(err ? esc(err) : '', 'err')}
+      <form method="post" action="/register">
+        ${hiddenInputs({ _csrf: csrf })}
+        <label for="username">用户名</label>
+        <input type="text" id="username" name="username" value="${esc(v.username || '')}" required autofocus
+          autocomplete="username" pattern="[a-zA-Z0-9_.@-]{2,64}" title="2-64 位字母数字与 _.@-">
+        <label for="password">密码(至少 8 位)</label>
+        <input type="password" id="password" name="password" required minlength="8" autocomplete="new-password">
+        <label for="password2">确认密码</label>
+        <input type="password" id="password2" name="password2" required minlength="8" autocomplete="new-password">
+        <label for="name">显示姓名(可选)</label>
+        <input type="text" id="name" name="name" value="${esc(v.name || '')}" maxlength="40" autocomplete="name">
+        <label for="email">邮箱(可选)</label>
+        <input type="email" id="email" name="email" value="${esc(v.email || '')}" autocomplete="email">
+        <div class="actions">
+          <button class="btn btn-primary" type="submit">注 册</button>
+          <a class="btn" href="/login">返回登录</a>
+        </div>
+      </form>`,
   });
 }
 

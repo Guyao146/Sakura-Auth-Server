@@ -9,11 +9,13 @@ const scopeItemsFor = (selectedStr, checkedSet) =>
   }));
 
 /* ---------------- 控制台首页 ---------------- */
-export function dashboardPage({ theme, siteName, user, cur, stats, issuer }) {
+export function dashboardPage({ theme, siteName, user, cur, stats, issuer, allowRegister, csrf, msg, err }) {
   return adminPage({
     theme, siteName, user, cur, active: 'dashboard', title: `控制台 · ${siteName}`,
     content: `
       ${pageTitle('控制台')}
+      ${banner(msg ? esc(msg) : '', 'ok')}
+      ${banner(err ? esc(err) : '', 'err')}
       <div class="stats">
         ${statCard(stats.users, '用户')}
         ${statCard(stats.clients, '应用')}
@@ -26,6 +28,17 @@ export function dashboardPage({ theme, siteName, user, cur, stats, issuer }) {
         ${kvRow('发现文档', `<a href="/.well-known/openid-configuration">/.well-known/openid-configuration</a>`)}
         ${kvRow('JWKS', `<a href="/jwks.json">/jwks.json</a>`)}
         <p class="muted small">接入方只需发现文档地址即可自动完成 OIDC 配置。</p>
+      </div>
+      <div class="card">
+        <h3 style="margin-top:0">自助注册</h3>
+        <p class="small" style="margin:var(--s2) 0">当前状态:${allowRegister ? badge('开启') : badge('关闭', '')}</p>
+        <p class="muted small">开启后,登录页会出现「注册新账号」入口,任何人都可以自助创建账号并直接登录;自助注册的账号永远不是管理员。</p>
+        <form method="post" action="/admin/register-toggle">
+          ${hiddenInputs({ _csrf: csrf })}
+          <button class="btn ${allowRegister ? 'btn-danger' : 'btn-primary'}" type="submit">
+            ${allowRegister ? '关闭自助注册' : '开启自助注册'}
+          </button>
+        </form>
       </div>
       <div class="card">
         <h3 style="margin-top:0">快速开始</h3>
