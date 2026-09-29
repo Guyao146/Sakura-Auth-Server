@@ -6,6 +6,7 @@ import * as token from './services/oauth/token.js';
 import * as userinfo from './services/oauth/userinfo.js';
 import * as introspect from './services/oauth/introspect.js';
 import * as login from './services/auth/login.js';
+import * as register from './services/auth/register.js';
 import * as logout from './services/auth/logout.js';
 import * as account from './services/auth/account.js';
 import * as admin from './services/admin/index.js';
@@ -26,6 +27,8 @@ export function registerRoutes() {
   r('GET', '/login', login.showLogin);
   r('POST', '/login', login.handleLogin);
   r('POST', '/login/2fa', login.handleTwoFa);
+  r('GET', '/register', register.showRegister);
+  r('POST', '/register', register.handleRegister);
   r('GET', '/logout', logout.showLogout);
   r('POST', '/logout', logout.handleLogout);
   r('GET', '/account', account.showAccount, { auth: 'user' });
@@ -50,6 +53,7 @@ export function registerRoutes() {
   r('POST', '/revoke', introspect.revokePost, { cors: true });
 
   r('GET', '/admin', admin.showDashboard, { auth: 'admin' });
+  r('POST', '/admin/register-toggle', admin.toggleRegister, { auth: 'admin' });
   r('GET', '/admin/users', admin.listUsers, { auth: 'admin' });
   r('GET', '/admin/users/new', admin.newUserForm, { auth: 'admin' });
   r('POST', '/admin/users/create', admin.createUser, { auth: 'admin' });

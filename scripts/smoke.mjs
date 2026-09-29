@@ -383,6 +383,77 @@ async function main() {
     r = await call(aj, '/account/2fa/disable', { method: 'POST', form: { password: 'Wizard#12345', _csrf: ef._csrf } });
     ok('验证密码后可关闭两步验证', (await r.text()).includes('两步验证已关闭'));
 
+    /* ---------- 自助注册开关 ---------- */
+    // 默认关闭:注册页与注册入口均不可用
+    r = await call(new Jar(), '/register');
+    ok('自助注册:默认关闭时 GET /register 重定向登录页', r.status === 302 && location(r) === '/login');
+    r = await call(new Jar(), '/login');
+    ok('自助注册:默认关闭时登录页不显示注册入口', r.status === 200 && !(await r.text()).includes('注册新账号'));
+
+    // 管理员在控制台开启开关
+    r = await call(aj, '/admin');
+    const dashHtml = await r.text();
+    ok('自助注册:控制台出现开关卡片', dashHtml.includes('自助注册') && dashHtml.includes('开启自助注册'));
+    const dashForm = extractHidden(dashHtml);
+    r = await call(aj, '/admin/register-toggle', { method: 'POST', form: { _csrf: dashForm._csrf } });
+    ok('自助注册:管理员开启开关', r.status === 302 && location(r).startsWith('/admin?msg='));
+
+    // 开启后:注册页可用,登录页出现注册入口
+    r = await call(new Jar(), '/register');
+    ok('自助注册:开启后 GET /register 返回注册页', r.status === 200 && (await r.text()).includes('确认密码'));
+    r = await call(new Jar(), '/login');
+    ok('自助注册:开启后登录页显示注册入口', r.status === 200 && (await r.text()).includes('注册新账号'));
+
+    // 注册新用户:成功后直接建立会话
+    const rj = new Jar();
+    r = await call(rj, '/register');
+    const regForm = extractHidden(await r.text());
+    r = await call(rj, '/register', {
+      method: 'POST',
+      form: {
+        username: 'carol', password: 'Carol#12345', password2: 'Carol#12345',
+        name: '卡萝尔', email: 'carol@example.com', _csrf: regForm._csrf,
+      },
+    });
+    ok('自助注册:注册成功并自动登录', r.status === 302 && location(r) === '/');
+    r = await call(rj, '/account');
+    ok('自助注册:新会话可访问账号页并显示新用户名', r.status === 200 && (await r.text()).includes('carol'));
+    r = await call(rj, '/admin');
+    ok('自助注册:注册用户不是管理员(访问控制台 403)', r.status === 403);
+
+    // 重复用户名被拒
+    const dj = new Jar();
+    r = await call(dj, '/register');
+    const dupForm = extractHidden(await r.text());
+    r = await call(dj, '/register', {
+      method: 'POST',
+      form: { username: 'carol', password: 'Carol#12345', password2: 'Carol#12345', _csrf: dupForm._csrf },
+    });
+    ok('自助注册:重复用户名注册被拒', r.status === 400 && (await r.text()).includes('用户名已存在'));
+
+    // 两次密码不一致被拒
+    const mj = new Jar();
+    r = await call(mj, '/register');
+    const mmForm = extractHidden(await r.text());
+    r = await call(mj, '/register', {
+      method: 'POST',
+      form: { username: 'dave', password: 'Dave#12345', password2: 'Dave#99999', _csrf: mmForm._csrf },
+    });
+    ok('自助注册:两次密码不一致被拒', r.status === 400 && (await r.text()).includes('两次输入的密码不一致'));
+
+    // 管理员关闭开关:注册页与提交重新不可用
+    r = await call(aj, '/admin');
+    const dashForm2 = extractHidden(await r.text());
+    r = await call(aj, '/admin/register-toggle', { method: 'POST', form: { _csrf: dashForm2._csrf } });
+    ok('自助注册:管理员关闭开关', r.status === 302 && location(r).startsWith('/admin?msg='));
+    r = await call(new Jar(), '/register');
+    ok('自助注册:关闭后 GET /register 重新重定向登录页', r.status === 302 && location(r) === '/login');
+    r = await call(new Jar(), '/register', {
+      method: 'POST',
+      form: { username: 'eve', password: 'Eve#12345', password2: 'Eve#12345', _csrf: 'x' },
+    });
+    ok('自助注册:关闭后 POST /register 不可用', r.status === 302 && location(r) === '/login');
+
     console.log(failed ? `\n${failed} 项失败` : '\n全部通过 ✔');
   } finally {
     child.kill();

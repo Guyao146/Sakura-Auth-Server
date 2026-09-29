@@ -3,13 +3,16 @@ import * as clients from '../../models/clients.js';
 import * as sessions from '../../models/sessions.js';
 import * as tokens from '../../models/tokens.js';
 import * as recovery from '../../models/recovery.js';
-import { getRuntime } from '../../core/runtime.js';
+import { getRuntime, updateRuntime } from '../../core/runtime.js';
+import * as settingsApi from '../../models/settings.js';
 import { hashPassword } from '../../core/password.js';
 import { randomToken } from '../../core/crypto.js';
 import { splitLines, redirectUri as validUri } from '../../core/util.js';
 import { SCOPES, DEFAULT_CLIENT_SCOPES } from '../../core/config.js';
 import { sendHtml, redirect } from '../../core/http.js';
 import { dashboardPage, usersPage, userFormPage, appsPage, appFormPage, appDetailPage, secretRevealPage } from '../../views/admin.js';
+
+const CSRF = (ctx) => ctx.session.csrf;
 
 /* ---------------- 控制台首页 ---------------- */
 export function showDashboard(ctx) {
@@ -19,12 +22,24 @@ export function showDashboard(ctx) {
     cur: ctx.url.pathname + ctx.url.search,
     stats: { users: users.count(), clients: clients.count(), activeTokens: tokens.countActive(), sessions: sessions.count() },
     issuer: rt.issuer,
+    allowRegister: rt.allowRegister,
+    csrf: CSRF(ctx),
+    msg: ctx.query.get('msg'), err: ctx.query.get('err'),
   }));
 }
 
-/* ---------------- 用户管理 ---------------- */
-const CSRF = (ctx) => ctx.session.csrf;
+/* ---------------- 自助注册开关 ---------------- */
+export function toggleRegister(ctx) {
+  const rt = getRuntime();
+  if (ctx.body?._csrf !== CSRF(ctx)) {
+    return redirect(ctx.res, '/admin?err=' + encodeURIComponent('页面已过期,请重试。'));
+  }
+  const next = rt.allowRegister ? '0' : '1';
+  updateRuntime({ allow_register: next }, settingsApi.setSetting);
+  redirect(ctx.res, '/admin?msg=' + encodeURIComponent(next === '1' ? '已开启自助注册。' : '已关闭自助注册。'));
+}
 
+/* ---------------- 用户管理 ---------------- */
 export function listUsers(ctx) {
   const list = users.list().map((u) => ({ ...u, _csrf: CSRF(ctx) }));
   sendHtml(ctx.res, 200, usersPage({

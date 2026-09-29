@@ -4,7 +4,7 @@ import { config } from './config.js';
  * 运行时配置:env 默认值 ← settings 表(配置向导/管理端写入)。
  * 进程内缓存,updateRuntime() 写库后刷新缓存。
  */
-const KEYS = ['site_name', 'issuer', 'access_ttl', 'refresh_ttl', 'session_ttl'];
+const KEYS = ['site_name', 'issuer', 'access_ttl', 'refresh_ttl', 'session_ttl', 'allow_register'];
 
 let rt = null;
 let settingsGetter = null;
@@ -27,6 +27,7 @@ export function reloadRuntime() {
     authCodeTtl: config.authCodeTtl,
     setupStep: Number(s.setup_step || 1),
     setupDone: String(s.setup_done || '') === '1',
+    allowRegister: String(s.allow_register || '') === '1',
   };
   return rt;
 }
