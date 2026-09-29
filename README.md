@@ -1,6 +1,6 @@
 # SakuraID —— 类 authentik 的轻量 OAuth2 / OIDC 认证后台
 
-> 版本:`v0.2.0` · 零 npm 依赖 · Node.js ≥ 22.5 · SQLite 存储
+> 版本:`v0.3.0` · 零 npm 依赖 · Node.js ≥ 22.5 · SQLite 存储
 
 SakuraID 是一个自托管的统一身份认证服务(IdP):业务系统统一跳转到这里登录,通过 OAuth 2.0 / OpenID Connect 拿回令牌访问各自的接口。定位对标 authentik 的核心子集——不过超大而全,只把「发令牌」这一件事做对。
 
@@ -36,8 +36,9 @@ node server.js
 | OIDC | 发现文档、JWKS、id_token(nonce/at_hash/auth_time)、/userinfo |
 | 运维端点 | RFC 7662 内省、RFC 7009 吊销 |
 | 控制台 | 用户管理(禁用/重置密码/用户组)、应用管理(机密/公开客户端、密钥重置、令牌吊销) |
-| 两步验证 | 账号页自助开启 TOTP(RFC 6238,兼容 Google Authenticator 等)、8 枚一次性恢复代码、登录第二因子、管理员可重置 |
-| 安全 | scrypt 口令哈希、CSRF 双提交、登录限流、授权码/刷新令牌哈希落库、授权码一次性 |
+| 两步验证 | 账号页自助开启 TOTP(RFC 6238,兼容 Google Authenticator 等)、服务端渲染扫码二维码、8 枚一次性恢复代码、登录第二因子、管理员可重置 |
+| 账号自助 | 找回密码(零依赖 SMTP 客户端,支持 STARTTLS;未配置 SMTP 时走开发模式把邮件打到日志)、管理员可控的自助注册开关 |
+| 安全 | scrypt 口令哈希、CSRF 双提交、登录限流、授权码/刷新令牌哈希落库、授权码一次性、防用户枚举 |
 | 界面 | 配置向导、明暗双主题(跟随系统 + 手动切换)、樱落生态设计语言 |
 
 ## 架构
@@ -69,6 +70,7 @@ node server.js
 | `ACCESS_TOKEN_TTL` | `900` | access token 有效期(秒) |
 | `REFRESH_TOKEN_TTL` | `2592000` | refresh token 有效期(秒) |
 | `SESSION_TTL` | `1209600` | 登录会话有效期(秒) |
+| `SMTP_HOST` 等 | 未配置 | `SMTP_PORT`/`SMTP_USER`/`SMTP_PASS`/`SMTP_FROM`;配置后启用真实发信,未配置时邮件打到日志 |
 
 向导里设置的同名项保存在 settings 表;`BASE_URL` 等环境变量优先级更高,便于容器化锁定。
 
@@ -90,7 +92,7 @@ curl -s http://localhost:9000/token -d grant_type=authorization_code -d code=<CO
 curl -s http://localhost:9000/userinfo -H "Authorization: Bearer <ACCESS_TOKEN>"
 ```
 
-测试工具链:`npm run smoke` 会自动拉起独立实例,端到端验证向导、登录、两步验证(TOTP/恢复代码/管理员重置)、授权码 + PKCE、刷新轮换、内省/吊销、client_credentials 与控制台权限(47 项断言)。
+测试工具链:`npm run smoke` 会自动拉起独立实例,端到端验证向导、登录、两步验证(TOTP/恢复代码/管理员重置)、找回密码、自助注册、授权码 + PKCE、刷新轮换、内省/吊销、client_credentials 与控制台权限(73 项断言);另有 `node scripts/test-qr.mjs`(QR 编码器 46 项)与 `node scripts/test-smtp.mjs`(SMTP 对话 9 项)两个单元测试。
 
 运维脚本:`npm run reset-admin -- <用户名> [新密码]`(直接重置管理员密码,用于忘记密码);`npm run seed-demo`(灌入演示用户与一个 PKCE 公开客户端)。
 
@@ -100,7 +102,7 @@ curl -s http://localhost:9000/userinfo -H "Authorization: Bearer <ACCESS_TOKEN>"
 
 ## 安全边界(已知未实现)
 
-- 未内置 SAML、LDAP、社交登录与邮件找回密码等 authentik 高级流程(flows/表达式策略);密码重置由管理员在控制台完成或用 `npm run reset-admin`;
+- 未内置 SAML、LDAP、社交登录等 authentik 高级流程(flows/表达式策略);找回密码依赖 SMTP 发信,未配置 SMTP 时邮件打到日志(开发模式);
 - SQLite 单写者,服务按单实例运行(PM2 配置已锁定);大规模并发建议评估外部数据库方案;
 - 反代部署时务必设置 `BASE_URL` 为 https 地址,会话 Cookie 会自动附加 `Secure`。
 
