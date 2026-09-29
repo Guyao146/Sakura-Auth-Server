@@ -1,0 +1,35 @@
+/** 通用小工具:HTML 转义、时间格式化、校验 */
+
+const ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+export const escapeHtml = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ESC[c]);
+
+export const fmtTime = (sec) => (sec ? new Date(sec * 1000).toLocaleString('zh-CN', { hour12: false }) : '-');
+
+/** 校验 http(s) 绝对 URL,返回规范值或 null */
+export function httpUrl(s) {
+  try {
+    const u = new URL(String(s));
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+    return u.toString();
+  } catch {
+    return null;
+  }
+}
+
+/** 校验重定向地址:允许 http(s) 与自定义 scheme(如移动端 app 回调) */
+export function redirectUri(s) {
+  const v = String(s || '').trim();
+  return /^[a-zA-Z][a-zA-Z0-9+.-]*:[^\s]+$/.test(v) ? v : null;
+}
+
+/** 多行文本 → 去空去重的数组(重定向 URI 列表用) */
+export const splitLines = (text) =>
+  String(text || '').split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+
+/** 相对路径跳转校验,防开放重定向 */
+export function safeNext(n, fallback = '/') {
+  if (typeof n === 'string' && n.startsWith('/') && !n.startsWith('//') && !n.includes('\\')) return n;
+  return fallback;
+}
+
+export const USERNAME_RE = /^[a-zA-Z0-9_.@-]{2,64}$/;

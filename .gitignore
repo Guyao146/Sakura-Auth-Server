@@ -1,0 +1,5 @@
+data/
+.smoke-data/
+node_modules/
+*.log
+.wt/

@@ -1,0 +1,19 @@
+services:
+  sakura-idp:
+    build: .
+    # 使用镜像仓库时改为:
+    # image: your-registry/sakura-idp:latest
+    container_name: sakura-idp
+    ports:
+      - "9000:9000"
+    environment:
+      # 对外地址(同时是 OIDC issuer),通过域名/反代访问时必改
+      BASE_URL: https://sso.example.com
+      # 可选:覆盖向导里的有效期设置(秒)
+      # ACCESS_TOKEN_TTL: 900
+      # REFRESH_TOKEN_TTL: 2592000
+      # SESSION_TTL: 1209600
+    volumes:
+      # SQLite 数据、签名密钥都在这里,务必持久化
+      - ./data:/data
+    restart: unless-stopped

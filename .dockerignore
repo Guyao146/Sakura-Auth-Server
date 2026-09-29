@@ -1,0 +1,6 @@
+data/
+.smoke-data/
+node_modules/
+*.log
+.git/
+deploy/
