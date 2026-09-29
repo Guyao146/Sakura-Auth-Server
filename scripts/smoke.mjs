@@ -1,6 +1,6 @@
 /**
  * 冒烟测试:在独立数据目录拉起真实服务,端到端验证
- * 配置向导 → 登录 → 授权码+PKCE → 令牌签发/刷新/内省/吊销 → 管理控制台权限。
+ * 配置向导 → 登录 → 授权码+PKCE → 令牌签发/刷新/内省/吊销 → 管理控制台权限 → 邮件找回密码。
  * 运行:npm run smoke
  */
 import { spawn } from 'node:child_process';
@@ -382,6 +382,52 @@ async function main() {
     ok('确认后一次性展示恢复代码', confirmHtml.includes('恢复代码') && confirmHtml.includes('-'));
     r = await call(aj, '/account/2fa/disable', { method: 'POST', form: { password: 'Wizard#12345', _csrf: ef._csrf } });
     ok('验证密码后可关闭两步验证', (await r.text()).includes('两步验证已关闭'));
+
+    /* ---------- 邮件找回密码(SMTP 未配置 → 开发模式,邮件打到 serverLog) ---------- */
+    const rj = new Jar();
+    r = await call(rj, '/forgot-password');
+    const fpf = extractHidden(await r.text());
+    ok('找回密码页可访问且带 CSRF', r.status === 200 && !!fpf._csrf);
+
+    r = await call(rj, '/forgot-password', { method: 'POST', form: { email: 'ghost@example.com', _csrf: fpf._csrf } });
+    const ghostPage = await r.text();
+    ok('找回密码:未知邮箱渲染通用提示', r.status === 200 && ghostPage.includes('如果该邮箱已注册'));
+
+    r = await call(rj, '/forgot-password', { method: 'POST', form: { email: 'alice@example.com', _csrf: fpf._csrf } });
+    const knownPage = await r.text();
+    ok('找回密码:已知与未知邮箱响应一致(防枚举)',
+      knownPage.includes('如果该邮箱已注册') && ghostPage === knownPage);
+
+    const links = [...serverLog.matchAll(/\/reset-password\?token=([A-Za-z0-9_-]+)/g)];
+    ok('找回密码:dev 模式日志输出重置链接', links.length > 0);
+
+    const token = links[links.length - 1][1];
+    r = await call(rj, `/reset-password?token=${token}`);
+    const resetHtml = await r.text();
+    const rpf = extractHidden(resetHtml);
+    ok('找回密码:重置页渲染新密码表单',
+      r.status === 200 && resetHtml.includes('设置新密码') && rpf.token === token && !!rpf._csrf);
+
+    r = await call(rj, '/reset-password', {
+      method: 'POST',
+      form: { token, _csrf: rpf._csrf, password: 'NewPass#123', password2: 'NewPass#123' },
+    });
+    ok('找回密码:提交新密码成功', r.status === 200 && (await r.text()).includes('密码已重置'));
+
+    const nj = new Jar();
+    r = await call(nj, '/login');
+    const nf = extractHidden(await r.text());
+    r = await call(nj, '/login', { method: 'POST', form: { username: 'alice', password: 'NewPass#123', _csrf: nf._csrf } });
+    ok('找回密码:新密码可登录', r.status === 302 && location(r) === '/');
+
+    const oj = new Jar();
+    r = await call(oj, '/login');
+    const of0 = extractHidden(await r.text());
+    r = await call(oj, '/login', { method: 'POST', form: { username: 'alice', password: 'Alice#12345', _csrf: of0._csrf } });
+    ok('找回密码:旧密码已失效', r.status === 401);
+
+    r = await call(new Jar(), '/reset-password?token=bogus-token-xyz');
+    ok('找回密码:错误 token 渲染失败页', r.status === 400 && (await r.text()).includes('链接无效'));
 
     console.log(failed ? `\n${failed} 项失败` : '\n全部通过 ✔');
   } finally {

@@ -84,6 +84,13 @@ CREATE TABLE IF NOT EXISTS recovery_codes (
   used_at   INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_recovery_user ON recovery_codes(user_id);
+CREATE TABLE IF NOT EXISTS reset_tokens (
+  code_hash  TEXT PRIMARY KEY,
+  user_id    TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
+  used_at    INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_reset_tokens_user ON reset_tokens(user_id);
 `;
 
 /** 老库平滑迁移:补列/补表,幂等 */
@@ -112,4 +119,5 @@ export function purgeExpired() {
   db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(now);
   db.prepare('DELETE FROM auth_codes WHERE expires_at < ?').run(now);
   db.prepare('DELETE FROM tokens WHERE expires_at < ?').run(now);
+  db.prepare('DELETE FROM reset_tokens WHERE expires_at < ?').run(now);
 }
