@@ -7,6 +7,8 @@ import { randomToken, timingSafeEqStr, nowSec } from '../../core/crypto.js';
 import { verifyTotp } from '../../core/totp.js';
 import { getSigningKey } from '../../core/keys.js';
 import { setCookie, clearCookie, redirect, sendHtml } from '../../core/http.js';
+import { hiddenInputs } from '../../views/components.js';
+import { escapeHtml as esc } from '../../core/util.js';
 import { getRuntime } from '../../core/runtime.js';
 import { logger } from '../../core/logger.js';
 import { safeNext } from '../../core/util.js';
@@ -154,10 +156,26 @@ function finishLogin(ctx, user, next, cookieCsrf) {
   redirect(ctx.res, next || '/');
 }
 
-/** 登录失败/受限时统一 403 页 */
+/** 登录失败/受限时统一 403 页:显示当前身份,避免「我是谁、怎么切换」的困惑 */
 export function forbidden(ctx, message) {
+  let extra = '';
+  if (ctx.user) {
+    const initial = (String(ctx.user.name || ctx.user.username).trim()[0] || '?').toUpperCase();
+    extra = `
+      <div class="identity">
+        <span class="avatar">${esc(initial)}</span>
+        <span>当前登录:<b style="color:var(--text)">${esc(ctx.user.name || ctx.user.username)}</b>(<span>${esc(ctx.user.username)}</span>${ctx.user.is_admin ? ' · 管理员' : ' · 普通用户'})</span>
+      </div>
+      <form method="post" action="/logout">
+        ${hiddenInputs({ _csrf: ctx.session.csrf })}
+        <div class="actions" style="margin-top:var(--s3)">
+          <button class="btn btn-primary" type="submit">退出并切换账号</button>
+        </div>
+      </form>`;
+  }
   sendHtml(ctx.res, 403, errorPage({
     theme: ctx.theme, siteName: ctx.runtime.siteName,
-    title: '没有访问权限', message: message || '当前账号无权访问该页面。',
+    title: '没有访问权限', message: message || '该页面需要管理员权限,当前账号无权访问。',
+    extra,
   }));
 }

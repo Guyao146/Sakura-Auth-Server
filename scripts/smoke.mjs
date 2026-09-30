@@ -335,7 +335,8 @@ async function main() {
     ok('错误密码被拒绝', r.status === 401 && (await r.text()).includes('用户名或密码不正确'));
 
     r = await call(uj, '/admin');
-    ok('普通用户访问控制台被拒(403)', r.status === 403);
+    ok('普通用户访问控制台被拒(403)且页面显示当前身份', r.status === 403
+      && (await r.text()).includes('bob'));
 
     const aj = new Jar();
     r = await call(aj, '/login');

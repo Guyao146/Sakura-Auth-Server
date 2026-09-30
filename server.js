@@ -93,7 +93,7 @@ const server = http.createServer(async (req, res) => {
         return redirect(res, '/login?next=' + encodeURIComponent(url.pathname + url.search));
       }
       if (m.route.opts.auth === 'admin' && !user.is_admin) {
-        return forbidden({ res, theme, runtime: rt });
+        return forbidden({ res, theme, runtime: rt, session, user });
       }
     }
 
