@@ -1,11 +1,12 @@
 import * as clients from '../../models/clients.js';
 import * as codes from '../../models/codes.js';
 import * as consents from '../../models/consents.js';
+import * as groups from '../../models/groups.js';
 import { getRuntime } from '../../core/runtime.js';
 import { redirect, sendHtml } from '../../core/http.js';
 import { filterScopes } from './issue.js';
 import { errorPage } from '../../views/error.js';
-import { consentPage } from '../../views/auth.js';
+import { consentPage, accessDeniedPage } from '../../views/auth.js';
 
 const REPLAY_FIELDS = ['response_type', 'client_id', 'redirect_uri', 'scope', 'state',
   'code_challenge', 'code_challenge_method', 'nonce', 'prompt'];
@@ -29,6 +30,21 @@ function buildRedirect(uri, params) {
 }
 
 const errRedirect = (uri, obj) => redirect(null, buildRedirect(uri, obj));
+
+/**
+ * 应用按权限组限制访问:allowed_groups 非空且用户不属于其中任何组时,
+ * 直接渲染 403 风格拒绝页(不重定向回 redirect_uri,避免向不可信方泄露)。
+ */
+function denyIfNotAllowed(ctx, client) {
+  const allowed = clients.allowedGroupNames(client);
+  if (!allowed.length) return false;
+  const mine = groups.membersOf(ctx.user.id);
+  if (allowed.some((name) => mine.includes(name))) return false;
+  sendHtml(ctx.res, 403, accessDeniedPage({
+    theme: ctx.theme, siteName: getRuntime().siteName, clientName: client.name, requiredGroups: allowed,
+  }));
+  return true;
+}
 
 /** GET /authorize —— 授权码入口:校验 → 登录检查 → 同意检查 → 签发 code */
 export function authorizeGet(ctx) {
@@ -65,6 +81,9 @@ export function authorizeGet(ctx) {
     return redirect(ctx.res, '/login?next=' + encodeURIComponent(next));
   }
 
+  // 登录后、同意页之前:按应用可访问权限组拦截
+  if (denyIfNotAllowed(ctx, client)) return;
+
   const prompt = q.get('prompt') || '';
   const remembered = consents.covers(ctx.user.id, client.client_id, scopeList);
   if (client.require_consent && (!remembered || prompt.includes('consent'))) {
@@ -94,6 +113,9 @@ export function authorizePost(ctx) {
   const redirectUri = body.redirect_uri;
   const state = body.state || '';
   const bad = (error, description) => errRedirect(redirectUri, { error, error_description: description, state });
+
+  // 同意页提交同样校验(防止绕过 GET 直接 POST approve)
+  if (denyIfNotAllowed(ctx, resolved.client)) return;
 
   if (body.response_type !== 'code') return bad('unsupported_response_type', '仅支持 response_type=code');
   const client = resolved.client;

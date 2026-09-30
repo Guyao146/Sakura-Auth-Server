@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { config } from './config.js';
 import { logger } from './logger.js';
-import { nowSec } from './crypto.js';
+import { nowSec, randomToken } from './crypto.js';
 
 let db = null;
 
@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS clients (
   token_auth      TEXT NOT NULL DEFAULT 'client_secret_basic',
   pkce_required   INTEGER NOT NULL DEFAULT 0,
   require_consent INTEGER NOT NULL DEFAULT 1,
+  allowed_groups  TEXT NOT NULL DEFAULT '[]',
   created_at      INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS sessions (
@@ -91,6 +92,18 @@ CREATE TABLE IF NOT EXISTS reset_tokens (
   used_at    INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_reset_tokens_user ON reset_tokens(user_id);
+CREATE TABLE IF NOT EXISTS groups (
+  id          TEXT PRIMARY KEY,
+  name        TEXT NOT NULL UNIQUE,
+  description TEXT NOT NULL DEFAULT '',
+  created_at  INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS group_members (
+  group_id TEXT NOT NULL,
+  user_id  TEXT NOT NULL,
+  PRIMARY KEY (group_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_group_members_user ON group_members(user_id);
 `;
 
 /** 老库平滑迁移:补列/补表,幂等 */
@@ -98,6 +111,42 @@ function migrate() {
   const cols = db.prepare('PRAGMA table_info(users)').all().map((c) => c.name);
   if (!cols.includes('totp_secret')) db.exec('ALTER TABLE users ADD COLUMN totp_secret TEXT');
   if (!cols.includes('totp_enabled')) db.exec('ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0');
+  const ccols = db.prepare('PRAGMA table_info(clients)').all().map((c) => c.name);
+  if (!ccols.includes('allowed_groups')) {
+    db.exec("ALTER TABLE clients ADD COLUMN allowed_groups TEXT NOT NULL DEFAULT '[]'");
+  }
+  seedGroupsFromUserGroups();
+}
+
+/**
+ * 数据播种:把 users.user_groups 的旧式自由文本(空白/逗号分隔)拆分为组名,
+ * 自动建组并写入成员关系。幂等(INSERT OR IGNORE),重复运行不重复建。
+ * 返回本次写入的成员关系条数。
+ */
+export function seedGroupsFromUserGroups() {
+  const rows = db.prepare("SELECT id, user_groups FROM users WHERE TRIM(user_groups) <> ''").all();
+  if (!rows.length) return 0;
+  const now = nowSec();
+  const insGroup = db.prepare("INSERT OR IGNORE INTO groups (id, name, description, created_at) VALUES (?, ?, '', ?)");
+  const getGroup = db.prepare('SELECT id FROM groups WHERE name = ?');
+  const insMember = db.prepare('INSERT OR IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)');
+  let seeded = 0;
+  for (const row of rows) {
+    const names = new Set(String(row.user_groups).split(/[\s,]+/).filter(Boolean));
+    for (const name of names) {
+      let g = getGroup.get(name);
+      if (!g) {
+        insGroup.run(randomToken(12), name, now);
+        g = getGroup.get(name);
+      }
+      if (g) {
+        insMember.run(g.id, row.id);
+        seeded++;
+      }
+    }
+  }
+  if (seeded) logger.info('已从 user_groups 文本播种权限组成员关系', { relations: seeded });
+  return seeded;
 }
 
 export function initDb() {

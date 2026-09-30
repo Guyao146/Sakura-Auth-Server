@@ -1,6 +1,7 @@
 import { signJwt } from '../../core/jwt.js';
 import { getRuntime } from '../../core/runtime.js';
 import * as tokens from '../../models/tokens.js';
+import * as groups from '../../models/groups.js';
 import { SCOPES } from '../../core/config.js';
 import { sha256b64url, nowSec } from '../../core/crypto.js';
 
@@ -25,7 +26,8 @@ export function claimsFor(user, scopeList) {
     claims.email_verified = false;
   }
   if (s.has('groups')) {
-    claims.groups = (user.user_groups || '').split(/[\s,]+/).filter(Boolean);
+    // 组名来自组成员关系表;users.user_groups 文本列已弃用(仅作镜像保留)
+    claims.groups = groups.membersOf(user.id);
   }
   return claims;
 }

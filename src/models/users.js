@@ -48,6 +48,7 @@ export function remove(id) {
   db.prepare('DELETE FROM consents WHERE user_id = ?').run(id);
   db.prepare("DELETE FROM tokens WHERE user_id = ?").run(id);
   db.prepare('DELETE FROM recovery_codes WHERE user_id = ?').run(id);
+  db.prepare('DELETE FROM group_members WHERE user_id = ?').run(id);
 }
 
 /* ---- 两步验证(TOTP) ---- */

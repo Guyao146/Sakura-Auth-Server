@@ -8,6 +8,56 @@ const scopeItemsFor = (selectedStr, checkedSet) =>
     id, desc, checked: checkedSet ? checkedSet.has(id) : (selectedStr || DEFAULT_CLIENT_SCOPES).split(/\s+/).includes(id),
   }));
 
+/** 组复选框列表:用户组成员编辑与应用访问限制共用 */
+const groupCheckboxList = (allGroups, checkedSet, name) => {
+  if (!allGroups.length) {
+    return '<p class="muted small" style="margin:var(--s1) 0">还没有权限组,可先在「权限组」页创建。</p>';
+  }
+  return allGroups.map((g) => `
+    <label class="checkline"><input type="checkbox" name="${esc(name)}" value="${esc(g.name)}"${checkedSet && checkedSet.has(g.name) ? ' checked' : ''}>
+      <span>${esc(g.name)}${g.description ? `<span class="muted">${esc(g.description)}</span>` : ''}</span></label>`).join('\n');
+};
+
+/* ---------------- 权限组管理 ---------------- */
+export function groupsPage({ theme, siteName, user, cur, list, csrf, msg, err }) {
+  const rows = list.map((g) => `<tr>
+      <td class="wrap"><b style="color:var(--text)">${esc(g.name)}</b></td>
+      <td class="wrap">${esc(g.description || '-')}</td>
+      <td class="muted">${g.member_count}</td>
+      <td class="rowline">
+        <form method="post" action="/admin/groups/${esc(g.id)}/delete" style="margin:0">
+          ${hiddenInputs({ _csrf: csrf })}
+          <button class="btn btn-sm btn-danger" type="submit">删除</button>
+        </form>
+      </td>
+    </tr>`).join('\n');
+  return adminPage({
+    theme, siteName, user, cur, active: 'groups', title: `权限组 · ${siteName}`,
+    content: `
+      ${pageTitle('权限组')}
+      ${banner(msg ? esc(msg) : '', 'ok')}
+      ${banner(err ? esc(err) : '', 'err')}
+      <div class="card">
+        <h3 style="margin-top:0">新建权限组</h3>
+        <form method="post" action="/admin/groups/create">
+          ${hiddenInputs({ _csrf: csrf })}
+          <div class="grid2">
+            <div><label>组名(必填且唯一,不含空格)</label>
+              <input type="text" name="name" required maxlength="40" placeholder="例如:dev"></div>
+            <div><label>描述(可选)</label>
+              <input type="text" name="description" maxlength="120" placeholder="用途说明"></div>
+          </div>
+          <div class="actions"><button class="btn btn-primary" type="submit">创建组</button></div>
+        </form>
+      </div>
+      <div class="tblwrap"><table class="tbl">
+        <thead><tr><th>组名</th><th>描述</th><th>成员数</th><th>操作</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="4" class="muted">还没有权限组。</td></tr>'}</tbody>
+      </table></div>
+      <p class="muted small">用户的组成员关系在用户编辑页勾选维护;删除组会一并解除其成员关系,引用该组的应用访问限制需另行调整。</p>`,
+  });
+}
+
 /* ---------------- 控制台首页 ---------------- */
 export function dashboardPage({ theme, siteName, user, cur, stats, issuer, allowRegister, csrf, msg, err }) {
   return adminPage({
@@ -62,7 +112,7 @@ export function usersPage({ theme, siteName, user, cur, list, msg, err }) {
       <td class="wrap"><b style="color:var(--text)">${esc(u.username)}</b> ${status} ${twofa}</td>
       <td>${esc(u.name || '-')}</td>
       <td>${esc(u.email || '-')}</td>
-      <td class="wrap">${esc(u.user_groups || '-')}</td>
+      <td class="wrap">${esc((u.groupNames || []).join(' ') || '-')}</td>
       <td class="muted">${fmtTime(u.created_at)}</td>
       <td class="rowline">
         <a class="btn btn-sm" href="/admin/users/${u.id}">编辑</a>
@@ -90,7 +140,7 @@ export function usersPage({ theme, siteName, user, cur, list, msg, err }) {
   });
 }
 
-export function userFormPage({ theme, siteName, user, cur, target, values, err, isNew }) {
+export function userFormPage({ theme, siteName, user, cur, target, values, allGroups = [], err, isNew }) {
   const v = values;
   return adminPage({
     theme, siteName, user, cur, active: 'users', title: `${isNew ? '新建用户' : '编辑用户'} · ${siteName}`,
@@ -106,8 +156,9 @@ export function userFormPage({ theme, siteName, user, cur, target, values, err, 
                 pattern="[a-zA-Z0-9_.@-]{2,64}" title="2-64 位字母数字与 _.@-"></div>
             <div><label>显示姓名</label><input type="text" name="name" value="${esc(v.name)}" maxlength="40"></div>
             <div><label>邮箱</label><input type="email" name="email" value="${esc(v.email)}"></div>
-            <div><label>用户组(空格分隔,scope=groups 时返回)</label><input type="text" name="user_groups" value="${esc(v.user_groups)}"></div>
           </div>
+          <label>用户组(scope=groups 时通过 claims 返回)</label>
+          ${groupCheckboxList(allGroups, v.groupSet, 'groups')}
           <label>${isNew ? '初始密码(至少 8 位)' : '重置密码(留空表示不修改)'}</label>
           <input type="password" name="password" ${isNew ? 'required' : ''} minlength="8" autocomplete="new-password"
             placeholder="${isNew ? '' : '留空则保持原密码'}">
@@ -162,7 +213,7 @@ export function appsPage({ theme, siteName, user, cur, list, msg, err, issuer })
   });
 }
 
-export function appFormPage({ theme, siteName, user, cur, err, values }) {
+export function appFormPage({ theme, siteName, user, cur, err, values, allGroups = [] }) {
   const v = values;
   const urisText = Array.isArray(v.redirect_uris) ? v.redirect_uris.join('\n') : v.redirect_uris;
   return adminPage({
@@ -183,6 +234,9 @@ export function appFormPage({ theme, siteName, user, cur, err, values }) {
           <textarea name="redirect_uris" required placeholder="https://app.example.com/callback">${esc(urisText)}</textarea>
           <label>允许的 scope</label>
           ${scopeList(scopeItemsFor(null, v.scopeSet), { mode: 'checkbox' })}
+          <label>可访问的权限组</label>
+          <p class="muted small" style="margin:0 0 var(--s1)">不勾选 = 不限制,所有用户都可访问;勾选后仅所属组被勾选的用户能发起授权。</p>
+          ${groupCheckboxList(allGroups, v.allowedGroupSet, 'allowed_groups')}
           <label class="checkline"><input type="checkbox" name="pkce_required" value="1"${v.pkce_required ? ' checked' : ''}>
             <span>强制 PKCE<span class="muted">公开客户端会自动强制</span></span></label>
           <label class="checkline"><input type="checkbox" name="require_consent" value="1"${v.require_consent ? ' checked' : ''}>
@@ -196,9 +250,10 @@ export function appFormPage({ theme, siteName, user, cur, err, values }) {
   });
 }
 
-export function appDetailPage({ theme, siteName, user, cur, app, err, msg, issuer }) {
+export function appDetailPage({ theme, siteName, user, cur, app, allGroups = [], err, msg, issuer }) {
   const a = app;
   const uris = a.uriList;
+  const allowed = a.allowedGroupList || [];
   return adminPage({
     theme, siteName, user, cur, active: 'apps', title: `${a.name} · ${siteName}`,
     content: `
@@ -210,6 +265,7 @@ export function appDetailPage({ theme, siteName, user, cur, app, err, msg, issue
         ${kvRow('client_id', esc(a.client_id))}
         ${a.token_auth === 'none' ? '' : kvRow('client_secret', '<span class="muted">已加密存储,仅创建/重置时展示一次</span>')}
         ${kvRow('发现文档', esc(issuer + '/.well-known/openid-configuration'))}
+        ${kvRow('访问限制', allowed.length ? allowed.map(esc).join('、') : '<span class="muted">不限制(所有用户可访问)</span>')}
         <h3>端点</h3>
         ${kvRow('授权端点', esc(issuer + '/authorize'))}
         ${kvRow('令牌端点', esc(issuer + '/token'))}
@@ -218,7 +274,7 @@ export function appDetailPage({ theme, siteName, user, cur, app, err, msg, issue
       </div>
       <div class="card">
         <h3 style="margin-top:0">应用设置</h3>
-        <form method="post" action="/admin/apps/${a.client_id}/update">
+        <form method="post" action="/admin/apps/${esc(a.client_id)}/update">
           ${hiddenInputs({ _csrf: a._csrf })}
           <label>应用名称</label>
           <input type="text" name="name" value="${esc(a.name)}" required maxlength="40">
@@ -226,6 +282,9 @@ export function appDetailPage({ theme, siteName, user, cur, app, err, msg, issue
           <textarea name="redirect_uris" required>${esc(uris.join('\n'))}</textarea>
           <label>允许的 scope</label>
           ${scopeList(scopeItemsFor(null, new Set(a.scopeList)), { mode: 'checkbox' })}
+          <label>可访问的权限组</label>
+          <p class="muted small" style="margin:0 0 var(--s1)">不勾选 = 不限制,所有用户都可访问;勾选后仅所属组被勾选的用户能发起授权。</p>
+          ${groupCheckboxList(allGroups, new Set(allowed), 'allowed_groups')}
           <label class="checkline"><input type="checkbox" name="pkce_required" value="1"${a.pkce_required ? ' checked' : ''}>
             <span>强制 PKCE</span></label>
           <label class="checkline"><input type="checkbox" name="require_consent" value="1"${a.require_consent ? ' checked' : ''}>

@@ -1,6 +1,6 @@
 import { escapeHtml as esc } from '../core/util.js';
 import { authPage } from './layout.js';
-import { banner, hiddenInputs, scopeList, scopeItems } from './components.js';
+import { banner, hiddenInputs, kvRow, scopeList, scopeItems } from './components.js';
 
 /** 登录页 */
 export function loginPage({ theme, siteName, csrf, next, err, username = '', allowRegister = false }) {
@@ -143,6 +143,22 @@ export function consentPage({ theme, siteName, user, client, scopeList: scopes, 
           <button class="btn btn-danger" type="submit" name="decision" value="deny">拒 绝</button>
         </div>
       </form>`,
+  });
+}
+
+/** 无权访问该应用(403 风格:应用按权限组限制访问,用户不在所需组内) */
+export function accessDeniedPage({ theme, siteName, clientName, requiredGroups = [] }) {
+  return authPage({
+    theme, siteName, title: `无权访问 · ${siteName}`, footer: false,
+    content: `
+      <h3 style="margin-top:0">无权访问该应用</h3>
+      <p class="small">应用 <b style="color:var(--text)">${esc(clientName)}</b> 仅对特定权限组的成员开放,你的账号不在所需组内。</p>
+      <div class="card tight">
+        ${kvRow('应用', esc(clientName))}
+        ${kvRow('所需权限组', requiredGroups.map(esc).join('、') || '-')}
+      </div>
+      <p class="muted small">如需访问,请联系管理员将你加入相应权限组。</p>
+      <div class="actions"><a class="btn btn-primary" href="/">返回首页</a></div>`,
   });
 }
 
