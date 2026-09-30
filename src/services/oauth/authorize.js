@@ -88,7 +88,7 @@ export function authorizeGet(ctx) {
   const remembered = consents.covers(ctx.user.id, client.client_id, scopeList);
   if (client.require_consent && (!remembered || prompt.includes('consent'))) {
     return sendHtml(ctx.res, 200, consentPage({
-      theme: ctx.theme, user: ctx.user, client: clients.withUris(client),
+      theme: ctx.theme, siteName: ctx.runtime.siteName, user: ctx.user, client: clients.withUris(client),
       scopeList, csrf: ctx.session.csrf, replay: replayFromQuery(q), remember: true,
     }));
   }

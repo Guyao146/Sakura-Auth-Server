@@ -123,17 +123,25 @@ pre.block{background:var(--code-bg);color:var(--code-text);border-radius:var(--r
 /* 居中认证布局 */
 .auth-wrap{min-height:100vh;display:grid;place-items:center;padding:var(--s6) var(--s4)}
 .auth-col{width:100%;max-width:460px}
+.auth-col-wide{max-width:560px}
 .auth-card{background:var(--surface);border-radius:12px;box-shadow:var(--shadow-sm);padding:var(--s6)}
 .auth-brand{display:flex;align-items:center;gap:var(--s3);margin-bottom:var(--s5)}
 .auth-brand svg{color:var(--accent)}
 .auth-brand h1{font-size:20px;font-weight:700;margin:0;line-height:1.3}
 .auth-brand .muted{font-size:13px}
 .auth-foot{text-align:center;color:var(--muted);font-size:12px;margin-top:var(--s4)}
-/* scope 列表 */
-.scope-item{display:flex;gap:var(--s3);padding:var(--s2) 0;border-bottom:1px solid var(--border)}
+/* 授权同意页 */
+.app-row{display:flex;align-items:center;gap:var(--s3);margin-bottom:var(--s5)}
+.app-badge{width:52px;height:52px;border-radius:14px;background:color-mix(in srgb,var(--accent) 12%,transparent);color:var(--accent);display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;flex:none}
+.identity{display:flex;align-items:center;gap:var(--s2);background:var(--surface-soft);border-radius:99px;padding:4px 14px 4px 4px;font-size:14px;margin:0 0 var(--s4);width:fit-content;max-width:100%}
+.identity .avatar{width:28px;height:28px;border-radius:99px;background:var(--accent);color:var(--on-accent);display:inline-flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;flex:none}
+.scope-item{display:flex;gap:var(--s3);align-items:flex-start;padding:var(--s3) 0;border-bottom:1px solid var(--border)}
 .scope-item:last-child{border-bottom:0}
-.scope-item code{flex:none}
-.scope-item .desc{font-size:14px;color:var(--text-soft)}
+.scope-item .scope-ico{width:34px;height:34px;border-radius:10px;background:var(--surface-soft);color:var(--accent);display:inline-flex;align-items:center;justify-content:center;flex:none}
+.scope-item b{display:block;color:var(--text);font-size:14px;font-weight:600;line-height:1.4}
+.scope-item .desc{display:block;font-size:13px;color:var(--muted)}
+.consent-actions{display:flex;gap:var(--s3);margin-top:var(--s4)}
+.consent-actions .btn{flex:1;justify-content:center;padding:var(--s3) var(--s4);font-size:15px}
 /* 向导步骤 */
 .steps{display:flex;gap:var(--s2);margin-bottom:var(--s5)}
 .step{flex:1;text-align:center;font-size:12px;color:var(--muted);padding-top:10px;position:relative}
@@ -177,11 +185,11 @@ function head(theme, title) {
 </head>`;
 }
 
-/** 认证类页面骨架(登录 / 同意 / 向导):居中卡片 */
-export function authPage({ theme, siteName, title, content, footer = true }) {
+/** 认证类页面骨架(登录 / 同意 / 向导):居中卡片;wide 供授权页等需要更宽的场景 */
+export function authPage({ theme, siteName, title, content, footer = true, wide = false }) {
   return `${head(theme, title)}
 <body>
-<div class="auth-wrap"><div class="auth-col">
+<div class="auth-wrap"><div class="auth-col${wide ? ' auth-col-wide' : ''}">
   <div class="auth-card">
     <div class="auth-brand">${mark(30)}<div><h1>${esc(siteName)}</h1><div class="muted">统一身份认证服务</div></div></div>
     ${content}

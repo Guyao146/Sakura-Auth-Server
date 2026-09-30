@@ -241,7 +241,7 @@ export function appFormPage({ theme, siteName, user, cur, err, values, allGroups
           <label>重定向地址(每行一个,必须完全匹配)</label>
           <textarea name="redirect_uris" required placeholder="https://app.example.com/callback">${esc(urisText)}</textarea>
           <label>允许的 scope</label>
-          ${scopeList(scopeItemsFor(null, v.scopeSet), { mode: 'checkbox' })}
+          ${scopeList(scopeItemsFor(null, v.scopeSet))}
           <label>可访问的权限组</label>
           <p class="muted small" style="margin:0 0 var(--s1)">不勾选 = 不限制,所有用户都可访问;勾选后仅所属组被勾选的用户能发起授权。</p>
           ${groupCheckboxList(allGroups, v.allowedGroupSet, 'allowed_groups')}
@@ -289,7 +289,7 @@ export function appDetailPage({ theme, siteName, user, cur, app, allGroups = [],
           <label>重定向地址(每行一个)</label>
           <textarea name="redirect_uris" required>${esc(uris.join('\n'))}</textarea>
           <label>允许的 scope</label>
-          ${scopeList(scopeItemsFor(null, new Set(a.scopeList)), { mode: 'checkbox' })}
+          ${scopeList(scopeItemsFor(null, new Set(a.scopeList)))}
           <label>可访问的权限组</label>
           <p class="muted small" style="margin:0 0 var(--s1)">不勾选 = 不限制,所有用户都可访问;勾选后仅所属组被勾选的用户能发起授权。</p>
           ${groupCheckboxList(allGroups, new Set(allowed), 'allowed_groups')}

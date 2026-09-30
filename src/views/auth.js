@@ -1,6 +1,6 @@
 import { escapeHtml as esc } from '../core/util.js';
 import { authPage } from './layout.js';
-import { banner, hiddenInputs, kvRow, scopeList, scopeItems } from './components.js';
+import { banner, hiddenInputs, kvRow, scopeItems, scopeIcon, SCOPE_NAMES } from './components.js';
 
 /** 登录页 */
 export function loginPage({ theme, siteName, csrf, next, err, username = '', allowRegister = false }) {
@@ -124,23 +124,41 @@ export function resetDonePage({ theme, siteName }) {
   });
 }
 
-/** 同意授权页 */
+/** 同意授权页:应用徽标 + 身份标识 + 图标化权限清单 + 跳转目标提示 */
 export function consentPage({ theme, siteName, user, client, scopeList: scopes, csrf, replay, remember }) {
   const items = scopeItems(scopes);
+  let target = String(replay.redirect_uri || '');
+  try { target = new URL(replay.redirect_uri).host || target; } catch { /* 自定义 scheme 原样展示 */ }
+  const appInitial = (String(client.name || '?').trim()[0] || '?').toUpperCase();
+  const userInitial = (String(user.name || user.username).trim()[0] || '?').toUpperCase();
   return authPage({
-    theme, siteName, title: `授权 · ${siteName}`,
+    theme, siteName, wide: true, title: `授权 · ${siteName}`,
     content: `
-      <h3 style="margin-top:0;margin-bottom:4px">${esc(client.name)} 请求访问你的账号</h3>
-      <p class="muted">以 <b style="color:var(--text)">${esc(user.username)}</b> 的身份登录该应用</p>
-      <div class="card tight">
-        ${scopeList(items)}
+      <div class="app-row">
+        <div class="app-badge">${esc(appInitial)}</div>
+        <div style="min-width:0">
+          <div style="font-size:17px;font-weight:650;color:var(--heading);line-height:1.3">${esc(client.name)}</div>
+          <div class="muted small" style="word-break:break-all">${esc(client.client_id)}</div>
+        </div>
+      </div>
+      <h3 style="margin:0 0 var(--s3)">请求访问你的账号</h3>
+      <div class="identity">
+        <span class="avatar">${esc(userInitial)}</span>
+        <span>以 <b style="color:var(--text)">${esc(user.name || user.username)}</b>(<span>${esc(user.username)}</span>)的身份继续</span>
+      </div>
+      <div class="card tight" style="margin-bottom:var(--s4)">
+        ${items.map((it) => `<div class="scope-item">
+          <span class="scope-ico">${scopeIcon(it.id)}</span>
+          <span style="min-width:0"><b>${esc(SCOPE_NAMES[it.id] || it.id)}</b><span class="desc">${esc(it.desc)}</span></span>
+        </div>`).join('\n')}
       </div>
       <form method="post" action="/authorize">
         ${hiddenInputs({ ...replay, _csrf: csrf, decision: 'approve' })}
         ${remember ? `<label class="checkline"><input type="checkbox" name="remember" value="on" checked><span>记住此应用的授权,下次不再询问<span class="muted">可在管理员撤销后重新确认</span></span></label>` : ''}
-        <div class="actions">
-          <button class="btn btn-primary" type="submit" name="decision" value="approve">同 意</button>
-          <button class="btn btn-danger" type="submit" name="decision" value="deny">拒 绝</button>
+        <p class="muted small" style="margin:var(--s2) 0 0">同意后将跳转至 <code>${esc(target)}</code> 完成登录;拒绝则不产生任何授权。</p>
+        <div class="consent-actions">
+          <button class="btn" type="submit" name="decision" value="deny">拒 绝</button>
+          <button class="btn btn-primary" type="submit" name="decision" value="approve">同 意 并 继续</button>
         </div>
       </form>`,
   });
