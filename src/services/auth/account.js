@@ -1,11 +1,14 @@
 import * as users from '../../models/users.js';
 import * as recovery from '../../models/recovery.js';
+import * as consents from '../../models/consents.js';
+import * as tokens from '../../models/tokens.js';
 import { hashPassword, verifyPassword } from '../../core/password.js';
 import { generateSecret, otpauthUri, verifyTotp } from '../../core/totp.js';
 import { qrSvg } from '../../core/qr.js';
 import { getRuntime } from '../../core/runtime.js';
-import { sendHtml } from '../../core/http.js';
-import { accountPage, recoveryCodesPage } from '../../views/auth.js';
+import { sendHtml, redirect } from '../../core/http.js';
+import { accountPage, recoveryCodesPage, authorizationsPage } from '../../views/auth.js';
+import { scopeItems } from '../../views/components.js';
 import { logger } from '../../core/logger.js';
 
 /** 账号页 2FA 区块的状态组装 */
@@ -102,4 +105,34 @@ export function disableTwoFa(ctx) {
   logger.info('两步验证已关闭', { username: ctx.user.username });
   ctx.user = users.byId(ctx.user.id);
   showAccount(ctx, { msg: '两步验证已关闭。' });
+}
+
+/* ---- 我的授权(查看/撤销已记住的应用授权) ---- */
+
+/** GET /account/apps */
+export function showAuthorizations(ctx, { msg, err } = {}) {
+  const list = consents.listForUser(ctx.user.id).map((row) => ({
+    ...row,
+    scopeItems: scopeItems(row.scope.split(/\s+/).filter(Boolean)),
+  }));
+  sendHtml(ctx.res, 200, authorizationsPage({
+    theme: ctx.theme, siteName: ctx.runtime.siteName, user: ctx.user,
+    csrf: ctx.session.csrf, list, msg, err,
+  }));
+}
+
+/** POST /account/apps/revoke —— 撤销授权并级联吊销该应用的现有令牌 */
+export function revokeAuthorization(ctx) {
+  const b = ctx.body || {};
+  if (b._csrf !== ctx.session.csrf) {
+    return redirect(ctx.res, '/account/apps?err=' + encodeURIComponent('页面已过期,请重试。'));
+  }
+  const row = consents.get(ctx.user.id, String(b.client_id || ''));
+  if (!row) {
+    return redirect(ctx.res, '/account/apps?err=' + encodeURIComponent('该授权不存在或已被撤销。'));
+  }
+  consents.revoke(ctx.user.id, row.client_id);
+  tokens.revokeForClientUser(row.client_id, ctx.user.id);
+  logger.info('用户撤销了应用授权', { username: ctx.user.username, client_id: row.client_id });
+  redirect(ctx.res, '/account/apps?msg=' + encodeURIComponent('已撤销该应用的授权,其现有访问令牌一并失效。'));
 }

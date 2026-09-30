@@ -34,6 +34,8 @@ export function registerRoutes() {
   r('POST', '/logout', logout.handleLogout);
   r('GET', '/account', account.showAccount, { auth: 'user' });
   r('POST', '/account', account.handleChangePassword, { auth: 'user' });
+  r('GET', '/account/apps', account.showAuthorizations, { auth: 'user' });
+  r('POST', '/account/apps/revoke', account.revokeAuthorization, { auth: 'user' });
   r('POST', '/account/2fa/start', account.startTwoFa, { auth: 'user' });
   r('POST', '/account/2fa/confirm', account.confirmTwoFa, { auth: 'user' });
   r('POST', '/account/2fa/disable', account.disableTwoFa, { auth: 'user' });

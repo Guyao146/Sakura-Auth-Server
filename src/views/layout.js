@@ -142,6 +142,9 @@ pre.block{background:var(--code-bg);color:var(--code-text);border-radius:var(--r
 .scope-item .desc{display:block;font-size:13px;color:var(--muted)}
 .consent-actions{display:flex;gap:var(--s3);margin-top:var(--s4)}
 .consent-actions .btn{flex:1;justify-content:center;padding:var(--s3) var(--s4);font-size:15px}
+.app-item{display:flex;gap:var(--s3);align-items:center;padding:var(--s3) 0;border-bottom:1px solid var(--border)}
+.app-item:last-child{border-bottom:0}
+.app-item .app-badge{width:44px;height:44px;font-size:18px;border-radius:12px}
 /* 向导步骤 */
 .steps{display:flex;gap:var(--s2);margin-bottom:var(--s5)}
 .step{flex:1;text-align:center;font-size:12px;color:var(--muted);padding-top:10px;position:relative}

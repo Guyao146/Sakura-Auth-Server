@@ -630,6 +630,44 @@ async function main() {
     ok('权限组:删除组后从列表与用户表单消失', r.status === 200 && !groupsM.byName('contractors')
       && !groupsM.membersOf(bob.id).includes('contractors') && !afterDeleteHtml.includes('contractors'));
 
+    /* ---------- 我的授权:查看/撤销已记住的应用授权 ---------- */
+    r = await call(fj, '/account/apps');
+    const myAuthHtml = await r.text();
+    ok('我的授权:列表页展示已授权的应用与范围', r.status === 200
+      && myAuthHtml.includes('Smoke Web') && myAuthHtml.includes('Groups Only') && myAuthHtml.includes('基本资料'));
+    r = await call(fj, '/account');
+    ok('我的授权:账号页出现入口链接', (await r.text()).includes('/account/apps'));
+
+    r = await fetch(BASE + '/introspect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Authorization: basic(svc.client_id, 'svc-secret-123') },
+      body: new URLSearchParams({ token: tok4.access_token }).toString(),
+    });
+    ok('我的授权:撤销前应用令牌仍活跃', (await r.json()).active === true);
+
+    r = await call(fj, '/account/apps');
+    const revokeForm = extractHidden(await r.text());
+    r = await call(fj, '/account/apps/revoke', {
+      method: 'POST',
+      form: { client_id: web.client_id, _csrf: revokeForm._csrf },
+    });
+    ok('我的授权:撤销成功回到列表页', r.status === 302 && location(r).startsWith('/account/apps?msg='));
+
+    r = await call(fj, '/account/apps');
+    const afterRevoke = await r.text();
+    ok('我的授权:列表中不再出现该应用', r.status === 200 && !afterRevoke.includes('Smoke Web') && afterRevoke.includes('Groups Only'));
+
+    r = await fetch(BASE + '/introspect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Authorization: basic(svc.client_id, 'svc-secret-123') },
+      body: new URLSearchParams({ token: tok4.access_token }).toString(),
+    });
+    ok('我的授权:撤销后该应用现有令牌级联失效', (await r.json()).active === false);
+
+    r = await call(fj, authUrl);
+    const reConsent = await r.text();
+    ok('我的授权:撤销后再次授权需重新确认', r.status === 200 && reConsent.includes('请求访问你的账号'));
+
     /* ---------- 配置向导增强:管理员重新运行向导(放在最后,尾部恢复 setup_done=1) ---------- */
     r = await call(aj, '/admin');
     const rerunDash = await r.text();

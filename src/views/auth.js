@@ -264,6 +264,7 @@ export function accountPage({ theme, siteName, user, csrf, msg, err, twoFa }) {
       <div class="kv"><b>用户名</b><span>${esc(user.username)}</span></div>
       <div class="kv"><b>姓名</b><span>${esc(user.name || '-')}</span></div>
       <div class="kv"><b>邮箱</b><span>${esc(user.email || '-')}</span></div>
+      <div class="kv"><b>我的授权</b><span><a href="/account/apps">查看与管理已授权的应用 →</a></span></div>
       <h3>修改密码</h3>
       <form method="post" action="/account">
         ${hiddenInputs({ _csrf: csrf })}
@@ -289,5 +290,39 @@ export function recoveryCodesPage({ theme, siteName, user, codes }) {
       <div class="banner warn">恢复代码在无法使用验证器 App 时替代验证码登录,每个只能用一次。请立即保存,关闭本页后不再显示。</div>
       <pre class="block">${codes.join('\n')}</pre>
       <div class="actions"><a class="btn btn-primary" href="/account">返回账号设置</a></div>`,
+  });
+}
+
+/** 我的授权页:查看/撤销已记住的应用授权 */
+export function authorizationsPage({ theme, siteName, user, csrf, list, msg, err }) {
+  const fmt = (sec) => new Date(sec * 1000).toLocaleString('zh-CN', { hour12: false });
+  const rows = list.map((row) => {
+    const initial = (String(row.name || '?').trim()[0] || '?').toUpperCase();
+    return `<div class="app-item">
+      <div class="app-badge">${esc(initial)}</div>
+      <div style="min-width:0;flex:1">
+        <div style="display:flex;gap:var(--s2);align-items:center;flex-wrap:wrap">
+          <b style="color:var(--text);font-size:15px">${esc(row.name)}</b>
+          ${row.scopeItems.map((s) => `<span class="badge">${esc(SCOPE_NAMES[s.id] || s.id)}</span>`).join(' ')}
+        </div>
+        <div class="muted small" style="word-break:break-all"><code>${esc(row.client_id)}</code> · 授权于 ${fmt(row.granted_at)}</div>
+      </div>
+      <form method="post" action="/account/apps/revoke" style="margin:0">
+        ${hiddenInputs({ _csrf: csrf, client_id: row.client_id })}
+        <button class="btn btn-danger btn-sm" type="submit">撤销授权</button>
+      </form>
+    </div>`;
+  }).join('\n');
+  return authPage({
+    theme, siteName, wide: true, title: `我的授权 · ${siteName}`,
+    content: `
+      ${banner(msg ? esc(msg) : '', 'ok')}
+      ${banner(err ? esc(err) : '', 'err')}
+      <h3 style="margin-top:0">我的授权</h3>
+      <p class="muted small" style="margin-top:0">这里列出你确认过「记住授权」的应用。撤销后,该应用的记住授权立即删除,其现有访问令牌一并失效;下次访问时需要重新确认。</p>
+      ${list.length
+        ? `<div class="card tight">${rows}</div>`
+        : '<div class="card tight"><p class="muted" style="margin:0">还没有授权过任何应用。登录业务系统并同意授权后,会出现在这里。</p></div>'}
+      <div class="actions"><a class="btn" href="/account">返回账号设置</a></div>`,
   });
 }

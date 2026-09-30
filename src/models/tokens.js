@@ -17,6 +17,11 @@ export function revokeForClient(clientId) {
   getDb().prepare('UPDATE tokens SET revoked = 1 WHERE client_id = ?').run(clientId);
 }
 
+/** 吊销某用户在某应用下的全部令牌(用户撤销授权时用) */
+export function revokeForClientUser(clientId, userId) {
+  getDb().prepare('UPDATE tokens SET revoked = 1 WHERE client_id = ? AND user_id = ?').run(clientId, userId);
+}
+
 /** 有效 = 未吊销且未过期 */
 export function isLive(row) {
   return row && !row.revoked && row.expires_at > nowSec();
