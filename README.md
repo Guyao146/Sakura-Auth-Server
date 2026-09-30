@@ -1,6 +1,6 @@
 # SakuraID —— 类 authentik 的轻量 OAuth2 / OIDC 认证后台
 
-> 版本:`v0.4.0` · 零 npm 依赖 · Node.js ≥ 22.5 · SQLite 存储
+> 版本:`v0.4.1` · 零 npm 依赖 · Node.js ≥ 22.5 · SQLite 存储
 
 SakuraID 是一个自托管的统一身份认证服务(IdP):业务系统统一跳转到这里登录,通过 OAuth 2.0 / OpenID Connect 拿回令牌访问各自的接口。定位对标 authentik 的核心子集——不过超大而全,只把「发令牌」这一件事做对。
 
