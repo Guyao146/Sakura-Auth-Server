@@ -196,6 +196,7 @@ export function adminPage({ theme, siteName, user, active = '', title, content, 
   const items = [
     ['', '控制台', 'dashboard'],
     ['users', '用户', 'users'],
+    ['groups', '权限组', 'groups'],
     ['apps', '应用', 'apps'],
   ];
   const link = (href, label, key) =>
@@ -208,6 +209,7 @@ export function adminPage({ theme, siteName, user, active = '', title, content, 
   <nav>
     ${link('/admin', '控制台', 'dashboard')}
     ${link('/admin/users', '用户', 'users')}
+    ${link('/admin/groups', '权限组', 'groups')}
     ${link('/admin/apps', '应用', 'apps')}
     <div class="sep">账号</div>
     ${link('/account', '账号设置', 'account')}

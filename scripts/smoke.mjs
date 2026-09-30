@@ -103,6 +103,9 @@ async function main() {
       scopes: 'openid profile', isPublic: false, pkceRequired: false,
       secretHash: hashPassword('svc-secret-123'),
     });
+    // 模拟老库迁移:users.user_groups 自由文本 → 组与成员关系(migrate() 内自动执行,幂等)
+    const { seedGroupsFromUserGroups } = await import('../src/core/db.js');
+    seedGroupsFromUserGroups();
 
     /* ---------- 配置向导(向导未完成前所有端点都会被守卫重定向) ---------- */
     const wj = new Jar();
@@ -504,6 +507,128 @@ async function main() {
       form: { username: 'eve', password: 'Eve#12345', password2: 'Eve#12345', _csrf: 'x' },
     });
     ok('自助注册:关闭后 POST /register 不可用', r.status === 302 && location(r) === '/login');
+
+    /* ---------- 权限组:组成员关系与应用访问控制 ---------- */
+    const groupsM = await import('../src/models/groups.js');
+
+    // 迁移播种:bob 的 'dev ops' 自由文本已变为组与成员关系
+    const dev = groupsM.byName('dev'), ops = groupsM.byName('ops');
+    ok('权限组:迁移播种 user_groups 生成组与成员', !!dev && !!ops
+      && groupsM.membersOf(bob.id).includes('dev') && groupsM.membersOf(bob.id).includes('ops'));
+
+    // 组管理页:新建与重名校验
+    r = await call(aj, '/admin/groups');
+    const gPage = await r.text();
+    ok('权限组:侧栏导航与组管理页可访问', r.status === 200 && gPage.includes('权限组') && gPage.includes('新建权限组'));
+    const gf = extractHidden(gPage);
+    r = await call(aj, '/admin/groups/create', {
+      method: 'POST', form: { name: 'contractors', description: '外部承包商', _csrf: gf._csrf },
+    });
+    ok('权限组:新建组成功', r.status === 302 && location(r).startsWith('/admin/groups?msg=') && !!groupsM.byName('contractors'));
+    r = await call(aj, '/admin/groups/create', { method: 'POST', form: { name: 'dev', description: '', _csrf: gf._csrf } });
+    ok('权限组:重名组被拒绝', r.status === 302 && location(r).includes('err=')
+      && groupsM.list().filter((g) => g.name === 'dev').length === 1);
+
+    // 用户编辑页:组复选框出现并保存到成员关系
+    r = await call(aj, `/admin/users/${bob.id}`);
+    const bobEditHtml = await r.text();
+    ok('权限组:用户编辑页出现组复选框', bobEditHtml.includes('name="groups" value="dev" checked')
+      && bobEditHtml.includes('value="ops" checked') && bobEditHtml.includes('value="contractors"'));
+    const bef = extractHidden(bobEditHtml);
+    r = await call(aj, `/admin/users/${bob.id}/update`, {
+      method: 'POST',
+      form: [
+        ['name', '小明'], ['email', ''], ['is_admin', ''], ['disabled', ''], ['password', ''],
+        ['_csrf', bef._csrf], ['groups', 'dev'], ['groups', 'contractors'],
+      ],
+    });
+    ok('权限组:用户组复选框保存到成员关系', r.status === 302
+      && JSON.stringify(groupsM.membersOf(bob.id)) === JSON.stringify(['contractors', 'dev']));
+
+    // 应用表单:可访问权限组复选框与不限制说明
+    r = await call(aj, '/admin/apps/new');
+    const appFormHtml = await r.text();
+    ok('权限组:新建应用表单出现限制组复选框', appFormHtml.includes('name="allowed_groups"') && appFormHtml.includes('不勾选'));
+
+    // 限制组的应用:组内用户(bob ∈ dev)正常走授权码流程
+    const gApp = clients.create({
+      name: 'Groups Only', redirectUris: ['http://127.0.0.1:8080/gcb'],
+      scopes: 'openid profile groups', isPublic: true, pkceRequired: true, allowedGroups: ['dev'],
+    });
+    const gVerifier = crypto.randomBytes(48).toString('base64url');
+    const gAuthUrl = '/authorize?' + new URLSearchParams({
+      client_id: gApp.client_id, redirect_uri: 'http://127.0.0.1:8080/gcb',
+      response_type: 'code', scope: 'openid profile groups',
+      state: 'g-st', code_challenge: b64urlSha256(gVerifier), code_challenge_method: 'S256',
+    }).toString();
+
+    r = await call(fj, gAuthUrl);
+    const gConsentHtml = await r.text();
+    ok('权限组:组内用户(∈dev)进入同意页', r.status === 200 && gConsentHtml.includes('请求访问你的账号'));
+    const gForm = extractHidden(gConsentHtml);
+    r = await call(fj, '/authorize', { method: 'POST', form: { ...gForm, decision: 'approve', remember: 'on' } });
+    const gCode = new URL(location(r), BASE).searchParams.get('code');
+    ok('权限组:组内用户授权通过并签发 code', r.status === 302 && !!gCode && !location(r).includes('error'));
+
+    // groups claim 改由成员关系表驱动:契约组成员仍可见,已移除的 ops 不再出现
+    r = await fetch(BASE + '/token', {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code', code: gCode, redirect_uri: 'http://127.0.0.1:8080/gcb',
+        client_id: gApp.client_id, code_verifier: gVerifier,
+      }).toString(),
+    });
+    const gTok = await r.json();
+    const gUi = await (await fetch(BASE + '/userinfo', { headers: { Authorization: `Bearer ${gTok.access_token}` } })).json();
+    ok('权限组:groups claim/userinfo 返回关系表组名', r.status === 200 && Array.isArray(gUi.groups)
+      && gUi.groups.includes('dev') && gUi.groups.includes('contractors') && !gUi.groups.includes('ops'));
+
+    // 组外用户(无任何组):渲染 403 风格无权访问页,不重定向回 redirect_uri
+    users.create({ username: 'noah', passwordHash: hashPassword('NoahPass#123'), name: '诺亚' });
+    const nj2 = new Jar();
+    r = await call(nj2, '/login');
+    const nfa = extractHidden(await r.text());
+    r = await call(nj2, '/login', {
+      method: 'POST', form: { username: 'noah', password: 'NoahPass#123', _csrf: nfa._csrf, next: gAuthUrl },
+    });
+    r = await call(nj2, location(r));
+    const deniedHtml = await r.text();
+    ok('权限组:组外用户渲染无权访问页(不回跳 redirect_uri)', r.status === 403
+      && deniedHtml.includes('无权访问该应用') && deniedHtml.includes('Groups Only') && deniedHtml.includes('dev')
+      && location(r) === '');
+
+    // 同一无组用户对未限制应用(allowed_groups='[]')仍可正常授权
+    r = await call(nj2, authUrl);
+    const nForm = extractHidden(await r.text());
+    r = await call(nj2, '/authorize', { method: 'POST', form: { ...nForm, decision: 'approve', remember: 'on' } });
+    ok('权限组:未限制应用对所有用户放行', r.status === 302
+      && !!new URL(location(r), BASE).searchParams.get('code'));
+
+    // client_credentials 无用户参与,不受组限制影响
+    const gSvc = clients.create({
+      name: 'Groups Svc', redirectUris: ['http://127.0.0.1:8080/any'],
+      scopes: 'openid profile', isPublic: false, pkceRequired: false,
+      secretHash: hashPassword('gsvc-secret-456'), allowedGroups: ['dev'],
+    });
+    r = await fetch(BASE + '/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Authorization: basic(gSvc.client_id, 'gsvc-secret-456') },
+      body: new URLSearchParams({ grant_type: 'client_credentials' }).toString(),
+    });
+    ok('权限组:client_credentials 不受组限制影响', r.status === 200 && !!(await r.json()).access_token);
+
+    // 应用详情页展示当前限制组
+    r = await call(aj, `/admin/apps/${gApp.client_id}`);
+    const gDetail = await r.text();
+    ok('权限组:应用详情展示当前限制组', gDetail.includes('可访问的权限组') && /value="dev" checked/.test(gDetail));
+
+    // 删除组:级联解除成员关系,且不再出现在用户编辑表单
+    const contractors = groupsM.byName('contractors');
+    r = await call(aj, `/admin/groups/${contractors.id}/delete`, { method: 'POST', form: { _csrf: gf._csrf } });
+    r = await call(aj, `/admin/users/${bob.id}`);
+    const afterDeleteHtml = await r.text();
+    ok('权限组:删除组后从列表与用户表单消失', r.status === 200 && !groupsM.byName('contractors')
+      && !groupsM.membersOf(bob.id).includes('contractors') && !afterDeleteHtml.includes('contractors'));
 
     /* ---------- 配置向导增强:管理员重新运行向导(放在最后,尾部恢复 setup_done=1) ---------- */
     r = await call(aj, '/admin');

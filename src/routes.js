@@ -69,6 +69,9 @@ export function registerRoutes() {
   r('GET', '/admin/users/:id', admin.userDetail, { auth: 'admin' });
   r('POST', '/admin/users/:id/update', admin.updateUser, { auth: 'admin' });
   r('POST', '/admin/users/:id/delete', admin.deleteUser, { auth: 'admin' });
+  r('GET', '/admin/groups', admin.listGroups, { auth: 'admin' });
+  r('POST', '/admin/groups/create', admin.createGroup, { auth: 'admin' });
+  r('POST', '/admin/groups/:id/delete', admin.deleteGroup, { auth: 'admin' });
   r('GET', '/admin/apps', admin.listApps, { auth: 'admin' });
   r('GET', '/admin/apps/new', admin.newAppForm, { auth: 'admin' });
   r('POST', '/admin/apps/create', admin.createApp, { auth: 'admin' });
