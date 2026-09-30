@@ -3,12 +3,13 @@
  * 流程:connect → EHLO → 服务端支持则 STARTTLS(node:tls 包住现有 socket)
  *   → AUTH PLAIN / AUTH LOGIN → MAIL FROM → RCPT TO → DATA → QUIT。
  * 全程校验响应码,任一阶段失败抛出带阶段标记的 SmtpError。
- * 未配置 SMTP_HOST 时为开发模式:不连接,完整邮件内容打到日志。
+ * 配置来源:settings 表(配置向导写入)打底,SMTP_* 环境变量优先覆盖,
+ * 见 core/runtime.js 的 getSmtpConfig();未配置主机时为开发模式:不连接,完整邮件内容打到日志。
  */
 import net from 'node:net';
 import tls from 'node:tls';
 import os from 'node:os';
-import { config } from './config.js';
+import { getSmtpConfig } from './runtime.js';
 import { logger } from './logger.js';
 
 /** 带阶段标记的 SMTP 错误 */
@@ -144,30 +145,32 @@ export function buildMessage({ from, to, subject, text }) {
 }
 
 /**
- * 发送一封纯文本邮件。mail 字段缺省时回落到 SMTP_* 环境变量配置。
+ * 发送一封纯文本邮件。mail 字段缺省时回落到合并后的 SMTP 配置
+ * (settings 表打底、SMTP_* 环境变量优先,见 runtime.getSmtpConfig)。
  * 未配置 host 时进入开发模式:完整内容打日志,正常返回 { dev: true }。
  */
 export async function sendMail(mail, opts = {}) {
-  const host = mail.host ?? config.smtpHost;
+  const cfg = getSmtpConfig();
+  const host = mail.host ?? cfg.host;
   const to = String(mail.to || '').trim();
   const subject = String(mail.subject || '');
   const text = String(mail.text ?? '');
 
   if (!host) {
     // 开发模式:不连接,把完整邮件内容(收件人/主题/正文/重置链接)输出到日志
-    logger.info('[开发模式] 未配置 SMTP_HOST,邮件内容如下', {
+    logger.info('[开发模式] 未配置 SMTP 主机,邮件内容如下', {
       to,
       subject,
       text,
-      from: mail.from || config.smtpFrom,
+      from: mail.from || cfg.from,
     });
     return { dev: true };
   }
 
-  const port = mail.port ?? config.smtpPort;
-  const user = mail.user ?? config.smtpUser;
-  const pass = mail.pass ?? config.smtpPass;
-  const from = String(mail.from || config.smtpFrom || 'noreply@sakura.local').replace(/^<|>$/g, '');
+  const port = mail.port ?? cfg.port;
+  const user = mail.user ?? cfg.user;
+  const pass = mail.pass ?? cfg.pass;
+  const from = String(mail.from || cfg.from || 'noreply@sakura.local').replace(/^<|>$/g, '');
   const toAddr = to.replace(/^<|>$/g, '');
   const timeoutMs = Number(opts.timeoutMs) || 10000;
 

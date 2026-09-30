@@ -90,6 +90,7 @@ async function main() {
     const { hashPassword } = await import('../src/core/password.js');
     const users = await import('../src/models/users.js');
     const clients = await import('../src/models/clients.js');
+    const settings = await import('../src/models/settings.js');
     initDb();
     initKeys(); // 测试进程也要载入签名密钥,便于本地验签
     const bob = users.create({ username: 'bob', passwordHash: hashPassword('BobPassw0rd!'), name: '小明', userGroups: 'dev ops' });
@@ -503,6 +504,45 @@ async function main() {
       form: { username: 'eve', password: 'Eve#12345', password2: 'Eve#12345', _csrf: 'x' },
     });
     ok('自助注册:关闭后 POST /register 不可用', r.status === 302 && location(r) === '/login');
+
+    /* ---------- 配置向导增强:管理员重新运行向导(放在最后,尾部恢复 setup_done=1) ---------- */
+    r = await call(aj, '/admin');
+    const rerunDash = await r.text();
+    const rerunForm = extractHidden(rerunDash);
+    ok('向导:控制台提供重新运行向导入口', rerunDash.includes('重新运行配置向导') && !!rerunForm._csrf);
+    r = await call(aj, '/admin/rerun-wizard', { method: 'POST', form: { _csrf: rerunForm._csrf } });
+    ok('向导:管理员触发重跑后跳到 /setup', r.status === 302 && location(r) === '/setup');
+    const gated = await call(new Jar(), '/');
+    ok('向导:重跑期间普通页面重定向 /setup', gated.status === 302 && location(gated) === '/setup');
+    r = await call(wj, '/setup');
+    ok('向导:重跑后 /setup 显示第 1 步环境检测', r.status === 200 && (await r.text()).includes('环境检测'));
+
+    await call(wj, '/setup/step1', { method: 'POST', form: {} });
+    r = await call(wj, '/setup');
+    const wz2 = await r.text();
+    ok('向导:第 2 步页面含自助注册与 SMTP 主机', wz2.includes('自助注册') && wz2.includes('SMTP 主机'));
+    r = await call(wj, '/setup/step2', {
+      method: 'POST',
+      form: {
+        site_name: '樱落统一认证', issuer: BASE, access_ttl: '900', refresh_ttl: '2592000',
+        allow_register: '1', smtp_host: 'smtp.example.com', smtp_port: '587', smtp_from: 'noreply@example.com',
+      },
+    });
+    const wzSettings = settings.getMap();
+    ok('向导:第 2 步提交后注册开关与 SMTP 设置生效', r.status === 302
+      && wzSettings.allow_register === '1'
+      && wzSettings.smtp_host === 'smtp.example.com'
+      && wzSettings.smtp_from === 'noreply@example.com');
+
+    r = await call(wj, '/setup');
+    const wz3 = await r.text();
+    ok('向导:已有账号时第 3 步显示跳过文案', wz3.includes('检测到已有账号'));
+    r = await call(wj, '/setup/step3', { method: 'POST', form: { skip: '1' } });
+    const wz4 = await r.text();
+    ok('向导:跳过创建直接完成配置', r.status === 200 && wz4.includes('配置完成'));
+    const homeAfter = await call(new Jar(), '/');
+    const regAfter = await call(new Jar(), '/register');
+    ok('向导:完成后全站恢复正常且注册开关生效', homeAfter.status === 200 && regAfter.status === 200);
 
     console.log(failed ? `\n${failed} 项失败` : '\n全部通过 ✔');
   } finally {

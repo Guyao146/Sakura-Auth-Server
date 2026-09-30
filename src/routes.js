@@ -48,6 +48,8 @@ export function registerRoutes() {
   r('POST', '/setup/step1', wizard.step1);
   r('POST', '/setup/step2', wizard.step2);
   r('POST', '/setup/step3', wizard.step3);
+  // 管理员重新运行配置向导(重走检测与站点设置,不动用户与应用数据)
+  r('POST', '/admin/rerun-wizard', wizard.rerunWizard, { auth: 'admin' });
 
   r('GET', '/.well-known/openid-configuration', discovery.discovery, { cors: true });
   r('GET', '/jwks.json', discovery.jwksHandler, { cors: true });

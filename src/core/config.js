@@ -19,13 +19,17 @@ export const config = {
   sessionTtl: Number(process.env.SESSION_TTL || 14 * 86400),            // 14 天
   authCodeTtl: 300,                                                     // 授权码 5 分钟
   bodyLimit: 100 * 1024,
-  // SMTP 邮件配置(找回密码用)。未配置 SMTP_HOST 时为开发模式:
-  // 不真正发信,邮件完整内容(含重置链接)打到日志。
-  smtpHost: process.env.SMTP_HOST || '',
-  smtpPort: Number(process.env.SMTP_PORT || 587),
-  smtpUser: process.env.SMTP_USER || '',
-  smtpPass: process.env.SMTP_PASS || '',
-  smtpFrom: process.env.SMTP_FROM || '',
+  // SMTP 邮件配置(找回密码用):settings 表(配置向导写入)打底,
+  // 此处仅收集显式设置的 SMTP_* 环境变量(未设置/空串视为未提供),
+  // 合并逻辑见 core/runtime.js 的 mergeSmtp —— env 有值则覆盖向导值。
+  // 未配置主机时为开发模式:不真正发信,邮件完整内容(含重置链接)打到日志。
+  smtpEnv: {
+    host: process.env.SMTP_HOST?.trim() || null,
+    port: process.env.SMTP_PORT?.trim() || null,
+    user: process.env.SMTP_USER?.trim() || null,
+    pass: process.env.SMTP_PASS?.trim() || null,
+    from: process.env.SMTP_FROM?.trim() || null,
+  },
 };
 
 /** 内置 scope 及其中文描述(向导/管理端/同意页共用) */

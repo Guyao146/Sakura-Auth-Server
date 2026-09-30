@@ -44,6 +44,7 @@ export function showSetup(ctx, { err, values } = {}) {
   if (step <= 1) {
     sendHtml(ctx.res, 200, setupStep1({ theme: ctx.theme, siteName: rt.siteName, checks: runChecks(), err }));
   } else if (step === 2) {
+    const smtp = rt.smtp || {};
     sendHtml(ctx.res, 200, setupStep2({
       theme: ctx.theme, siteName: rt.siteName, err,
       values: {
@@ -51,11 +52,17 @@ export function showSetup(ctx, { err, values } = {}) {
         issuer: values?.issuer ?? rt.issuer,
         access_ttl: values?.access_ttl ?? rt.accessTokenTtl,
         refresh_ttl: values?.refresh_ttl ?? rt.refreshTokenTtl,
+        allow_register: values?.allow_register ?? (rt.allowRegister ? '1' : ''),
+        smtp_host: values?.smtp_host ?? (smtp.host || ''),
+        smtp_port: values?.smtp_port ?? (smtp.port || '587'),
+        smtp_user: values?.smtp_user ?? (smtp.user || ''),
+        smtp_from: values?.smtp_from ?? (smtp.from || ''),
       },
     }));
   } else {
     sendHtml(ctx.res, 200, setupStep3({
       theme: ctx.theme, siteName: rt.siteName, err,
+      hasUsers: users.count() > 0,
       values: { username: values?.username ?? '', name: values?.name ?? '' },
     }));
   }
@@ -70,27 +77,63 @@ export function step1(ctx) {
   redirect(ctx.res, '/setup');
 }
 
-/** POST /setup/step2 —— 站点设置 */
+/** POST /setup/step2 —— 站点设置(含自助注册开关与 SMTP 邮件服务) */
 export function step2(ctx) {
   const b = ctx.body || {};
   const issuer = httpUrl(b.issuer || '');
   const accessTtl = Number(b.access_ttl), refreshTtl = Number(b.refresh_ttl);
-  if (!String(b.site_name || '').trim()) return showSetup(ctx, { err: '站点名称不能为空。', values: b });
-  if (!issuer) return showSetup(ctx, { err: 'Issuer 必须是合法的 http(s) 地址。', values: b });
+  const smtpHost = String(b.smtp_host || '').trim();
+  const smtpPortRaw = String(b.smtp_port ?? '').trim();
+  const smtpFrom = String(b.smtp_from || '').trim();
+  // 出错回显时显式归一化 checkbox,未勾选(缺省)不得回填为已勾选
+  const values = () => ({ ...b, allow_register: b.allow_register === '1' ? '1' : '' });
+  if (!String(b.site_name || '').trim()) return showSetup(ctx, { err: '站点名称不能为空。', values: values() });
+  if (!issuer) return showSetup(ctx, { err: 'Issuer 必须是合法的 http(s) 地址。', values: values() });
   if (!(accessTtl >= 60 && accessTtl <= 86400) || !(refreshTtl >= 3600 && refreshTtl <= 31536000)) {
-    return showSetup(ctx, { err: '令牌有效期超出允许范围。', values: b });
+    return showSetup(ctx, { err: '令牌有效期超出允许范围。', values: values() });
   }
+  if (smtpPortRaw && (!/^\d{1,5}$/.test(smtpPortRaw) || Number(smtpPortRaw) < 1 || Number(smtpPortRaw) > 65535)) {
+    return showSetup(ctx, { err: 'SMTP 端口需为 1-65535 的数字。', values: values() });
+  }
+  if (smtpFrom && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(smtpFrom)) {
+    return showSetup(ctx, { err: '发件人地址格式不正确。', values: values() });
+  }
+  // SMTP 全部留空 = 开发模式;填了主机才保存,密码留空保持已保存值(回显也不回传密码)
+  const smtpFields = smtpHost
+    ? {
+        smtp_host: smtpHost,
+        smtp_port: smtpPortRaw || '587',
+        smtp_user: String(b.smtp_user || '').trim(),
+        smtp_pass: typeof b.smtp_pass === 'string' && b.smtp_pass ? b.smtp_pass : (settingsApi.getSetting('smtp_pass') || ''),
+        smtp_from: smtpFrom,
+      }
+    : { smtp_host: '', smtp_port: '', smtp_user: '', smtp_pass: '', smtp_from: '' };
   updateRuntime({
     site_name: String(b.site_name).trim(), issuer,
-    access_ttl: accessTtl, refresh_ttl: refreshTtl, setup_step: 3,
+    access_ttl: accessTtl, refresh_ttl: refreshTtl,
+    allow_register: b.allow_register === '1' ? '1' : '0',
+    ...smtpFields,
+    setup_step: 3,
   }, settingsApi.setSetting);
-  logger.info('向导:站点设置完成', { issuer });
+  logger.info('向导:站点设置完成', {
+    issuer,
+    allow_register: b.allow_register === '1',
+    smtp_mode: smtpHost ? 'smtp' : 'dev',
+  });
   redirect(ctx.res, '/setup');
 }
 
-/** POST /setup/step3 —— 创建管理员并完成安装 */
+/** POST /setup/step3 —— 创建管理员并完成安装(库中已有账号时可跳过创建) */
 export function step3(ctx) {
   const b = ctx.body || {};
+  if (String(b.skip || '') === '1' && users.count() > 0) {
+    updateRuntime({ setup_done: 1 }, settingsApi.setSetting);
+    logger.info('向导:检测到已有账号,跳过创建直接完成');
+    const rt = getRuntime();
+    return sendHtml(ctx.res, 200, setupStep4({
+      theme: ctx.theme, siteName: rt.siteName, issuer: rt.issuer, adminUsername: null,
+    }));
+  }
   const username = String(b.username || '').trim();
   const values = { username, name: String(b.name || '') };
   if (!USERNAME_RE.test(username)) return showSetup(ctx, { err: '用户名需为 2-64 位字母数字与 _.@-。', values });
@@ -103,4 +146,14 @@ export function step3(ctx) {
   logger.info('向导:初始化完成,管理员已创建', { username });
   const rt = getRuntime();
   sendHtml(ctx.res, 200, setupStep4({ theme: ctx.theme, siteName: rt.siteName, issuer: rt.issuer, adminUsername: username }));
+}
+
+/** POST /admin/rerun-wizard —— 管理员重新运行配置向导:重走检测与站点设置,不影响用户与应用数据 */
+export function rerunWizard(ctx) {
+  if (ctx.body?._csrf !== ctx.session?.csrf) {
+    return redirect(ctx.res, '/admin?err=' + encodeURIComponent('页面已过期,请重试。'));
+  }
+  updateRuntime({ setup_step: 1, setup_done: 0 }, settingsApi.setSetting);
+  logger.info('向导:管理员触发重新运行配置向导');
+  redirect(ctx.res, '/setup');
 }

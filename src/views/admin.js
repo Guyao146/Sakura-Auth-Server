@@ -41,6 +41,14 @@ export function dashboardPage({ theme, siteName, user, cur, stats, issuer, allow
         </form>
       </div>
       <div class="card">
+        <h3 style="margin-top:0">配置向导</h3>
+        <p class="muted small">重新运行初始化向导:会重走环境检测与站点设置(Issuer、令牌有效期、自助注册、SMTP 邮件),不会影响已有的用户与应用数据;期间全站暂时指向向导页,完成后恢复。</p>
+        <form method="post" action="/admin/rerun-wizard">
+          ${hiddenInputs({ _csrf: csrf })}
+          <button class="btn" type="submit">重新运行配置向导</button>
+        </form>
+      </div>
+      <div class="card">
         <h3 style="margin-top:0">快速开始</h3>
         <p class="small" style="margin-top:0">1. 在「应用」创建客户端,获取 client_id 与 client_secret;</p>
         <p class="small">2. 业务系统跳转到 <code>/authorize</code> 发起授权码 + PKCE 流程;</p>
