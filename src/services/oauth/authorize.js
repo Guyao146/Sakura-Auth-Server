@@ -5,6 +5,7 @@ import * as groups from '../../models/groups.js';
 import { getRuntime } from '../../core/runtime.js';
 import { redirect, sendHtml } from '../../core/http.js';
 import { filterScopes } from './issue.js';
+import { consumeLaunch } from '../portal.js';
 import { errorPage } from '../../views/error.js';
 import { consentPage, accessDeniedPage } from '../../views/auth.js';
 
@@ -134,6 +135,11 @@ export function authorizePost(ctx) {
 }
 
 function issueCode(ctx, { client, redirectUri, scopeList, challenge, challengeMethod, state, nonce }) {
+  // 门户代发的 PKCE:verifier 由服务端暂存,随授权码落库供令牌交换使用
+  let launchVerifier = null;
+  try {
+    launchVerifier = consumeLaunch(ctx.session.id_hash, client.client_id);
+  } catch { /* 非门户启动,忽略 */ }
   const code = codes.create({
     clientId: client.client_id,
     userId: ctx.user.id,
@@ -143,6 +149,7 @@ function issueCode(ctx, { client, redirectUri, scopeList, challenge, challengeMe
     codeChallengeMethod: challenge ? (challengeMethod || 'plain') : null,
     nonce: nonce || null,
     authTime: ctx.session.created_at,
+    launchVerifier: challenge ? launchVerifier : null,
     ttl: getRuntime().authCodeTtl,
   });
   redirect(ctx.res, buildRedirect(redirectUri, { code, state }));

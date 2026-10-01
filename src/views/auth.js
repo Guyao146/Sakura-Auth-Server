@@ -264,6 +264,7 @@ export function accountPage({ theme, siteName, user, csrf, msg, err, twoFa }) {
       <div class="kv"><b>用户名</b><span>${esc(user.username)}</span></div>
       <div class="kv"><b>姓名</b><span>${esc(user.name || '-')}</span></div>
       <div class="kv"><b>邮箱</b><span>${esc(user.email || '-')}</span></div>
+      <div class="kv"><b>应用门户</b><span><a href="/apps">进入你可访问的应用 →</a></span></div>
       <div class="kv"><b>我的授权</b><span><a href="/account/apps">查看与管理已授权的应用 →</a></span></div>
       <h3>修改密码</h3>
       <form method="post" action="/account">

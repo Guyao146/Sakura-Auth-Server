@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS auth_codes (
   code_challenge_method TEXT,
   nonce                 TEXT,
   auth_time             INTEGER,
+  launch_verifier       TEXT,
   expires_at            INTEGER NOT NULL,
   used                  INTEGER NOT NULL DEFAULT 0
 );
@@ -114,6 +115,10 @@ function migrate() {
   const ccols = db.prepare('PRAGMA table_info(clients)').all().map((c) => c.name);
   if (!ccols.includes('allowed_groups')) {
     db.exec("ALTER TABLE clients ADD COLUMN allowed_groups TEXT NOT NULL DEFAULT '[]'");
+  }
+  const acols = db.prepare('PRAGMA table_info(auth_codes)').all().map((c) => c.name);
+  if (!acols.includes('launch_verifier')) {
+    db.exec('ALTER TABLE auth_codes ADD COLUMN launch_verifier TEXT');
   }
   seedGroupsFromUserGroups();
 }

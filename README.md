@@ -1,6 +1,6 @@
 # SakuraID —— 类 authentik 的轻量 OAuth2 / OIDC 认证后台
 
-> 版本:`v0.4.2` · 零 npm 依赖 · Node.js ≥ 22.5 · SQLite 存储
+> 版本:`v0.5.0` · 零 npm 依赖 · Node.js ≥ 22.5 · SQLite 存储
 
 SakuraID 是一个自托管的统一身份认证服务(IdP):业务系统统一跳转到这里登录,通过 OAuth 2.0 / OpenID Connect 拿回令牌访问各自的接口。定位对标 authentik 的核心子集——不过超大而全,只把「发令牌」这一件事做对。
 
@@ -37,6 +37,7 @@ node server.js
 | 运维端点 | RFC 7662 内省、RFC 7009 吊销 |
 | 控制台 | 用户管理(禁用/重置密码/用户组)、应用管理(机密/公开客户端、密钥重置、令牌吊销) |
 | 两步验证 | 账号页自助开启 TOTP(RFC 6238,兼容 Google Authenticator 等)、服务端渲染扫码二维码、8 枚一次性恢复代码、登录第二因子、管理员可重置 |
+| 应用门户 | 普通用户的业务线入口页:按权限组过滤可见应用,一键发起统一登录(IdP 代发 PKCE,授权码可直接换取令牌) |
 | 权限组 | 组管理与成员关系(迁移时自动从旧用户字段播种);应用(业务线)可限制「可访问的权限组」,组外用户在授权阶段被拦截;groups claim 由成员关系驱动 |
 | 我的授权 | 用户侧「我的授权」页:查看已记住授权的应用/范围/时间,一键撤销并级联吊销其现有令牌,下次访问重新确认 |
 | 账号自助 | 找回密码(零依赖 SMTP 客户端,支持 STARTTLS;SMTP 可在向导/环境变量配置,未配置时走开发模式把邮件打到日志)、管理员可控的自助注册开关 |
@@ -94,7 +95,7 @@ curl -s http://localhost:9000/token -d grant_type=authorization_code -d code=<CO
 curl -s http://localhost:9000/userinfo -H "Authorization: Bearer <ACCESS_TOKEN>"
 ```
 
-测试工具链:`npm run smoke` 会自动拉起独立实例,端到端验证向导、登录、两步验证(TOTP/恢复代码/管理员重置)、找回密码、自助注册、权限组与应用访问控制、授权码 + PKCE、刷新轮换、内省/吊销、client_credentials 与控制台权限、我的授权管理(102 项断言);另有 `node scripts/test-qr.mjs`(QR 编码器 46 项)与 `node scripts/test-smtp.mjs`(SMTP 对话 9 项)两个单元测试。
+测试工具链:`npm run smoke` 会自动拉起独立实例,端到端验证向导、登录、两步验证(TOTP/恢复代码/管理员重置)、找回密码、自助注册、权限组与应用访问控制、授权码 + PKCE、刷新轮换、内省/吊销、client_credentials 与控制台权限、我的授权管理、应用门户(109 项断言);另有 `node scripts/test-qr.mjs`(QR 编码器 46 项)与 `node scripts/test-smtp.mjs`(SMTP 对话 9 项)两个单元测试。
 
 运维脚本:`npm run reset-admin -- <用户名> [新密码]`(直接重置管理员密码,用于忘记密码);`npm run seed-demo`(灌入演示用户与一个 PKCE 公开客户端)。首次部署自动进入配置向导(环境检测 → 站点/注册/SMTP → 管理员 → 完成);已初始化的实例可在控制台「配置向导」卡片重新运行,不影响已有用户与应用数据。
 

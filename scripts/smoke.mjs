@@ -669,6 +669,49 @@ async function main() {
     const reConsent = await r.text();
     ok('我的授权:撤销后再次授权需重新确认', r.status === 200 && reConsent.includes('请求访问你的账号'));
 
+    /* ---------- 应用门户:用户可见的业务线与统一登录入口 ---------- */
+    r = await call(fj, '/apps');
+    const portalHtml = await r.text();
+    ok('门户:展示用户可访问的应用', r.status === 200 && portalHtml.includes('Smoke Web')
+      && portalHtml.includes('Groups Only') && portalHtml.includes('进入应用'));
+
+    r = await call(nj2, '/apps');
+    const noahPortal = await r.text();
+    ok('门户:无组用户看不到受限应用', r.status === 200 && noahPortal.includes('Smoke Web')
+      && !noahPortal.includes('Groups Only'));
+
+    r = await call(fj, `/apps/launch/${web.client_id}`);
+    const launchLoc = location(r);
+    ok('门户:启动跳转授权端点并代发 PKCE challenge', r.status === 302
+      && launchLoc.startsWith('/authorize?') && launchLoc.includes('code_challenge=')
+      && launchLoc.includes('code_challenge_method=S256'));
+
+    r = await call(fj, launchLoc);
+    const portalConsent = await r.text();
+    ok('门户:启动后进入同意授权页', r.status === 200 && portalConsent.includes('请求访问你的账号'));
+    const pForm = extractHidden(portalConsent);
+    r = await call(fj, '/authorize', { method: 'POST', form: { ...pForm, decision: 'approve', remember: 'on' } });
+    const pCallback = new URL(location(r), BASE);
+    ok('门户:同意后携带 code 与 state 回跳应用回调', r.status === 302
+      && !!pCallback.searchParams.get('code') && !!pCallback.searchParams.get('state'));
+
+    // 门户代发的授权码:应用无需 code_verifier 即可换取令牌(IdP 委托闭环)
+    r = await fetch(BASE + '/token', {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code', code: pCallback.searchParams.get('code'),
+        redirect_uri: 'http://127.0.0.1:8080/cb', client_id: web.client_id,
+      }).toString(),
+    });
+    const portalTok = await r.json();
+    ok('门户:PKCE 应用经门户启动后可无 verifier 换取令牌', r.status === 200 && !!portalTok.access_token,
+      JSON.stringify(portalTok).slice(0, 120));
+
+    r = await call(nj2, `/apps/launch/${gApp.client_id}`);
+    const noahLaunch = await r.text();
+    ok('门户:无权用户启动受限应用被拦截(403)', r.status === 403
+      && noahLaunch.includes('仅对特定权限组开放') && noahLaunch.includes('Groups Only'));
+
     /* ---------- 配置向导增强:管理员重新运行向导(放在最后,尾部恢复 setup_done=1) ---------- */
     r = await call(aj, '/admin');
     const rerunDash = await r.text();

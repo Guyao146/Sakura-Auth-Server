@@ -79,9 +79,18 @@ function grantAuthorizationCode(ctx, client, body) {
   if (row.redirect_uri !== body.redirect_uri) return fail('redirect_uri 与授权请求不一致');
 
   if (row.code_challenge) {
-    if (!body.code_verifier) return fail('缺少 PKCE code_verifier');
-    if (!pkceOk(body.code_verifier, row.code_challenge, row.code_challenge_method)) {
-      return fail('PKCE 校验失败');
+    // 标准 PKCE:应用自行发起,必须携带正确 verifier;
+    // 门户代发(IdP-initiated)的授权码,verifier 由服务端随码落库,允许无 verifier 换取
+    const fallback = row.launch_verifier;
+    if (!body.code_verifier && fallback) {
+      if (!pkceOk(fallback, row.code_challenge, row.code_challenge_method)) {
+        return fail('PKCE 校验失败');
+      }
+    } else {
+      if (!body.code_verifier) return fail('缺少 PKCE code_verifier');
+      if (!pkceOk(body.code_verifier, row.code_challenge, row.code_challenge_method)) {
+        return fail('PKCE 校验失败');
+      }
     }
   }
 

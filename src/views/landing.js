@@ -11,7 +11,7 @@ export function landingPage({ theme, siteName, issuer, logged, msg }) {
       <p class="small" style="margin-top:0">${esc(siteName)} 是一个 OAuth 2.0 / OpenID Connect 认证服务:业务系统统一跳转到这里登录,拿回令牌后访问各自的接口,密码只存在这一处。</p>
       <div class="actions">
         ${logged
-          ? '<a class="btn btn-primary" href="/admin">进入管理控制台</a>'
+          ? '<a class="btn btn-primary" href="/apps">应用门户</a><a class="btn" href="/admin">管理控制台</a>'
           : '<a class="btn btn-primary" href="/login">登录</a><a class="btn" href="/logout">退出登录</a>'}
       </div>
       <h3>接入方</h3>

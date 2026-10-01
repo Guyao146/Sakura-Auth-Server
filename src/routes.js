@@ -12,6 +12,7 @@ import * as account from './services/auth/account.js';
 import * as reset from './services/auth/reset.js';
 import * as admin from './services/admin/index.js';
 import * as wizard from './services/setup/wizard.js';
+import * as portal from './services/portal.js';
 import { showLanding } from './services/home.js';
 import { setTheme } from './views/theme.js';
 
@@ -33,6 +34,8 @@ export function registerRoutes() {
   r('GET', '/logout', logout.showLogout);
   r('POST', '/logout', logout.handleLogout);
   r('GET', '/account', account.showAccount, { auth: 'user' });
+  r('GET', '/apps', portal.showPortal, { auth: 'user' });
+  r('GET', '/apps/launch/:clientId', portal.launch, { auth: 'user' });
   r('POST', '/account', account.handleChangePassword, { auth: 'user' });
   r('GET', '/account/apps', account.showAuthorizations, { auth: 'user' });
   r('POST', '/account/apps/revoke', account.revokeAuthorization, { auth: 'user' });

@@ -145,6 +145,13 @@ pre.block{background:var(--code-bg);color:var(--code-text);border-radius:var(--r
 .app-item{display:flex;gap:var(--s3);align-items:center;padding:var(--s3) 0;border-bottom:1px solid var(--border)}
 .app-item:last-child{border-bottom:0}
 .app-item .app-badge{width:44px;height:44px;font-size:18px;border-radius:12px}
+/* 应用门户 */
+.portal-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:var(--s4);margin-bottom:var(--s5)}
+.portal-tile{background:var(--surface);border-radius:12px;box-shadow:var(--shadow-sm);padding:var(--s5);display:flex;flex-direction:column;gap:var(--s3);transition:transform .18s ease,box-shadow .18s ease}
+.portal-tile:hover{transform:translateY(-1px);box-shadow:var(--shadow-md)}
+.portal-tile .name{color:var(--heading);font-weight:650;font-size:15px;line-height:1.35}
+.portal-tile .scope-badges{display:flex;flex-wrap:wrap;gap:var(--s1) var(--s2)}
+.portal-tile .btn{justify-content:center;margin-top:auto}
 /* 向导步骤 */
 .steps{display:flex;gap:var(--s2);margin-bottom:var(--s5)}
 .step{flex:1;text-align:center;font-size:12px;color:var(--muted);padding-top:10px;position:relative}
