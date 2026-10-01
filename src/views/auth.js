@@ -170,13 +170,17 @@ export function consentPage({ theme, siteName, user, client, scopeList: scopes, 
   try { target = new URL(replay.redirect_uri).host || target; } catch { /* 自定义 scheme 原样展示 */ }
   const appInitial = (String(client.name || '?').trim()[0] || '?').toUpperCase();
   const userInitial = (String(user.name || user.username).trim()[0] || '?').toUpperCase();
+  const appLogo = client.logoUrl
+    ? `<img src="${esc(client.logoUrl)}" alt="" loading="lazy" style="width:44px;height:44px;border-radius:12px;object-fit:cover;flex:none">`
+    : `<div class="app-badge">${esc(appInitial)}</div>`;
   return authPage({
     theme, siteName, wide: true, title: `授权 · ${siteName}`,
     content: `
       <div class="app-row">
-        <div class="app-badge">${esc(appInitial)}</div>
+        ${appLogo}
         <div style="min-width:0">
           <div style="font-size:17px;font-weight:650;color:var(--heading);line-height:1.3">${esc(client.name)}</div>
+          ${client.description ? `<div class="muted small" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(client.description)}</div>` : ''}
           <div class="muted small" style="word-break:break-all">${esc(client.client_id)}</div>
         </div>
       </div>

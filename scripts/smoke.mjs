@@ -836,6 +836,138 @@ async function main() {
     ok('门户:无权用户启动受限应用被拦截(403)', r.status === 403
       && noahLaunch.includes('仅对特定权限组开放') && noahLaunch.includes('Groups Only'));
 
+    /* ---------- 应用元数据(描述/Logo)与应用授权用户管理 ---------- */
+    // 新建应用表单提供描述与 Logo 输入
+    r = await call(aj, '/admin/apps/new');
+    const metaFormHtml = await r.text();
+    ok('应用信息:新建应用表单提供描述与 Logo 输入', r.status === 200
+      && metaFormHtml.includes('name="description"') && metaFormHtml.includes('name="logo_url"')
+      && metaFormHtml.includes('展示在门户与授权页'));
+
+    // 通过表单创建带描述与 Logo 的应用(公开客户端),详情页回显
+    r = await call(aj, '/admin/apps/create', {
+      method: 'POST',
+      form: [
+        ['name', 'Meta Portal'], ['client_type', 'public'],
+        ['redirect_uris', 'http://127.0.0.1:8080/meta'],
+        ['scopes', 'openid'], ['scopes', 'profile'],
+        ['description', '统一运维入口,一站聚合所有工具'],
+        ['logo_url', 'https://cdn.example.com/logo.png'],
+        ['require_consent', '1'],
+      ],
+    });
+    ok('应用信息:创建带描述与 Logo 的应用成功', r.status === 302
+      && location(r).startsWith('/admin/apps/') && location(r).includes('msg='));
+    const metaId = new URL(location(r), BASE).pathname.split('/').pop();
+    r = await call(aj, `/admin/apps/${metaId}`);
+    let metaDetail = await r.text();
+    ok('应用信息:详情页回显描述与 Logo', r.status === 200
+      && metaDetail.includes('统一运维入口,一站聚合所有工具')
+      && metaDetail.includes('https://cdn.example.com/logo.png')
+      && metaDetail.includes('已授权用户'));
+
+    // 非 https 的 Logo 地址被拒绝(http:// 不合法)
+    r = await call(aj, '/admin/apps/create', {
+      method: 'POST',
+      form: {
+        name: 'Bad Logo App', client_type: 'public',
+        redirect_uris: 'http://127.0.0.1:8080/bad', scopes: 'openid',
+        logo_url: 'http://cdn.example.com/x.png',
+      },
+    });
+    ok('应用信息:非 https Logo 地址被拒绝', r.status === 200 && (await r.text()).includes('Logo 图片地址不合法'));
+
+    // 编辑保存:更新描述与 Logo
+    const metaCsrf = extractHidden(metaDetail)._csrf;
+    r = await call(aj, `/admin/apps/${metaId}/update`, {
+      method: 'POST',
+      form: [
+        ['name', 'Meta Portal'],
+        ['redirect_uris', 'http://127.0.0.1:8080/meta'],
+        ['scopes', 'openid'], ['scopes', 'profile'],
+        ['description', '更新后的统一运维描述'],
+        ['logo_url', 'https://cdn.example.com/logo2.png'],
+        ['require_consent', '1'],
+        ['_csrf', metaCsrf],
+      ],
+    });
+    ok('应用信息:更新应用描述与 Logo 保存成功', r.status === 302 && location(r).includes('msg='));
+    r = await call(aj, `/admin/apps/${metaId}`);
+    metaDetail = await r.text();
+    ok('应用信息:更新后详情回显新描述与 Logo', r.status === 200
+      && metaDetail.includes('更新后的统一运维描述') && metaDetail.includes('logo2.png'));
+
+    // 门户磁贴与条状行:Logo 图片替代首字母徽标,描述一行展示
+    r = await call(fj, '/apps?view=grid');
+    const metaGrid = await r.text();
+    ok('应用信息:门户磁贴展示 Logo 与描述', r.status === 200
+      && metaGrid.includes('<img src="https://cdn.example.com/logo2.png" alt="" loading="lazy"')
+      && metaGrid.includes('更新后的统一运维描述'));
+    r = await call(fj, '/apps?view=list');
+    const metaList = await r.text();
+    ok('应用信息:门户条状视图展示 Logo 与描述', r.status === 200
+      && metaList.includes('class="app-item"')
+      && metaList.includes('<img src="https://cdn.example.com/logo2.png" alt="" loading="lazy"')
+      && metaList.includes('更新后的统一运维描述'));
+    r = await call(fj, '/apps?view=grid'); // 恢复格子视图偏好
+
+    // 同意授权页:Logo 与描述展示(首字母徽标逻辑保留为回退)
+    const metaVerifier = crypto.randomBytes(48).toString('base64url');
+    const metaAuthUrl = '/authorize?' + new URLSearchParams({
+      client_id: metaId, redirect_uri: 'http://127.0.0.1:8080/meta',
+      response_type: 'code', scope: 'openid profile',
+      state: 'meta-st', nonce: 'meta-n',
+      code_challenge: b64urlSha256(metaVerifier), code_challenge_method: 'S256',
+    }).toString();
+    r = await call(fj, metaAuthUrl);
+    const metaConsentHtml = await r.text();
+    ok('应用信息:同意授权页展示 Logo 与描述', r.status === 200
+      && metaConsentHtml.includes('请求访问你的账号')
+      && metaConsentHtml.includes('<img src="https://cdn.example.com/logo2.png" alt="" loading="lazy"')
+      && metaConsentHtml.includes('更新后的统一运维描述'));
+    const metaConsentForm = extractHidden(metaConsentHtml);
+    r = await call(fj, '/authorize', { method: 'POST', form: { ...metaConsentForm, decision: 'approve', remember: 'on' } });
+    const metaCode = new URL(location(r), BASE).searchParams.get('code');
+    ok('应用信息:同意后签发授权码', r.status === 302 && !!metaCode && !location(r).includes('error'));
+    r = await fetch(BASE + '/token', {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code', code: metaCode, redirect_uri: 'http://127.0.0.1:8080/meta',
+        client_id: metaId, code_verifier: metaVerifier,
+      }).toString(),
+    });
+    const metaTok = await r.json();
+    ok('应用信息:授权码换取 meta 应用令牌', r.status === 200 && !!metaTok.access_token);
+
+    // 应用详情「已授权用户」:bob 记住授权后出现,含用户名/姓名/范围徽章
+    r = await call(aj, `/admin/apps/${metaId}`);
+    const metaUsersHtml = await r.text();
+    ok('授权用户:应用详情列出已授权用户含 bob', r.status === 200
+      && metaUsersHtml.includes('已授权用户')
+      && metaUsersHtml.includes('name="user_id" value="' + bob.id + '"')
+      && metaUsersHtml.includes('小明') && metaUsersHtml.includes('基本资料')
+      && metaUsersHtml.includes('撤销授权') && metaUsersHtml.includes('记住授权与现有令牌立即失效'));
+    const metaUsersForm = extractHidden(metaUsersHtml);
+    r = await call(aj, `/admin/apps/${metaId}/revoke-user`, {
+      method: 'POST', form: { user_id: bob.id, _csrf: metaUsersForm._csrf },
+    });
+    ok('授权用户:撤销单个用户授权成功', r.status === 302
+      && location(r).startsWith(`/admin/apps/${metaId}?msg=`));
+    r = await call(aj, `/admin/apps/${metaId}`);
+    const metaEmptyHtml = await r.text();
+    ok('授权用户:撤销后已授权用户列表为空', r.status === 200
+      && metaEmptyHtml.includes('暂无用户授权') && !metaEmptyHtml.includes('revoke-user'));
+    r = await fetch(BASE + '/introspect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Authorization: basic(svc.client_id, 'svc-secret-123') },
+      body: new URLSearchParams({ token: metaTok.access_token }).toString(),
+    });
+    ok('授权用户:撤销后该用户令牌内省 active=false', r.status === 200 && (await r.json()).active === false);
+
+    // 无任何授权的应用详情显示空状态
+    r = await call(aj, `/admin/apps/${svc.client_id}`);
+    ok('授权用户:无授权应用详情显示空状态', r.status === 200 && (await r.text()).includes('暂无用户授权'));
+
     /* ---------- 门户视图切换与页面精简 ---------- */
     r = await call(fj, '/apps');
     const gridHtml = await r.text();

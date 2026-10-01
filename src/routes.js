@@ -101,6 +101,7 @@ export function registerRoutes() {
   r('POST', '/admin/apps/:id/update', admin.updateApp, { auth: 'admin' });
   r('POST', '/admin/apps/:id/secret', admin.regenerateSecret, { auth: 'admin' });
   r('POST', '/admin/apps/:id/revoke-tokens', admin.revokeAppTokens, { auth: 'admin' });
+  r('POST', '/admin/apps/:id/revoke-user', admin.revokeAppUserConsent, { auth: 'admin' });
   r('POST', '/admin/apps/:id/delete', admin.deleteApp, { auth: 'admin' });
 
   return router;
