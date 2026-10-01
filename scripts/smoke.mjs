@@ -32,15 +32,16 @@ class Jar {
   header() { return [...this.map].map(([k, v]) => `${k}=${v}`).join('; '); }
 }
 
-async function call(jar, pathOrUrl, { method = 'GET', form, headers = {} } = {}) {
+async function call(jar, pathOrUrl, { method = 'GET', form, json, headers = {} } = {}) {
   const res = await fetch(pathOrUrl.startsWith('http') ? pathOrUrl : BASE + pathOrUrl, {
     method, redirect: 'manual',
     headers: {
       ...(form ? { 'Content-Type': 'application/x-www-form-urlencoded' } : {}),
+      ...(json !== undefined ? { 'Content-Type': 'application/json' } : {}),
       ...(jar.header() ? { Cookie: jar.header() } : {}),
       ...headers,
     },
-    body: form ? new URLSearchParams(form).toString() : undefined,
+    body: form ? new URLSearchParams(form).toString() : json !== undefined ? JSON.stringify(json) : undefined,
   });
   jar.store(res);
   return res;
@@ -711,6 +712,90 @@ async function main() {
     const noahLaunch = await r.text();
     ok('门户:无权用户启动受限应用被拦截(403)', r.status === 403
       && noahLaunch.includes('仅对特定权限组开放') && noahLaunch.includes('Groups Only'));
+
+    /* ---------- JSON API 套件:心跳/会话状态/登录/登出/可见应用 ---------- */
+    const pkgVersion = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
+
+    // 心跳:匿名可访问,字段齐全,CORS 开放且 no-store
+    const hbRes = await fetch(BASE + '/api/heartbeat');
+    const hb = await hbRes.json();
+    ok('API heartbeat 返回 200 且字段齐全', hbRes.status === 200
+      && hb.ok === true && hb.status === 'alive' && hb.site_name === '樱落统一认证'
+      && hb.issuer === BASE && Number.isFinite(hb.uptime_sec)
+      && typeof hb.timestamp === 'string' && hb.db === 'ok', JSON.stringify(hb));
+    ok('API heartbeat version 与 package.json 一致', hb.version === pkgVersion, hb.version);
+    ok('API heartbeat 开放 CORS 且响应 no-store', hbRes.headers.get('access-control-allow-origin') === '*'
+      && (hbRes.headers.get('cache-control') || '').includes('no-store'));
+
+    // 会话状态:未登录
+    const anonSess = await call(new Jar(), '/api/session');
+    ok('API 未登录查询会话状态返回 authenticated:false', anonSess.status === 200
+      && (await anonSess.json()).authenticated === false);
+
+    // 登录:参数缺失 / 错误密码(用 noah,避免占用 bob 的限流窗口)
+    const missRes = await call(new Jar(), '/api/login', { method: 'POST', json: { username: 'noah' } });
+    ok('API 登录参数缺失返回 bad_request', missRes.status === 400 && (await missRes.json()).error === 'bad_request');
+    const badRes = await call(new Jar(), '/api/login', {
+      method: 'POST', json: { username: 'noah', password: 'wrong-pass' },
+    });
+    ok('API 登录错误密码返回 401 invalid_credentials', badRes.status === 401
+      && (await badRes.json()).error === 'invalid_credentials');
+
+    // 登录成功(表单编码):Set-Cookie 携带 sid
+    const apiJ = new Jar();
+    const formLogin = await call(apiJ, '/api/login', { method: 'POST', form: { username: 'bob', password: 'BobPassw0rd!' } });
+    const formLoginBody = await formLogin.json();
+    ok('API 登录成功且 Set-Cookie 有 sid', formLogin.status === 200 && formLoginBody.ok === true
+      && formLoginBody.user?.username === 'bob' && !!apiJ.map.get('sid'));
+
+    // 带 cookie 查询会话:返回用户信息(含 groups 数组)
+    const sessRes = await call(apiJ, '/api/session');
+    const sessBody = await sessRes.json();
+    ok('API 带 cookie 查询会话返回 bob 用户信息(含 groups)', sessRes.status === 200
+      && sessBody.authenticated === true && sessBody.user.username === 'bob' && sessBody.user.name === '小明'
+      && Array.isArray(sessBody.user.groups) && sessBody.user.groups.includes('dev')
+      && sessBody.user.is_admin === false, JSON.stringify(sessBody));
+
+    // 可见应用:复用门户可见性过滤,未登录 401
+    const appsRes = await call(apiJ, '/api/apps');
+    const appsBody = await appsRes.json();
+    ok('API 可见应用列表含 Smoke Web 且带 client_id', appsRes.status === 200 && Array.isArray(appsBody.apps)
+      && appsBody.apps.some((a) => a.name === 'Smoke Web' && !!a.client_id
+        && a.type === 'public' && a.scopes.includes('openid')), JSON.stringify(appsBody).slice(0, 120));
+    const appsAnon = await call(new Jar(), '/api/apps');
+    ok('API 未登录请求应用列表返回 401 unauthenticated', appsAnon.status === 401
+      && (await appsAnon.json()).error === 'unauthenticated');
+
+    // 登出:销毁会话、状态变回未登录
+    const apiLoRes = await call(apiJ, '/api/logout', { method: 'POST' });
+    const apiLoBody = await apiLoRes.json();
+    const afterLogout = await (await call(apiJ, '/api/session')).json();
+    ok('API 登出成功且会话状态变回未登录', apiLoRes.status === 200 && apiLoBody.ok === true
+      && afterLogout.authenticated === false);
+
+    // 2FA:开启后缺 totp_code 被拒,正确验证码/恢复代码均可登录;结束清理恢复原状
+    const bobApiSecret = totp.generateSecret();
+    users.setTotpSecret(bob.id, bobApiSecret);
+    users.enableTotp(bob.id);
+    const tfApi = new Jar();
+    const tfMissing = await call(tfApi, '/api/login', { method: 'POST', json: { username: 'bob', password: 'BobPassw0rd!' } });
+    ok('API 2FA 用户缺 totp_code 登录返回 totp_required', tfMissing.status === 401
+      && (await tfMissing.json()).error === 'totp_required');
+    const tfOk = await call(tfApi, '/api/login', {
+      method: 'POST',
+      json: { username: 'bob', password: 'BobPassw0rd!', totp_code: totp.currentCode(bobApiSecret) },
+    });
+    const tfOkBody = await tfOk.json();
+    ok('API 2FA 用户带正确验证码登录成功', tfOk.status === 200 && tfOkBody.ok === true
+      && tfOkBody.user?.username === 'bob' && tfOkBody.user?.totp_enabled === true);
+    const apiRec = recovery.createBatch(bob.id, 1)[0];
+    const rcRes = await call(new Jar(), '/api/login', {
+      method: 'POST',
+      json: { username: 'bob', password: 'BobPassw0rd!', totp_code: apiRec },
+    });
+    ok('API 2FA 恢复代码可完成登录', rcRes.status === 200 && (await rcRes.json()).ok === true);
+    users.clearTotp(bob.id); // 清理:恢复夹具原状,避免影响后续用例
+    recovery.clearFor(bob.id);
 
     /* ---------- 配置向导增强:管理员重新运行向导(放在最后,尾部恢复 setup_done=1) ---------- */
     r = await call(aj, '/admin');
