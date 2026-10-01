@@ -163,6 +163,9 @@ async function main() {
       && loginHtml.includes('name="next"') && loginHtml.includes('autocomplete="current-password"'));
     ok('登录页使用分栏品牌样式与窄屏断点', loginHtml.includes('.login-split')
       && loginHtml.includes('@media(max-width:899px)'));
+    ok('顶栏:登录品牌面板内容改为居中布局', /login-brand-body\{[^}]*justify-content:center/.test(loginHtml)
+      && /login-brand-body\{[^}]*text-align:center/.test(loginHtml)
+      && /login-brand-feats li\{[^}]*align-items:center/.test(loginHtml));
 
     r = await call(uj, '/login', {
       method: 'POST',
@@ -722,6 +725,17 @@ async function main() {
     const noahPortal = await r.text();
     ok('门户:无组用户看不到受限应用', r.status === 200 && noahPortal.includes('Smoke Web')
       && !noahPortal.includes('Groups Only'));
+
+    /* ---------- 顶栏:门户右上角管理入口(仅管理员可见) ---------- */
+    r = await call(aj, '/apps');
+    const adminPortalHtml = await r.text();
+    ok('顶栏:管理员门户右上角渲染管理后台入口', r.status === 200
+      && adminPortalHtml.includes('class="main-head"')
+      && adminPortalHtml.includes('<a class="btn btn-primary" href="/admin">管理后台</a>'));
+    ok('顶栏:普通用户门户不渲染管理后台入口', noahPortal.includes('class="side"')
+      && !noahPortal.includes('管理后台') && !noahPortal.includes('class="main-head"'));
+    r = await call(aj, '/admin');
+    ok('顶栏:未传 actions 的其它页面不渲染顶栏', r.status === 200 && !(await r.text()).includes('class="main-head"'));
 
     r = await call(fj, `/apps/launch/${web.client_id}`);
     const launchLoc = location(r);

@@ -23,6 +23,8 @@ export function showPortal(ctx, { msg, err } = {}) {
     theme: ctx.theme, siteName: ctx.runtime.siteName, user: ctx.user,
     list: visibleApps(ctx.user), msg, err,
     cur: ctx.url.pathname + ctx.url.search,
+    // 顶栏:管理员在门户右上角获得管理后台直达入口,普通用户不渲染
+    actions: ctx.user.is_admin ? '<a class="btn btn-primary" href="/admin">管理后台</a>' : '',
   }));
 }
 
