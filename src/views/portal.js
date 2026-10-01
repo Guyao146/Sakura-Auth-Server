@@ -44,17 +44,17 @@ export function portalPage({ theme, siteName, user, list, msg, err, csrf, cur = 
       ? `<div class="card tight">${rows}</div>`
       : `<div class="portal-grid">${tiles}</div>`;
 
+  // 顶栏:左侧标题块(标题 + 说明 + 数量),右侧视图切换与管理入口 —— 内容区直接是磁贴/列表
+  const headTitle = `<h3>应用门户</h3>
+    <p class="muted small">${esc(user.name || user.username)},以下是根据你的权限组可见的应用 · 共 ${list.length} 个
+    <span class="muted">· 点击「进入应用」发起统一登录,受限应用仅对所属组成员开放</span></p>`;
+
   return adminPage({
-    theme, siteName, user, active: 'portal', cur, actions,
+    theme, siteName, user, active: 'portal', cur, actions, headTitle,
     title: `应用门户 · ${siteName}`,
     content: `
       ${banner(msg ? esc(msg) : '', 'ok')}
       ${banner(err ? esc(err) : '', 'err')}
-      <h3 style="margin-top:0">应用门户</h3>
-      <p class="muted small" style="margin-top:0">
-        ${esc(user.name || user.username)},以下是根据你的权限组可见的应用。
-        点击「进入应用」将使用当前账号发起统一登录;受限应用仅对所属组成员开放。
-      </p>
       ${body}`,
   });
 }

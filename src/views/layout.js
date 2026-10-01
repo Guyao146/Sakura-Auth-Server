@@ -127,8 +127,11 @@ pre.block{background:var(--code-bg);color:var(--code-text);border-radius:var(--r
 @media(max-width:900px){.side{display:none}.main{margin-left:0;padding:var(--s5) var(--s4) 64px}}
 .topbar{display:none}
 @media(max-width:900px){.topbar{display:flex;align-items:center;gap:var(--s2);padding:var(--s4);color:var(--heading);font-weight:700}.topbar svg{color:var(--accent)}}
-/* 内容顶栏:左侧页级控件(如视图切换),右侧页级 actions(如管理入口) */
-.main-head{display:flex;justify-content:space-between;align-items:center;gap:var(--s3);margin-bottom:var(--s4);flex-wrap:wrap}
+/* 内容顶栏:左侧页级标题块,右侧页级控件/actions */
+.main-head{display:flex;justify-content:space-between;align-items:flex-end;gap:var(--s3);margin-bottom:var(--s5);flex-wrap:wrap}
+.main-head-title h3{margin:0}
+.main-head-title p{margin:2px 0 0}
+.main-head .rowline{padding-bottom:2px}
 /* 视图切换分段控件 */
 .seg-group{display:inline-flex;background:var(--surface-soft);border-radius:10px;padding:3px;gap:2px}
 .seg{display:inline-flex;align-items:center;padding:4px 12px;border-radius:8px;color:var(--muted);font-size:13px;font-weight:600;text-decoration:none;transition:all .18s ease}
@@ -288,7 +291,7 @@ export function brandPage({
 }
 
 /** 控制台骨架:左侧玻璃侧栏 + 内容区;导航按身份渲染 —— 管理员含管理项,普通用户仅「我的」分组 */
-export function adminPage({ theme, siteName, user, active = '', title, content, cur = '/', actions = '' }) {
+export function adminPage({ theme, siteName, user, active = '', title, content, cur = '/', actions = '', headTitle = '' }) {
   const link = (href, label, key) =>
     `<a href="${href}"${key === active ? ' class="active"' : ''}>${label}</a>`;
   const adminNav = user.is_admin
@@ -315,7 +318,10 @@ export function adminPage({ theme, siteName, user, active = '', title, content, 
   </div>
 </aside>
 <main class="main">
-${actions ? `<div class="main-head">${actions}</div>` : ''}
+${actions || headTitle ? `<div class="main-head">
+  ${headTitle ? `<div class="main-head-title">${headTitle}</div>` : ''}
+  ${actions ? `<div class="rowline">${actions}</div>` : ''}
+</div>` : ''}
 ${content}
 </main>
 </body></html>`;
