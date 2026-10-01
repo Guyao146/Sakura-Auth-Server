@@ -3,7 +3,7 @@ import * as clients from '../models/clients.js';
 import * as groups from '../models/groups.js';
 import { getRuntime } from '../core/runtime.js';
 import { randomToken, sha256b64url } from '../core/crypto.js';
-import { sendHtml, redirect } from '../core/http.js';
+import { sendHtml, redirect, setCookie } from '../core/http.js';
 import { portalPage } from '../views/portal.js';
 import { forbidden } from './auth/login.js';
 
@@ -19,12 +19,26 @@ export function visibleApps(user) {
 
 /** GET /apps */
 export function showPortal(ctx, { msg, err } = {}) {
+  // 视图切换:格子/条状,偏好记忆在 cookie(365 天)
+  const q = ctx.query.get('view');
+  let view = ctx.cookies.portal_view === 'list' ? 'list' : 'grid';
+  if (q === 'grid' || q === 'list') {
+    view = q;
+    setCookie(ctx.res, 'portal_view', view, {
+      maxAge: 365 * 86400, httpOnly: false, secure: ctx.runtime.secureCookies,
+    });
+  }
+  // 顶栏:左侧视图切换(所有用户),右侧管理后台(仅管理员)
+  const toggle = `<div class="seg-group">
+      <a class="seg${view === 'grid' ? ' active' : ''}" href="/apps?view=grid">格子显示</a>
+      <a class="seg${view === 'list' ? ' active' : ''}" href="/apps?view=list">条状显示</a>
+    </div>`;
+  const actions = `${toggle}${ctx.user.is_admin ? '<a class="btn btn-primary" href="/admin">管理后台</a>' : ''}`;
   sendHtml(ctx.res, 200, portalPage({
     theme: ctx.theme, siteName: ctx.runtime.siteName, user: ctx.user,
-    list: visibleApps(ctx.user), msg, err,
+    list: visibleApps(ctx.user), msg, err, view,
     cur: ctx.url.pathname + ctx.url.search,
-    // 顶栏:管理员在门户右上角获得管理后台直达入口,普通用户不渲染
-    actions: ctx.user.is_admin ? '<a class="btn btn-primary" href="/admin">管理后台</a>' : '',
+    actions,
   }));
 }
 

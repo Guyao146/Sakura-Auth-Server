@@ -798,8 +798,9 @@ async function main() {
     ok('顶栏:管理员门户右上角渲染管理后台入口', r.status === 200
       && adminPortalHtml.includes('class="main-head"')
       && adminPortalHtml.includes('<a class="btn btn-primary" href="/admin">管理后台</a>'));
-    ok('顶栏:普通用户门户不渲染管理后台入口', noahPortal.includes('class="side"')
-      && !noahPortal.includes('管理后台') && !noahPortal.includes('class="main-head"'));
+    ok('顶栏:普通用户门户有视图切换但无管理后台入口', noahPortal.includes('class="side"')
+      && noahPortal.includes('main-head') && noahPortal.includes('格子显示')
+      && !noahPortal.includes('管理后台'));
     r = await call(aj, '/admin');
     ok('顶栏:未传 actions 的其它页面不渲染顶栏', r.status === 200 && !(await r.text()).includes('class="main-head"'));
 
@@ -834,6 +835,27 @@ async function main() {
     const noahLaunch = await r.text();
     ok('门户:无权用户启动受限应用被拦截(403)', r.status === 403
       && noahLaunch.includes('仅对特定权限组开放') && noahLaunch.includes('Groups Only'));
+
+    /* ---------- 门户视图切换与页面精简 ---------- */
+    r = await call(fj, '/apps');
+    const gridHtml = await r.text();
+    ok('门户视图:默认格子视图且提供切换入口', gridHtml.includes('portal-grid')
+      && gridHtml.includes('格子显示') && gridHtml.includes('条状显示') && !gridHtml.includes('class="app-item"'));
+
+    r = await call(fj, '/apps?view=list');
+    const setCookies = r.headers.getSetCookie?.() || [];
+    ok('门户视图:切到条状渲染行式列表并写入偏好 cookie', r.status === 200
+      && (await r.text()).includes('class="app-item"')
+      && setCookies.some((c) => c.startsWith('portal_view=list')));
+
+    r = await call(fj, '/apps');
+    ok('门户视图:无参数访问沿用记忆的条状偏好', r.status === 200 && (await r.text()).includes('class="app-item"'));
+
+    r = await call(fj, '/apps?view=grid');
+    ok('门户视图:切回格子视图', (await r.text()).includes('portal-grid'));
+
+    r = await call(fj, '/account');
+    ok('账号页:已移除应用门户入口行(侧栏已有)', !(await r.text()).includes('<b>应用门户</b>'));
 
     /* ---------- JSON API 套件:心跳/会话状态/登录/登出/可见应用 ---------- */
     const pkgVersion = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;

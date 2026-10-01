@@ -127,8 +127,13 @@ pre.block{background:var(--code-bg);color:var(--code-text);border-radius:var(--r
 @media(max-width:900px){.side{display:none}.main{margin-left:0;padding:var(--s5) var(--s4) 64px}}
 .topbar{display:none}
 @media(max-width:900px){.topbar{display:flex;align-items:center;gap:var(--s2);padding:var(--s4);color:var(--heading);font-weight:700}.topbar svg{color:var(--accent)}}
-/* 内容顶栏:页级 actions(如门户右上角管理入口)靠右排布 */
-.main-head{display:flex;justify-content:flex-end;align-items:center;gap:var(--s3);margin-bottom:var(--s4)}
+/* 内容顶栏:左侧页级控件(如视图切换),右侧页级 actions(如管理入口) */
+.main-head{display:flex;justify-content:space-between;align-items:center;gap:var(--s3);margin-bottom:var(--s4);flex-wrap:wrap}
+/* 视图切换分段控件 */
+.seg-group{display:inline-flex;background:var(--surface-soft);border-radius:10px;padding:3px;gap:2px}
+.seg{display:inline-flex;align-items:center;padding:4px 12px;border-radius:8px;color:var(--muted);font-size:13px;font-weight:600;text-decoration:none;transition:all .18s ease}
+.seg:hover{color:var(--text);text-decoration:none}
+.seg.active{background:var(--surface);color:var(--text);box-shadow:var(--shadow-sm)}
 /* 居中认证布局 */
 .auth-wrap{min-height:100vh;display:grid;place-items:center;padding:var(--s6) var(--s4)}
 .auth-col{width:100%;max-width:460px}
