@@ -15,6 +15,10 @@ export const SAKURA_CSS = `
   --shadow-sm:0 1px 2px rgba(30,30,45,.06);--shadow-md:0 4px 14px rgba(30,30,45,.10);
   --radius:8px;
   --s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:24px;--s6:32px;--s7:48px;--s8:64px;
+  /* 品牌分栏登录页:樱色→紫罗兰渐变面板(全页唯一重强调色块) */
+  --login-grad-a:#b84d66;--login-grad-b:#7c3aed;
+  --login-on:#ffffff;--login-on-soft:rgba(255,255,255,.82);--login-on-faint:rgba(255,255,255,.62);
+  --login-chip:rgba(255,255,255,.16);
 }
 html[data-theme="night"]{
   --page:#1b1b1f;--surface:#171719;--surface-soft:#202024;
@@ -23,6 +27,9 @@ html[data-theme="night"]{
   --ok:#4cae7f;--warn:#d4a72c;--danger:#f07f7a;
   --border:#303036;--code-bg:#141416;--code-text:#e6e6eb;
   --shadow-sm:0 1px 2px rgba(0,0,0,.20);--shadow-md:0 4px 14px rgba(0,0,0,.32);
+  --login-grad-a:#8f3a50;--login-grad-b:#5326b8;
+  --login-on:#ffffff;--login-on-soft:rgba(255,255,255,.80);--login-on-faint:rgba(255,255,255,.60);
+  --login-chip:rgba(255,255,255,.14);
 }
 @media (prefers-color-scheme: dark){
   html:not([data-theme="day"]){
@@ -130,6 +137,37 @@ pre.block{background:var(--code-bg);color:var(--code-text);border-radius:var(--r
 .auth-brand h1{font-size:20px;font-weight:700;margin:0;line-height:1.3}
 .auth-brand .muted{font-size:13px}
 .auth-foot{text-align:center;color:var(--muted);font-size:12px;margin-top:var(--s4)}
+/* 品牌化分栏登录(登录页专用):桌面 ≥900px 左品牌渐变面板 + 右表单,窄屏仅表单 */
+.login-split{min-height:100vh;display:grid;grid-template-columns:minmax(440px,46%) 1fr;background:var(--page)}
+.login-brand{position:relative;overflow:hidden;display:flex;flex-direction:column;justify-content:space-between;gap:var(--s7);
+  padding:var(--s8) var(--s7) var(--s6);color:var(--login-on);background:linear-gradient(150deg,var(--login-grad-a),var(--login-grad-b))}
+.login-brand-deco{position:absolute;right:-72px;bottom:-72px;opacity:.12;pointer-events:none}
+.login-brand-body{position:relative}
+.login-brand-mark{display:inline-flex;align-items:center;justify-content:center;width:72px;height:72px;border-radius:20px;background:var(--login-chip)}
+.login-brand-name{color:var(--login-on);font-size:2.1rem;font-weight:700;margin:var(--s5) 0 0}
+.login-brand-slogan{margin:var(--s2) 0 0;font-size:17px;color:var(--login-on-soft)}
+.login-brand-feats{list-style:none;margin:var(--s6) 0 0;padding:0;display:flex;flex-direction:column;gap:var(--s4)}
+.login-brand-feats li{display:flex;align-items:flex-start;gap:var(--s3)}
+.login-brand-feats .feat-ico{width:34px;height:34px;border-radius:10px;background:var(--login-chip);color:var(--login-on);display:inline-flex;align-items:center;justify-content:center;flex:none}
+.login-brand-feats b{display:block;color:var(--login-on);font-size:14px;font-weight:600;line-height:1.5}
+.login-brand-feats small{display:block;color:var(--login-on-soft);font-size:13px;line-height:1.55}
+.login-brand-foot{position:relative;margin:0;font-size:12px;color:var(--login-on-faint)}
+/* 品牌标中心镂空落在渐变面板上时透出渐变,而非页面底色 */
+.login-brand svg circle[style]{fill:transparent !important}
+.login-form{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:var(--s7) var(--s5)}
+.login-form-col{width:100%;max-width:400px}
+.login-form-brand{display:none;align-items:center;gap:var(--s2);color:var(--accent);margin-bottom:var(--s5)}
+.login-form-brand b{color:var(--heading);font-size:17px;line-height:1.3}
+.login-form-title{margin:0;padding-bottom:0;border-bottom:0;font-size:1.45rem}
+.login-form-sub{margin:0 0 var(--s5)}
+.login-form .actions .btn-primary{flex:1;justify-content:center;padding:var(--s3) var(--s4);font-size:15px}
+.login-form-foot{margin:var(--s5) 0 0;text-align:center;font-size:12px;color:var(--muted)}
+@media(max-width:899px){
+  .login-split{grid-template-columns:1fr}
+  .login-brand{display:none}
+  .login-form{min-height:100vh;padding:var(--s6) var(--s4)}
+  .login-form-brand{display:flex}
+}
 /* 授权同意页 */
 .app-row{display:flex;align-items:center;gap:var(--s3);margin-bottom:var(--s5)}
 .app-badge{width:52px;height:52px;border-radius:14px;background:color-mix(in srgb,var(--accent) 12%,transparent);color:var(--accent);display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;flex:none}
@@ -206,6 +244,38 @@ export function authPage({ theme, siteName, title, content, footer = true, wide 
   </div>
   ${footer ? '<p class="auth-foot">SakuraID · 由樱落生态设计语言驱动</p>' : ''}
 </div></div>
+</body></html>`;
+}
+
+/**
+ * 品牌化分栏骨架(登录页专用):左侧樱色渐变品牌面板(全页唯一重强调色块),
+ * 右侧表单面板;窄屏(≤899px)单栏仅表单,改由表单面板内的紧凑品牌行承接识别。
+ */
+export function brandPage({
+  theme, siteName, title, tagline = '', features = [], content, footer = true, cur = '/login',
+}) {
+  const feats = features.map((f) => `
+      <li><span class="feat-ico">${f.icon}</span><span><b>${esc(f.title)}</b><small>${esc(f.desc)}</small></span></li>`).join('\n');
+  return `${head(theme, title)}
+<body>
+<div class="login-split">
+  <aside class="login-brand">
+    <div class="login-brand-deco" aria-hidden="true">${mark(220)}</div>
+    <div class="login-brand-body">
+      <div class="login-brand-mark">${mark(40)}</div>
+      <h1 class="login-brand-name">${esc(siteName)}</h1>
+      ${tagline ? `<p class="login-brand-slogan">${esc(tagline)}</p>` : ''}
+      ${features.length ? `<ul class="login-brand-feats">${feats}
+      </ul>` : ''}
+    </div>
+    <p class="login-brand-foot">由樱落生态设计语言驱动</p>
+  </aside>
+  <main class="login-form"><div class="login-form-col">
+    <div class="login-form-brand">${mark(24)}<b>${esc(siteName)}</b></div>
+    ${content}
+    ${footer ? `<p class="login-form-foot">SakuraID · ${themeToggle(theme, cur)}</p>` : ''}
+  </div></main>
+</div>
 </body></html>`;
 }
 
