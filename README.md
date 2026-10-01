@@ -41,6 +41,8 @@ node server.js
 | 权限组 | 组管理与成员关系(迁移时自动从旧用户字段播种);应用(业务线)可限制「可访问的权限组」,组外用户在授权阶段被拦截;groups claim 由成员关系驱动 |
 | 我的授权 | 用户侧「我的授权」页:查看已记住授权的应用/范围/时间,一键撤销并级联吊销其现有令牌,下次访问重新确认 |
 | 账号自助 | 找回密码(零依赖 SMTP 客户端,支持 STARTTLS;SMTP 可在向导/环境变量配置,未配置时走开发模式把邮件打到日志)、管理员可控的自助注册开关 |
+| 审计 | 登录/2FA/授权同意与撤销/注册/管理操作全量留痕(滚动保留 5000 条),管理端「审计日志」页可按动作/关键词筛选、清空 |
+| 应用元数据 | 应用描述与 Logo(https)字段,门户磁贴/条状/同意页展示;应用详情「已授权用户」列表,可单独撤销某用户的授权与令牌 |
 | 联邦登录 | Microsoft 账号 OIDC 登录与绑定:登录页一键登录、账号设置绑定/解绑、未绑定可关联本地账号或注册新号;管理端配置(client_id/secret/tenant) |
 | 流转 | 未登录访问首页跳登录页、登录后直达应用门户、已登录访问登录页跳门户 |
 | JSON API | /api/heartbeat 心跳(含版本/uptime/DB 探测)、/api/session 登录状态、/api/login 登录(支持 2FA)、/api/logout、/api/apps 可见应用 |
@@ -98,7 +100,7 @@ curl -s http://localhost:9000/token -d grant_type=authorization_code -d code=<CO
 curl -s http://localhost:9000/userinfo -H "Authorization: Bearer <ACCESS_TOKEN>"
 ```
 
-测试工具链:`npm run smoke` 会自动拉起独立实例,端到端验证向导、登录、两步验证(TOTP/恢复代码/管理员重置)、找回密码、自助注册、权限组与应用访问控制、授权码 + PKCE、刷新轮换、内省/吊销、client_credentials 与控制台权限、我的授权管理、应用门户、JSON API 套件、Microsoft 账号登录绑定(167 项断言);另有 `node scripts/test-qr.mjs`(QR 编码器 46 项)与 `node scripts/test-smtp.mjs`(SMTP 对话 9 项)两个单元测试。
+测试工具链:`npm run smoke` 会自动拉起独立实例,端到端验证向导、登录、两步验证(TOTP/恢复代码/管理员重置)、找回密码、自助注册、权限组与应用访问控制、授权码 + PKCE、刷新轮换、内省/吊销、client_credentials 与控制台权限、我的授权管理、应用门户、JSON API 套件、Microsoft 账号登录绑定、审计日志、应用元数据与授权用户管理(199 项断言);另有 `node scripts/test-qr.mjs`(QR 编码器 46 项)与 `node scripts/test-smtp.mjs`(SMTP 对话 9 项)两个单元测试。
 
 运维脚本:`npm run reset-admin -- <用户名> [新密码]`(直接重置管理员密码,用于忘记密码);`npm run seed-demo`(灌入演示用户与一个 PKCE 公开客户端)。首次部署自动进入配置向导(环境检测 → 站点/注册/SMTP → 管理员 → 完成);已初始化的实例可在控制台「配置向导」卡片重新运行,不影响已有用户与应用数据。
 
