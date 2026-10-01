@@ -7,6 +7,7 @@ import { config } from './config.js';
 const KEYS = [
   'site_name', 'issuer', 'access_ttl', 'refresh_ttl', 'session_ttl', 'allow_register',
   'smtp_host', 'smtp_port', 'smtp_user', 'smtp_pass', 'smtp_from',
+  'ms_enabled', 'ms_client_id', 'ms_client_secret', 'ms_tenant', 'ms_authority',
 ];
 
 let rt = null;
@@ -45,6 +46,15 @@ export function reloadRuntime() {
     setupDone: String(s.setup_done || '') === '1',
     allowRegister: String(s.allow_register || '') === '1',
     smtp: mergeSmtp(s),
+    // Microsoft 账号登录(联邦 OIDC):redirectUri 恒为 {issuer}/auth/microsoft/callback,不落库
+    msOAuth: {
+      enabled: String(s.ms_enabled || '') === '1',
+      clientId: s.ms_client_id || '',
+      clientSecret: s.ms_client_secret || '',
+      tenant: s.ms_tenant || 'common',
+      authority: (s.ms_authority || 'https://login.microsoftonline.com').replace(/\/+$/, ''),
+      redirectUri: `${issuer}/auth/microsoft/callback`,
+    },
   };
   return rt;
 }

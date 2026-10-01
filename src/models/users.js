@@ -60,3 +60,15 @@ export const enableTotp = (id) =>
 
 export const clearTotp = (id) =>
   getDb().prepare('UPDATE users SET totp_secret = NULL, totp_enabled = 0, updated_at = ? WHERE id = ?').run(nowSec(), id);
+
+/* ---- Microsoft 账号绑定 ---- */
+export const byMicrosoftSub = (sub) =>
+  getDb().prepare('SELECT * FROM users WHERE ms_sub = ?').get(sub);
+
+export function bindMicrosoft(id, sub, email = '') {
+  getDb().prepare('UPDATE users SET ms_sub = ?, ms_email = ?, updated_at = ? WHERE id = ?')
+    .run(sub, email || '', nowSec(), id);
+}
+
+export const unbindMicrosoft = (id) =>
+  getDb().prepare('UPDATE users SET ms_sub = NULL, ms_email = NULL, updated_at = ? WHERE id = ?').run(nowSec(), id);

@@ -6,6 +6,7 @@
 import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -56,6 +57,67 @@ const extractHidden = (html) => {
 };
 const basic = (id, secret) => 'Basic ' + Buffer.from(`${id}:${secret}`).toString('base64');
 
+/* ---------- 本地 mock Microsoft(OIDC 提供方,与被测服务并行运行) ---------- */
+function startMockMs({ clientId = 'smoke-ms-client', sub = 'ms-sub-123', email = 'msuser@example.com', name = 'MS 测试用户' } = {}) {
+  const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const jwk = { kid: 'test-kid', alg: 'RS256', use: 'sig', ...publicKey.export({ format: 'jwk' }) };
+  const b64u = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
+  const server = http.createServer(async (req, res) => {
+    const url = new URL(req.url, 'http://mock');
+    const json = (status, obj) => {
+      res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify(obj));
+    };
+    // 发现文档:测试公钥 JWKS(kid='test-kid')
+    if (req.method === 'GET' && url.pathname === '/common/discovery/v2.0/keys') {
+      return json(200, { keys: [jwk] });
+    }
+    const m = url.pathname.match(/^\/([^/]+)\/oauth2\/v2\.0\/(authorize|token)$/);
+    if (!m) { res.writeHead(404); res.end(); return; }
+    const [, tenantSeg, action] = m;
+    if (action === 'authorize') {
+      // 原样转发 redirect_uri:由 query 构造回跳地址,携带 code 与 state
+      const ru = url.searchParams.get('redirect_uri');
+      if (!ru) { res.writeHead(400); res.end('missing redirect_uri'); return; }
+      const sep = ru.includes('?') ? '&' : '?';
+      res.writeHead(302, {
+        Location: `${ru}${sep}code=TESTCODE&state=${encodeURIComponent(url.searchParams.get('state') || '')}`,
+      });
+      res.end();
+      return;
+    }
+    // token:校验 form 后签发 id_token(iss 规则与 verifyIdToken 保持一致)
+    let raw = '';
+    for await (const ch of req) raw += ch;
+    const form = new URLSearchParams(raw);
+    if (form.get('grant_type') !== 'authorization_code' || form.get('client_id') !== clientId
+      || !form.get('code') || !form.get('code_verifier')) {
+      return json(400, { error: 'invalid_grant', error_description: 'mock: 表单校验失败' });
+    }
+    const authority = `http://127.0.0.1:${server.address().port}`;
+    const header = b64u({ alg: 'RS256', typ: 'JWT', kid: 'test-kid' });
+    const now = Math.floor(Date.now() / 1000);
+    const payload = b64u({
+      iss: `${authority}/${tenantSeg}/v2.0`, sub, email, preferred_username: email, name,
+      aud: clientId, iat: now, exp: now + 3600,
+    });
+    const sig = crypto.createSign('RSA-SHA256').update(`${header}.${payload}`).sign(privateKey, 'base64url');
+    return json(200, {
+      access_token: 'mock-access', token_type: 'Bearer', expires_in: 3600,
+      id_token: `${header}.${payload}.${sig}`,
+    });
+  });
+  return new Promise((resolve) => {
+    server.listen(0, '0.0.0.0', () => {
+      const port = server.address().port;
+      resolve({
+        authority: `http://127.0.0.1:${port}`,
+        close: () => { server.closeAllConnections(); return new Promise((r) => server.close(r)); },
+      });
+    });
+  });
+}
+
 /* ---------- 断言 ---------- */
 let failed = 0;
 const ok = (name, cond, extra = '') => {
@@ -77,6 +139,7 @@ async function main() {
   child.stdout.on('data', (d) => { serverLog += d; });
   child.stderr.on('data', (d) => { serverLog += d; });
 
+  let msMock = null;
   try {
     let ready = false;
     for (let i = 0; i < 120 && !ready; i++) {
@@ -84,6 +147,9 @@ async function main() {
     }
     ok('服务启动并响应 /healthz', ready);
     if (!ready) { console.log(serverLog.slice(-2000)); return; }
+
+    // 本地 mock Microsoft(0.0.0.0 随机端口),供 MS 登录链路联调
+    msMock = await startMockMs();
 
     /* ---------- 夹具:测试进程直连同一 SQLite ---------- */
     const { initDb } = await import('../src/core/db.js');
@@ -817,6 +883,160 @@ async function main() {
     users.clearTotp(bob.id); // 清理:恢复夹具原状,避免影响后续用例
     recovery.clearFor(bob.id);
 
+    /* ---------- Microsoft 登录与绑定(本地 mock OIDC 提供方) ---------- */
+    // 默认关闭:登录页无入口,发起被重定向回登录页
+    r = await call(new Jar(), '/login');
+    const msOffHtml = await r.text();
+    ok('MS:默认关闭时登录页无 Microsoft 登录按钮', r.status === 200
+      && !msOffHtml.includes('/auth/microsoft') && !msOffHtml.includes('使用 Microsoft 账号登录'));
+    const msOff = await call(new Jar(), '/auth/microsoft');
+    ok('MS:默认关闭时 /auth/microsoft 重定向登录页并带 err', msOff.status === 302
+      && location(msOff).startsWith('/login?err='));
+
+    // 管理端:控制台卡片 + 保存启用(含指向 mock 的 authority)
+    r = await call(aj, '/admin');
+    const msDashHtml = await r.text();
+    ok('MS:控制台出现 Microsoft 登录卡片与回调地址', msDashHtml.includes('Microsoft 登录')
+      && msDashHtml.includes('/admin/ms-oauth') && msDashHtml.includes('/auth/microsoft/callback'));
+    const msDashForm = extractHidden(msDashHtml);
+    r = await call(aj, '/admin/ms-oauth', {
+      method: 'POST',
+      form: {
+        ms_enabled: '1', ms_client_id: 'smoke-ms-client', ms_client_secret: 'smoke-ms-secret',
+        ms_tenant: 'common', ms_authority: msMock.authority, _csrf: msDashForm._csrf,
+      },
+    });
+    ok('MS:管理端保存 Microsoft 登录配置', r.status === 302 && location(r).startsWith('/admin?msg='));
+    const msSaved = settings.getMap();
+    ok('MS:ms_enabled/client_id/secret/authority 写入 settings', msSaved.ms_enabled === '1'
+      && msSaved.ms_client_id === 'smoke-ms-client' && msSaved.ms_client_secret === 'smoke-ms-secret'
+      && msSaved.ms_authority === msMock.authority);
+
+    r = await call(new Jar(), '/login');
+    ok('MS:启用后登录页出现 Microsoft 登录按钮', r.status === 200
+      && (await r.text()).includes('使用 Microsoft 账号登录'));
+
+    // 伪造 state:回调直接 400 错误页
+    r = await call(new Jar(), '/auth/microsoft/callback?code=X&state=forged-state');
+    ok('MS:callback 伪造 state 返回 400 错误页', r.status === 400
+      && (await r.text()).includes('Microsoft 登录失败'));
+
+    // 完整链路:发起 → mock authorize → callback → 关联页
+    const msj = new Jar();
+    r = await call(msj, '/auth/microsoft');
+    const msAuthLoc = location(r);
+    ok('MS:/auth/microsoft 302 到 mock authorize(含 client_id 与 state)', r.status === 302
+      && msAuthLoc.startsWith(`${msMock.authority}/common/oauth2/v2.0/authorize`)
+      && msAuthLoc.includes('client_id=smoke-ms-client')
+      && msAuthLoc.includes('code_challenge_method=S256')
+      && /state=[^&]+/.test(msAuthLoc), msAuthLoc);
+    r = await call(msj, msAuthLoc);
+    const msCbLoc = location(r);
+    ok('MS:mock authorize 302 回本站 callback 并带 code/state', r.status === 302
+      && msCbLoc.startsWith(`${BASE}/auth/microsoft/callback`)
+      && new URL(msCbLoc, BASE).searchParams.get('code') === 'TESTCODE'
+      && !!new URL(msCbLoc, BASE).searchParams.get('state'), msCbLoc);
+    r = await call(msj, msCbLoc);
+    const linkHtml = await r.text();
+    ok('MS:未绑定用户渲染关联本地账号页并显示 MS 邮箱', r.status === 200
+      && linkHtml.includes('关联本地账号') && linkHtml.includes('msuser@example.com')
+      && !linkHtml.includes('注册并绑定'), `status=${r.status}`);
+    const linkForm = extractHidden(linkHtml);
+    ok('MS:关联页携带 linkToken 与 CSRF', !!linkForm.state && !!linkForm._csrf);
+
+    // 表单 A:先错密码,再正确绑定到 bob
+    r = await call(msj, '/auth/microsoft/link', {
+      method: 'POST',
+      form: { state: linkForm.state, username: 'bob', password: 'nope-wrong', _csrf: linkForm._csrf },
+    });
+    ok('MS:关联本地账号密码错误被拒', r.status === 401 && (await r.text()).includes('用户名或密码不正确'));
+    r = await call(msj, '/auth/microsoft/link', {
+      method: 'POST',
+      form: { state: linkForm.state, username: 'bob', password: 'BobPassw0rd!', _csrf: linkForm._csrf },
+    });
+    ok('MS:绑定 bob 成功并建立会话跳转 /apps', r.status === 302 && location(r) === '/apps', `loc=${location(r)}`);
+    r = await call(msj, '/apps');
+    ok('MS:Microsoft 登录后的会话可访问门户', r.status === 200);
+    const boundBob = users.byMicrosoftSub('ms-sub-123');
+    ok('MS:byMicrosoftSub 命中 bob', !!boundBob && boundBob.id === bob.id);
+
+    // linkToken 一次性:重放被拒
+    r = await call(new Jar(), '/auth/microsoft/link', {
+      method: 'POST',
+      form: { state: linkForm.state, username: 'bob', password: 'BobPassw0rd!', _csrf: 'x' },
+    });
+    ok('MS:linkToken 一次性(重放被拒)', r.status === 400);
+
+    // 已绑定:再次 Microsoft 登录直达 /apps
+    const msj2 = new Jar();
+    r = await call(msj2, '/auth/microsoft');
+    r = await call(msj2, location(r));
+    r = await call(msj2, location(r));
+    ok('MS:已绑定用户再次 Microsoft 登录直达 /apps', r.status === 302 && location(r) === '/apps',
+      `status=${r.status} loc=${location(r)}`);
+
+    // 账号页区块 + 解绑
+    r = await call(msj, '/account');
+    const msAcctHtml = await r.text();
+    ok('MS:账号页出现 Microsoft 绑定区块与邮箱', msAcctHtml.includes('Microsoft 账号')
+      && msAcctHtml.includes('msuser@example.com') && msAcctHtml.includes('解绑 Microsoft 账号'));
+    const msAcctForm = extractHidden(msAcctHtml);
+    r = await call(msj, '/auth/microsoft/unbind', { method: 'POST', form: { _csrf: msAcctForm._csrf } });
+    ok('MS:解绑成功回账号页', r.status === 302 && location(r).startsWith('/account?msg='));
+    ok('MS:解绑后 byMicrosoftSub 为空', !users.byMicrosoftSub('ms-sub-123'));
+
+    // bind=1:已登录用户把 Microsoft 身份绑定到当前账号(alice)
+    const aj2 = new Jar();
+    r = await call(aj2, '/login');
+    const a2f = extractHidden(await r.text());
+    r = await call(aj2, '/login', { method: 'POST', form: { username: 'alice', password: 'NewPass#123', _csrf: a2f._csrf } });
+    ok('MS:alice 本地登录成功(准备 bind=1)', r.status === 302);
+    r = await call(aj2, '/auth/microsoft?bind=1');
+    r = await call(aj2, location(r));
+    r = await call(aj2, location(r));
+    ok('MS:bind=1 回调后绑定到当前账号并回账号页', r.status === 302
+      && location(r).startsWith('/account?msg=') && decodeURIComponent(location(r)).includes('已绑定'),
+      `loc=${location(r)}`);
+    const boundAlice = users.byMicrosoftSub('ms-sub-123');
+    ok('MS:bind=1 后 byMicrosoftSub 命中 alice', !!boundAlice && boundAlice.id === users.byUsername('alice').id);
+    if (boundAlice) users.unbindMicrosoft(boundAlice.id); // 清理绑定,供后续注册链路复用同一 mock 身份
+
+    // 表单 B:自助注册开启时注册新号并绑定
+    r = await call(aj, '/admin');
+    const regToggleMs = extractHidden(await r.text());
+    await call(aj, '/admin/register-toggle', { method: 'POST', form: { _csrf: regToggleMs._csrf } });
+    const msrj = new Jar();
+    r = await call(msrj, '/auth/microsoft');
+    r = await call(msrj, location(r));
+    r = await call(msrj, location(r));
+    const msRegHtml = await r.text();
+    ok('MS:自助注册开启时关联页显示注册新账号表单', r.status === 200 && msRegHtml.includes('注册并绑定'));
+    const msRegForm = extractHidden(msRegHtml);
+    r = await call(msrj, '/auth/microsoft/register', {
+      method: 'POST',
+      form: {
+        state: msRegForm.state, username: 'msreg', password: 'MsReg#12345',
+        password2: 'MsReg#99999', name: '微软用户', _csrf: msRegForm._csrf,
+      },
+    });
+    ok('MS:注册新号两次密码不一致被拒', r.status === 400 && (await r.text()).includes('两次输入的密码不一致'));
+    r = await call(msrj, '/auth/microsoft/register', {
+      method: 'POST',
+      form: {
+        state: msRegForm.state, username: 'msreg', password: 'MsReg#12345',
+        password2: 'MsReg#12345', name: '微软用户', _csrf: msRegForm._csrf,
+      },
+    });
+    ok('MS:注册新号成功并自动登录跳转 /apps', r.status === 302 && location(r) === '/apps',
+      `status=${r.status} loc=${location(r)}`);
+    const msRegUser = users.byUsername('msreg');
+    ok('MS:注册的新用户已绑定 Microsoft 身份且非管理员', !!msRegUser
+      && msRegUser.ms_sub === 'ms-sub-123' && msRegUser.email === 'msuser@example.com' && !msRegUser.is_admin);
+    // 恢复自助注册开关(向导段稍后会再改写,这里保持环境一致)
+    r = await call(aj, '/admin');
+    const regToggleMs2 = extractHidden(await r.text());
+    await call(aj, '/admin/register-toggle', { method: 'POST', form: { _csrf: regToggleMs2._csrf } });
+
     /* ---------- 配置向导增强:管理员重新运行向导(放在最后,尾部恢复 setup_done=1) ---------- */
     r = await call(aj, '/admin');
     const rerunDash = await r.text();
@@ -859,6 +1079,7 @@ async function main() {
     console.log(failed ? `\n${failed} 项失败` : '\n全部通过 ✔');
   } finally {
     child.kill();
+    if (msMock) { try { await msMock.close(); } catch { /* 关闭失败不掩盖测试结果 */ } }
     await sleep(800);
     // Windows 下 SQLite WAL 句柄释放稍慢,失败不掩盖真实测试结果
     try { fs.rmSync(DATA, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 }); } catch {}
