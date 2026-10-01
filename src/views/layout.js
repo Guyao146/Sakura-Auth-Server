@@ -209,27 +209,26 @@ export function authPage({ theme, siteName, title, content, footer = true, wide 
 </body></html>`;
 }
 
-/** 控制台骨架:左侧玻璃侧栏 + 内容区 */
+/** 控制台骨架:左侧玻璃侧栏 + 内容区;导航按身份渲染 —— 管理员含管理项,普通用户仅「我的」分组 */
 export function adminPage({ theme, siteName, user, active = '', title, content, cur = '/' }) {
-  const items = [
-    ['', '控制台', 'dashboard'],
-    ['users', '用户', 'users'],
-    ['groups', '权限组', 'groups'],
-    ['apps', '应用', 'apps'],
-  ];
   const link = (href, label, key) =>
     `<a href="${href}"${key === active ? ' class="active"' : ''}>${label}</a>`;
+  const adminNav = user.is_admin
+    ? `${link('/admin', '控制台', 'dashboard')}
+    ${link('/admin/users', '用户', 'users')}
+    ${link('/admin/apps', '应用', 'apps')}
+    ${link('/admin/groups', '权限组', 'groups')}
+    `
+    : '';
   return `${head(theme, title)}
 <body>
 <div class="topbar">${mark(22)} ${esc(siteName)}</div>
 <aside class="side">
-  <div class="side-brand">${mark(26)}<b>${esc(siteName)}<br><span class="muted small">管理控制台</span></b></div>
+  <div class="side-brand">${mark(26)}<b>${esc(siteName)}<br><span class="muted small">${user.is_admin ? '管理控制台' : '个人中心'}</span></b></div>
   <nav>
-    ${link('/admin', '控制台', 'dashboard')}
-    ${link('/admin/users', '用户', 'users')}
-    ${link('/admin/groups', '权限组', 'groups')}
-    ${link('/admin/apps', '应用', 'apps')}
-    <div class="sep">账号</div>
+    ${adminNav}<div class="sep">我的</div>
+    ${link('/apps', '应用门户', 'portal')}
+    ${link('/account/apps', '我的授权', 'authz')}
     ${link('/account', '账号设置', 'account')}
     <a href="/logout">退出登录</a>
   </nav>

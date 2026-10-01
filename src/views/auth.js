@@ -1,5 +1,5 @@
 import { escapeHtml as esc } from '../core/util.js';
-import { authPage } from './layout.js';
+import { authPage, adminPage } from './layout.js';
 import { banner, hiddenInputs, kvRow, scopeItems, scopeIcon, SCOPE_NAMES } from './components.js';
 
 /** 登录页 */
@@ -198,10 +198,10 @@ export function logoutPage({ theme, siteName, csrf }) {
 }
 
 /**
- * 账号设置页(密码 + 两步验证管理)。
+ * 账号设置页(密码 + 两步验证管理),并入控制台侧栏布局。
  * twoFa: { enabled, pendingSecret, otpauth, secret, recoveryCodes }
  */
-export function accountPage({ theme, siteName, user, csrf, msg, err, twoFa }) {
+export function accountPage({ theme, siteName, user, csrf, msg, err, twoFa, cur = '/' }) {
   let twofaBlock;
   if (twoFa.recoveryCodes) {
     twofaBlock = `
@@ -255,8 +255,9 @@ export function accountPage({ theme, siteName, user, csrf, msg, err, twoFa }) {
         <div class="actions"><button class="btn btn-primary" type="submit">开始设置两步验证</button></div>
       </form>`;
   }
-  return authPage({
-    theme, siteName, title: `账号设置 · ${siteName}`,
+  return adminPage({
+    theme, siteName, user, active: 'account', cur,
+    title: `账号设置 · ${siteName}`,
     content: `
       ${banner(msg ? esc(msg) : '', 'ok')}
       ${banner(err ? esc(err) : '', 'err')}
@@ -294,8 +295,8 @@ export function recoveryCodesPage({ theme, siteName, user, codes }) {
   });
 }
 
-/** 我的授权页:查看/撤销已记住的应用授权 */
-export function authorizationsPage({ theme, siteName, user, csrf, list, msg, err }) {
+/** 我的授权页:查看/撤销已记住的应用授权(并入控制台侧栏布局) */
+export function authorizationsPage({ theme, siteName, user, csrf, list, msg, err, cur = '/' }) {
   const fmt = (sec) => new Date(sec * 1000).toLocaleString('zh-CN', { hour12: false });
   const rows = list.map((row) => {
     const initial = (String(row.name || '?').trim()[0] || '?').toUpperCase();
@@ -314,8 +315,9 @@ export function authorizationsPage({ theme, siteName, user, csrf, list, msg, err
       </form>
     </div>`;
   }).join('\n');
-  return authPage({
-    theme, siteName, wide: true, title: `我的授权 · ${siteName}`,
+  return adminPage({
+    theme, siteName, user, active: 'authz', cur,
+    title: `我的授权 · ${siteName}`,
     content: `
       ${banner(msg ? esc(msg) : '', 'ok')}
       ${banner(err ? esc(err) : '', 'err')}

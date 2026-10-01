@@ -472,7 +472,15 @@ async function main() {
     });
     ok('自助注册:注册成功并自动登录', r.status === 302 && location(r) === '/');
     r = await call(rj, '/account');
-    ok('自助注册:新会话可访问账号页并显示新用户名', r.status === 200 && (await r.text()).includes('carol'));
+    const carolAcct = await r.text();
+    ok('自助注册:新会话可访问账号页并显示新用户名', r.status === 200 && carolAcct.includes('carol'));
+    ok('布局:普通用户侧栏不含管理入口但含门户与授权', r.status === 200
+      && !carolAcct.includes('href="/admin/users"') && !carolAcct.includes('href="/admin/groups"')
+      && !carolAcct.includes('href="/admin/apps"') && !carolAcct.includes('href="/admin"')
+      && carolAcct.includes('应用门户') && carolAcct.includes('我的授权'));
+    ok('布局:账号页并入侧栏且保留账号信息/改密/两步验证区块', r.status === 200
+      && carolAcct.includes('class="side"') && carolAcct.includes('账号信息')
+      && carolAcct.includes('修改密码') && carolAcct.includes('两步验证'));
     r = await call(rj, '/admin');
     ok('自助注册:注册用户不是管理员(访问控制台 403)', r.status === 403);
 
@@ -521,6 +529,9 @@ async function main() {
     r = await call(aj, '/admin/groups');
     const gPage = await r.text();
     ok('权限组:侧栏导航与组管理页可访问', r.status === 200 && gPage.includes('权限组') && gPage.includes('新建权限组'));
+    ok('布局:管理员侧栏含全部管理项与「我的」分组', r.status === 200
+      && ['href="/admin"', 'href="/admin/users"', 'href="/admin/apps"', 'href="/admin/groups"'].every((h) => gPage.includes(h))
+      && gPage.includes('账号设置') && gPage.includes('应用门户') && gPage.includes('我的授权'));
     const gf = extractHidden(gPage);
     r = await call(aj, '/admin/groups/create', {
       method: 'POST', form: { name: 'contractors', description: '外部承包商', _csrf: gf._csrf },
@@ -674,6 +685,8 @@ async function main() {
     const portalHtml = await r.text();
     ok('门户:展示用户可访问的应用', r.status === 200 && portalHtml.includes('Smoke Web')
       && portalHtml.includes('Groups Only') && portalHtml.includes('进入应用'));
+    ok('布局:门户页并入侧栏并保留磁贴网格', r.status === 200 && portalHtml.includes('portal-grid')
+      && portalHtml.includes('class="side"') && portalHtml.includes('账号设置') && portalHtml.includes('我的授权'));
 
     r = await call(nj2, '/apps');
     const noahPortal = await r.text();

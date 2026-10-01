@@ -22,6 +22,7 @@ export function showPortal(ctx, { msg, err } = {}) {
   sendHtml(ctx.res, 200, portalPage({
     theme: ctx.theme, siteName: ctx.runtime.siteName, user: ctx.user,
     list: visibleApps(ctx.user), msg, err,
+    cur: ctx.url.pathname + ctx.url.search,
   }));
 }
 

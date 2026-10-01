@@ -38,6 +38,7 @@ export function showAccount(ctx, { msg, err } = {}) {
   sendHtml(ctx.res, 200, accountPage({
     theme: ctx.theme, siteName: ctx.runtime.siteName, user: ctx.user,
     csrf: ctx.session.csrf, msg, err, twoFa: twoFaState(ctx.user),
+    cur: ctx.url.pathname + ctx.url.search,
   }));
 }
 
@@ -118,6 +119,7 @@ export function showAuthorizations(ctx, { msg, err } = {}) {
   sendHtml(ctx.res, 200, authorizationsPage({
     theme: ctx.theme, siteName: ctx.runtime.siteName, user: ctx.user,
     csrf: ctx.session.csrf, list, msg, err,
+    cur: ctx.url.pathname + ctx.url.search,
   }));
 }
 

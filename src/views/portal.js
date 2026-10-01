@@ -1,9 +1,9 @@
 import { escapeHtml as esc } from '../core/util.js';
-import { authPage } from './layout.js';
+import { adminPage } from './layout.js';
 import { banner, SCOPE_NAMES } from './components.js';
 
-/** 应用门户:普通用户可见的业务线磁贴(按权限组过滤) */
-export function portalPage({ theme, siteName, user, list, msg, err, csrf }) {
+/** 应用门户:普通用户可见的业务线磁贴(按权限组过滤),并入控制台侧栏布局 */
+export function portalPage({ theme, siteName, user, list, msg, err, csrf, cur = '/' }) {
   const tiles = list.map((app) => {
     const initial = (String(app.name || '?').trim()[0] || '?').toUpperCase();
     return `<div class="portal-tile">
@@ -20,8 +20,9 @@ export function portalPage({ theme, siteName, user, list, msg, err, csrf }) {
       <a class="btn btn-primary" href="/apps/launch/${esc(app.client_id)}">进入应用</a>
     </div>`;
   }).join('\n');
-  return authPage({
-    theme, siteName, wide: true, title: `应用门户 · ${siteName}`,
+  return adminPage({
+    theme, siteName, user, active: 'portal', cur,
+    title: `应用门户 · ${siteName}`,
     content: `
       ${banner(msg ? esc(msg) : '', 'ok')}
       ${banner(err ? esc(err) : '', 'err')}
