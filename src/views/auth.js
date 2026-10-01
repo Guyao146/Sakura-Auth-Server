@@ -419,7 +419,6 @@ export function authorizationsPage({ theme, siteName, user, csrf, list, msg, err
       <p class="muted small" style="margin-top:0">这里列出你确认过「记住授权」的应用。撤销后,该应用的记住授权立即删除,其现有访问令牌一并失效;下次访问时需要重新确认。</p>
       ${list.length
         ? `<div class="card tight">${rows}</div>`
-        : '<div class="card tight"><p class="muted" style="margin:0">还没有授权过任何应用。登录业务系统并同意授权后,会出现在这里。</p></div>'}
-      <div class="actions"><a class="btn" href="/account">返回账号设置</a></div>`,
+        : '<div class="card tight"><p class="muted" style="margin:0">还没有授权过任何应用。登录业务系统并同意授权后,会出现在这里。</p></div>'}`,
   });
 }
