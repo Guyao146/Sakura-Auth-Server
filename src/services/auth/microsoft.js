@@ -9,6 +9,7 @@ import { logger } from '../../core/logger.js';
 import { msLinkPage } from '../../views/auth.js';
 import { errorPage } from '../../views/error.js';
 import { startSession } from './login.js';
+import { record } from '../audit.js';
 
 /**
  * Microsoft 账号登录与绑定(OIDC 联邦):
@@ -103,6 +104,7 @@ function finishCallback(ctx, entry, identity) {
       return redirect(ctx.res, '/account?err=' + encodeURIComponent('该 Microsoft 账号已绑定其他用户。'));
     }
     users.bindMicrosoft(ctx.user.id, identity.sub, identity.email);
+    record(ctx, 'auth.ms_linked', identity.email || '');
     logger.info('绑定 Microsoft 账号', { username: ctx.user.username, ms_email: identity.email });
     return redirect(ctx.res, '/account?msg=' + encodeURIComponent(`已绑定 Microsoft 账号${identity.email ? `(${identity.email})` : ''}。`));
   }
@@ -160,6 +162,7 @@ export function link(ctx) {
   linkTokens.delete(stateVal);
   users.bindMicrosoft(user.id, entry.sub, entry.email);
   startSession(ctx.res, user);
+  record(ctx, 'auth.ms_linked', entry.email || '', { actor: user.username });
   logger.info('Microsoft 账号已关联本地账号并登录', { username: user.username });
   return redirect(ctx.res, '/apps');
 }
@@ -199,6 +202,7 @@ export function registerNew(ctx) {
   });
   users.bindMicrosoft(user.id, entry.sub, entry.email);
   startSession(ctx.res, user);
+  record(ctx, 'auth.ms_registered', entry.email || '', { actor: user.username });
   logger.info('Microsoft 关联注册新用户', { username: user.username });
   return redirect(ctx.res, '/apps');
 }
@@ -211,7 +215,9 @@ export function unbind(ctx) {
   if (!ctx.user.ms_sub) {
     return redirect(ctx.res, '/account?err=' + encodeURIComponent('当前账号未绑定 Microsoft 账号。'));
   }
+  const msEmail = ctx.user.ms_email || '';
   users.unbindMicrosoft(ctx.user.id);
+  record(ctx, 'auth.ms_unlinked', msEmail);
   logger.info('解绑 Microsoft 账号', { username: ctx.user.username });
   return redirect(ctx.res, '/account?msg=' + encodeURIComponent('已解绑 Microsoft 账号。'));
 }

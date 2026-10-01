@@ -13,6 +13,7 @@ import { SCOPES, DEFAULT_CLIENT_SCOPES } from '../../core/config.js';
 import { sendHtml, redirect } from '../../core/http.js';
 import { logger } from '../../core/logger.js';
 import { dashboardPage, groupsPage, usersPage, userFormPage, appsPage, appFormPage, appDetailPage, secretRevealPage } from '../../views/admin.js';
+import { record } from '../audit.js';
 
 const CSRF = (ctx) => ctx.session.csrf;
 
@@ -39,6 +40,7 @@ export function toggleRegister(ctx) {
   }
   const next = rt.allowRegister ? '0' : '1';
   updateRuntime({ allow_register: next }, settingsApi.setSetting);
+  record(ctx, 'admin.register_toggled', next === '1' ? '开启自助注册' : '关闭自助注册');
   redirect(ctx.res, '/admin?msg=' + encodeURIComponent(next === '1' ? '已开启自助注册。' : '已关闭自助注册。'));
 }
 
@@ -58,6 +60,7 @@ export function saveMsOAuth(ctx) {
   const authority = String(b.ms_authority || '').trim();
   if (authority) fields.ms_authority = authority.replace(/\/+$/, ''); // 默认由向导/测试直接指定,常规表单不展示
   updateRuntime(fields, settingsApi.setSetting);
+  record(ctx, 'admin.ms_oauth_saved', fields.ms_enabled === '1' ? '启用 Microsoft 登录' : '停用 Microsoft 登录');
   logger.info('管理员更新了 Microsoft 登录配置', { enabled: fields.ms_enabled });
   redirect(ctx.res, '/admin?msg=' + encodeURIComponent('Microsoft 登录设置已保存。'));
 }
@@ -131,6 +134,7 @@ export function createUser(ctx) {
     userGroups: groupNames.join(' '), isAdmin: b.is_admin === '1',
   });
   if (groupNames.length) groups.setUserGroups(created.id, groupNames);
+  record(ctx, 'admin.user_created', created.username);
   redirect(ctx.res, '/admin/users?msg=' + encodeURIComponent(`用户 ${created.username} 已创建。`));
 }
 
@@ -184,6 +188,7 @@ export function updateUser(ctx) {
     passwordHash, isAdmin: willAdmin, disabled: willDisabled,
   });
   groups.setUserGroups(target.id, groupNames);
+  record(ctx, 'admin.user_updated', target.username);
   redirect(ctx.res, '/admin/users?msg=' + encodeURIComponent(`用户 ${target.username} 已更新。`));
 }
 
@@ -198,6 +203,7 @@ export function deleteUser(ctx) {
     return redirect(ctx.res, '/admin/users?err=' + encodeURIComponent('系统至少保留一名可用管理员。'));
   }
   users.remove(target.id);
+  record(ctx, 'admin.user_deleted', target.username);
   redirect(ctx.res, '/admin/users?msg=' + encodeURIComponent(`用户 ${target.username} 已删除。`));
 }
 
@@ -283,6 +289,7 @@ export function createApp(ctx) {
     isPublic, pkceRequired: pkce, requireConsent: b.require_consent === '1',
     secretHash, allowedGroups,
   });
+  record(ctx, 'admin.app_created', v.name);
   if (secret) {
     return sendHtml(ctx.res, 200, secretRevealPage({
       theme: ctx.theme, siteName: getRuntime().siteName, user: ctx.user,
@@ -317,6 +324,7 @@ export function updateApp(ctx) {
     requireConsent: b.require_consent === '1',
     allowedGroups: collectAllowedGroups(b),
   });
+  record(ctx, 'admin.app_updated', v.name);
   redirect(ctx.res, `/admin/apps/${app.client_id}?msg=` + encodeURIComponent('设置已保存。'));
 }
 
@@ -329,6 +337,7 @@ export function regenerateSecret(ctx) {
   }
   const secret = randomToken(24);
   clients.update(app.client_id, { secretHash: hashPassword(secret) });
+  record(ctx, 'admin.app_secret_rotated', app.name);
   sendHtml(ctx.res, 200, secretRevealPage({
     theme: ctx.theme, siteName: getRuntime().siteName, user: ctx.user,
     cur: '/admin/apps', app: clients.withUris(clients.byId(app.client_id)), secret,
@@ -341,6 +350,7 @@ export function revokeAppTokens(ctx) {
   if (!app) return redirect(ctx.res, '/admin/apps?err=' + encodeURIComponent('应用不存在。'));
   if (ctx.body?._csrf !== CSRF(ctx)) return redirect(ctx.res, `/admin/apps/${app.client_id}?err=` + encodeURIComponent('页面已过期,请重试。'));
   tokens.revokeForClient(app.client_id);
+  record(ctx, 'admin.app_tokens_revoked', app.name);
   redirect(ctx.res, `/admin/apps/${app.client_id}?msg=` + encodeURIComponent('该应用的全部令牌已吊销。'));
 }
 
@@ -349,5 +359,6 @@ export function deleteApp(ctx) {
   if (!app) return redirect(ctx.res, '/admin/apps?err=' + encodeURIComponent('应用不存在。'));
   if (ctx.body?._csrf !== CSRF(ctx)) return redirect(ctx.res, '/admin/apps?err=' + encodeURIComponent('页面已过期,请重试。'));
   clients.remove(app.client_id);
+  record(ctx, 'admin.app_deleted', app.name);
   redirect(ctx.res, '/admin/apps?msg=' + encodeURIComponent(`应用 ${app.name} 已删除。`));
 }

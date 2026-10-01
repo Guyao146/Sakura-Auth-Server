@@ -10,6 +10,7 @@ import { sendHtml, redirect } from '../../core/http.js';
 import { httpUrl, USERNAME_RE } from '../../core/util.js';
 import { logger } from '../../core/logger.js';
 import { setupStep1, setupStep2, setupStep3, setupStep4 } from '../../views/setup.js';
+import { record } from '../audit.js';
 
 const MAJOR = Number(process.versions.node.split('.')[0]);
 
@@ -154,6 +155,7 @@ export function rerunWizard(ctx) {
     return redirect(ctx.res, '/admin?err=' + encodeURIComponent('页面已过期,请重试。'));
   }
   updateRuntime({ setup_step: 1, setup_done: 0 }, settingsApi.setSetting);
+  record(ctx, 'admin.wizard_rerun');
   logger.info('向导:管理员触发重新运行配置向导');
   redirect(ctx.res, '/setup');
 }

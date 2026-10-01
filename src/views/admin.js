@@ -363,3 +363,48 @@ export function secretRevealPage({ theme, siteName, user, cur, app, secret, issu
       </div>`,
   });
 }
+
+/* ---------------- 审计日志 ---------------- */
+export function auditPage({ theme, siteName, user, cur, list, allActions = [], filters = {}, total = 0, csrf, msg, err }) {
+  const selAction = filters.action || '';
+  const q = filters.q || '';
+  const options = allActions.map((a) =>
+    `<option value="${esc(a)}"${a === selAction ? ' selected' : ''}>${esc(a)}</option>`).join('\n');
+  const filterForm = `
+      <form method="get" action="/admin/audit" class="rowline" style="gap:var(--s2)">
+        <select name="action" style="width:auto;min-width:160px" aria-label="按动作筛选">
+          <option value="">全部动作</option>
+          ${options}
+        </select>
+        <input type="text" name="q" value="${esc(q)}" placeholder="操作者或详情关键词" style="width:200px" aria-label="关键词">
+        <button class="btn" type="submit">筛选</button>
+        ${selAction || q ? '<a class="btn" href="/admin/audit">重置</a>' : ''}
+      </form>`;
+  const clearForm = `
+      <form method="post" action="/admin/audit/clear" class="rowline" style="gap:var(--s2)">
+        ${hiddenInputs({ _csrf: csrf })}
+        <button class="btn btn-danger" type="submit">清空日志</button>
+        <span class="muted small">将删除全部审计记录且不可恢复,请谨慎操作</span>
+      </form>`;
+  const rows = list.map((row) => `<tr>
+      <td class="muted" style="white-space:nowrap">${fmtTime(row.ts)}</td>
+      <td class="wrap"><b style="color:var(--text)">${esc(row.actor)}</b></td>
+      <td><span class="badge"><code>${esc(row.action)}</code></span></td>
+      <td class="wrap">${esc(row.detail || '-')}</td>
+      <td class="muted wrap">${esc(row.ip || '-')}</td>
+    </tr>`).join('\n');
+  return adminPage({
+    theme, siteName, user, cur, active: 'audit', title: `审计日志 · ${siteName}`,
+    headTitle: `<h3>审计日志</h3>
+    <p class="muted small">登录、授权与关键管理动作的留痕记录 · 共 ${total} 条,当前展示 ${list.length} 条</p>`,
+    actions: `${filterForm}${clearForm}`,
+    content: `
+      ${banner(msg ? esc(msg) : '', 'ok')}
+      ${banner(err ? esc(err) : '', 'err')}
+      <div class="tblwrap"><table class="tbl">
+        <thead><tr><th>时间</th><th>操作者</th><th>动作</th><th>详情</th><th>IP</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="5" class="muted">暂无审计记录。</td></tr>'}</tbody>
+      </table></div>
+      <p class="muted small">审计日志滚动保留最新 5000 条,不随过期数据清理;清空后历史留痕无法找回。</p>`,
+  });
+}

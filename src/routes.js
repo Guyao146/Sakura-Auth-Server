@@ -12,6 +12,7 @@ import * as account from './services/auth/account.js';
 import * as microsoft from './services/auth/microsoft.js';
 import * as reset from './services/auth/reset.js';
 import * as admin from './services/admin/index.js';
+import * as audit from './services/audit.js';
 import * as wizard from './services/setup/wizard.js';
 import * as portal from './services/portal.js';
 import * as api from './services/api.js';
@@ -102,6 +103,10 @@ export function registerRoutes() {
   r('POST', '/admin/apps/:id/secret', admin.regenerateSecret, { auth: 'admin' });
   r('POST', '/admin/apps/:id/revoke-tokens', admin.revokeAppTokens, { auth: 'admin' });
   r('POST', '/admin/apps/:id/delete', admin.deleteApp, { auth: 'admin' });
+
+  // 审计日志:管理端查看与清空(危险操作)
+  r('GET', '/admin/audit', audit.showAudit, { auth: 'admin' });
+  r('POST', '/admin/audit/clear', audit.clearAudit, { auth: 'admin' });
 
   return router;
 }

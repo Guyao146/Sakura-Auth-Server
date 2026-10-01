@@ -300,6 +300,7 @@ export function adminPage({ theme, siteName, user, active = '', title, content, 
     ${link('/admin/users', '用户', 'users')}
     ${link('/admin/apps', '应用', 'apps')}
     ${link('/admin/groups', '权限组', 'groups')}
+    ${link('/admin/audit', '审计日志', 'audit')}
     `
     : '';
   return `${head(theme, title)}

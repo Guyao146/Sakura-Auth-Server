@@ -8,6 +8,7 @@ import { filterScopes } from './issue.js';
 import { consumeLaunch } from '../portal.js';
 import { errorPage } from '../../views/error.js';
 import { consentPage, accessDeniedPage } from '../../views/auth.js';
+import { record } from '../audit.js';
 
 const REPLAY_FIELDS = ['response_type', 'client_id', 'redirect_uri', 'scope', 'state',
   'code_challenge', 'code_challenge_method', 'nonce', 'prompt'];
@@ -126,6 +127,7 @@ export function authorizePost(ctx) {
     return errRedirect(redirectUri, { error: 'access_denied', error_description: '用户拒绝了授权', state });
   }
   if (body.remember === 'on') consents.grant(ctx.user.id, client.client_id, scopeList.join(' '));
+  record(ctx, 'oauth.consent_granted', `${client.client_id} ${scopeList.join(' ')}`);
 
   issueCode(ctx, {
     client, redirectUri, scopeList,

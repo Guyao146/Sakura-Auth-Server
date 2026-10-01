@@ -1095,6 +1095,54 @@ async function main() {
     const regToggleMs2 = extractHidden(await r.text());
     await call(aj, '/admin/register-toggle', { method: 'POST', form: { _csrf: regToggleMs2._csrf } });
 
+    /* ---------- 操作审计日志(放最后段:向导重跑段之前) ---------- */
+    const auditM = await import('../src/models/audit.js');
+
+    // 管理端页面:管理员可见且含记录,普通用户 403
+    r = await call(aj, '/admin/audit');
+    const auditHtml = await r.text();
+    ok('审计:管理员可查看审计页且含记录', r.status === 200 && auditHtml.includes('审计日志')
+      && auditHtml.includes('auth.login') && auditHtml.includes('bob'));
+    ok('审计:侧栏提供审计日志入口', auditHtml.includes('href="/admin/audit"') && auditHtml.includes('审计日志'));
+    ok('审计:普通用户访问审计页被拒(403)', (await call(rj, '/admin/audit')).status === 403);
+
+    // 模型层:登录成功/失败留痕
+    const loginRows = auditM.list({ action: 'auth.login', limit: 500 });
+    ok('审计:登录成功产生 auth.login 记录', loginRows.length > 0 && loginRows.some((row) => row.detail === 'bob'));
+    ok('审计:错误密码产生 auth.login_failed 记录', auditM.list({ action: 'auth.login_failed', limit: 500 }).length > 0);
+
+    // 撤销我的授权留痕(detail 为 client_id)
+    ok('审计:撤销我的授权产生 oauth.consent_revoked', auditM.list({ action: 'oauth.consent_revoked', limit: 500 })
+      .some((row) => row.detail === web.client_id));
+
+    // 管理端经控制台新建应用留痕(actor 为管理员,detail 为应用名)
+    r = await call(aj, '/admin/apps/create', {
+      method: 'POST',
+      // scopes 以重复键提交,服务端按数组收集(与表单复选框行为一致)
+      form: [['name', '审计探针'], ['redirect_uris', 'http://127.0.0.1:8080/audit-cb'],
+        ['scopes', 'openid'], ['scopes', 'profile'], ['client_type', 'public']],
+    });
+    const appCreatedRows = auditM.list({ action: 'admin.app_created', limit: 10 });
+    ok('审计:新建应用产生 admin.app_created 记录', appCreatedRows.length > 0
+      && appCreatedRows[0].detail === '审计探针' && appCreatedRows[0].actor === 'admin');
+
+    // 按 action 筛选:页面只呈现该动作的记录(MS 事件详情不得混入)
+    r = await call(aj, `/admin/audit?action=${encodeURIComponent('oauth.consent_revoked')}`);
+    const filteredHtml = await r.text();
+    ok('审计:按 action 筛选生效', r.status === 200 && filteredHtml.includes(web.client_id)
+      && !filteredHtml.includes('msuser@example.com'));
+    const kwRows = auditM.list({ q: 'bob', limit: 500 });
+    ok('审计:关键词过滤命中操作者或详情', kwRows.length > 0
+      && kwRows.every((row) => row.actor.includes('bob') || row.detail.includes('bob')));
+
+    // 清空(危险操作):需要 CSRF,清空后模型计数为 0 且页面显示空状态
+    r = await call(aj, '/admin/audit');
+    const auditClearForm = extractHidden(await r.text());
+    r = await call(aj, '/admin/audit/clear', { method: 'POST', form: { _csrf: auditClearForm._csrf } });
+    ok('审计:清空后列表为空', r.status === 302 && location(r).startsWith('/admin/audit') && auditM.count() === 0);
+    r = await call(aj, '/admin/audit');
+    ok('审计:清空后页面显示空状态', r.status === 200 && (await r.text()).includes('暂无审计记录'));
+
     /* ---------- 配置向导增强:管理员重新运行向导(放在最后,尾部恢复 setup_done=1) ---------- */
     r = await call(aj, '/admin');
     const rerunDash = await r.text();

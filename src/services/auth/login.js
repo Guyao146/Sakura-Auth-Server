@@ -14,6 +14,7 @@ import { logger } from '../../core/logger.js';
 import { safeNext } from '../../core/util.js';
 import { loginPage, twofaPage } from '../../views/auth.js';
 import { errorPage } from '../../views/error.js';
+import { record } from '../audit.js';
 
 /* 登录失败限流:同 IP+用户名 5 次失败锁定 60 秒 */
 const MAX_FAILS = 5, LOCK_SEC = 60;
@@ -29,11 +30,13 @@ function isLocked(ctx, username) {
   return rec && rec.count >= MAX_FAILS && Date.now() - rec.first < LOCK_SEC * 1000;
 }
 
-function recordFail(ctx, username) {
+/** 记一次凭据失败(限流计数 + 审计;web 与 /api 登录共用,action 可区分两步验证失败) */
+function recordFail(ctx, username, action = 'auth.login_failed') {
   const key = failKey(ctx, username);
   const rec = attempts.get(key);
   if (!rec || Date.now() - rec.first > LOCK_SEC * 1000) attempts.set(key, { count: 1, first: Date.now() });
   else rec.count += 1;
+  record(ctx, action, String(username || ''), { actor: String(username || '') || 'anonymous' });
 }
 
 function clearFails(ctx, username) {
@@ -137,7 +140,7 @@ export function handleTwoFa(ctx) {
   const okTotp = verifyTotp(user.totp_secret, code);
   const okRecovery = !okTotp && recovery.consume(user.id, code);
   if (!okTotp && !okRecovery) {
-    recordFail(ctx, user.username);
+    recordFail(ctx, user.username, 'auth.2fa_failed');
     logger.warn('两步验证失败', { username: user.username });
     return sendHtml(ctx.res, 401, twofaPage({
       theme: ctx.theme, siteName: ctx.runtime.siteName,
@@ -157,6 +160,8 @@ export function startSession(res, user, secureCookies) {
   const secure = secureCookies ?? rt.secureCookies;
   setCookie(res, 'sid', sid, { maxAge: rt.sessionTtl, secure });
   clearCookie(res, 'csrf', secure);
+  // 登录成功审计:web 表单、/api 登录与 Microsoft 登录都经此处,统一留痕一次
+  record({ req: res.req, user }, 'auth.login', user.username, { actor: user.username });
   logger.info('登录成功', { username: user.username });
   return sid;
 }

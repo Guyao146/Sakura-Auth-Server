@@ -7,6 +7,7 @@ import { getRuntime } from '../../core/runtime.js';
 import { logger } from '../../core/logger.js';
 import { USERNAME_RE } from '../../core/util.js';
 import { registerPage } from '../../views/auth.js';
+import { record } from '../audit.js';
 
 /* 注册限流:同 IP 1 分钟内最多 5 次提交 */
 const MAX_SUBMITS = 5, WINDOW_SEC = 60;
@@ -81,6 +82,7 @@ export function handleRegister(ctx) {
   const sid = sessions.create(user.id, randomToken(24), rt.sessionTtl);
   setCookie(ctx.res, 'sid', sid, { maxAge: rt.sessionTtl, secure: rt.secureCookies });
   clearCookie(ctx.res, 'csrf', rt.secureCookies);
+  record(ctx, 'auth.register', user.username, { actor: user.username });
   logger.info('新用户注册', { username: user.username });
   redirect(ctx.res, '/apps');
 }

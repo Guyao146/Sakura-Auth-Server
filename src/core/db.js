@@ -107,6 +107,15 @@ CREATE TABLE IF NOT EXISTS group_members (
   PRIMARY KEY (group_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_group_members_user ON group_members(user_id);
+CREATE TABLE IF NOT EXISTS audit_logs (
+  id     TEXT PRIMARY KEY,
+  ts     INTEGER NOT NULL,
+  actor  TEXT NOT NULL DEFAULT 'anonymous',
+  action TEXT NOT NULL,
+  detail TEXT NOT NULL DEFAULT '',
+  ip     TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_logs(ts DESC);
 `;
 
 /** 老库平滑迁移:补列/补表,幂等 */

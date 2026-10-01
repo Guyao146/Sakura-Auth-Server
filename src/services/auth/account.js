@@ -10,6 +10,7 @@ import { sendHtml, redirect } from '../../core/http.js';
 import { accountPage, recoveryCodesPage, authorizationsPage } from '../../views/auth.js';
 import { scopeItems } from '../../views/components.js';
 import { logger } from '../../core/logger.js';
+import { record } from '../audit.js';
 
 /** 账号页 2FA 区块的状态组装 */
 function twoFaState(user) {
@@ -57,6 +58,7 @@ export function handleChangePassword(ctx) {
     return showAccount(ctx, { err: '两次输入的新密码不一致。' });
   }
   users.update(ctx.user.id, { passwordHash: hashPassword(password) });
+  record(ctx, 'account.password_changed');
   logger.info('用户修改了密码', { username: ctx.user.username });
   showAccount(ctx, { msg: '密码已修改。' });
 }
@@ -88,6 +90,7 @@ export function confirmTwoFa(ctx) {
   }
   users.enableTotp(fresh.id);
   const codes = recovery.createBatch(fresh.id, 8);
+  record(ctx, 'account.2fa_enabled', fresh.username);
   logger.info('两步验证已开启', { username: fresh.username });
   sendHtml(ctx.res, 200, recoveryCodesPage({
     theme: ctx.theme, siteName: ctx.runtime.siteName, user: fresh, codes,
@@ -103,6 +106,7 @@ export function disableTwoFa(ctx) {
   }
   users.clearTotp(ctx.user.id);
   recovery.clearFor(ctx.user.id);
+  record(ctx, 'account.2fa_disabled');
   logger.info('两步验证已关闭', { username: ctx.user.username });
   ctx.user = users.byId(ctx.user.id);
   showAccount(ctx, { msg: '两步验证已关闭。' });
@@ -135,6 +139,7 @@ export function revokeAuthorization(ctx) {
   }
   consents.revoke(ctx.user.id, row.client_id);
   tokens.revokeForClientUser(row.client_id, ctx.user.id);
+  record(ctx, 'oauth.consent_revoked', row.client_id);
   logger.info('用户撤销了应用授权', { username: ctx.user.username, client_id: row.client_id });
   redirect(ctx.res, '/account/apps?msg=' + encodeURIComponent('已撤销该应用的授权,其现有访问令牌一并失效。'));
 }
