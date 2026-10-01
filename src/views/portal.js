@@ -2,8 +2,8 @@ import { escapeHtml as esc } from '../core/util.js';
 import { adminPage } from './layout.js';
 import { banner, SCOPE_NAMES } from './components.js';
 
-/** 应用门户:普通用户可见的业务线磁贴(按权限组过滤),并入控制台侧栏布局 */
-export function portalPage({ theme, siteName, user, list, msg, err, csrf, cur = '/' }) {
+/** 应用门户:普通用户可见的业务线磁贴(按权限组过滤),并入控制台侧栏布局;actions 渲染为内容顶栏(右上角) */
+export function portalPage({ theme, siteName, user, list, msg, err, csrf, cur = '/', actions = '' }) {
   const tiles = list.map((app) => {
     const initial = (String(app.name || '?').trim()[0] || '?').toUpperCase();
     return `<div class="portal-tile">
@@ -21,7 +21,7 @@ export function portalPage({ theme, siteName, user, list, msg, err, csrf, cur = 
     </div>`;
   }).join('\n');
   return adminPage({
-    theme, siteName, user, active: 'portal', cur,
+    theme, siteName, user, active: 'portal', cur, actions,
     title: `应用门户 · ${siteName}`,
     content: `
       ${banner(msg ? esc(msg) : '', 'ok')}

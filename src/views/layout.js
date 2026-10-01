@@ -127,6 +127,8 @@ pre.block{background:var(--code-bg);color:var(--code-text);border-radius:var(--r
 @media(max-width:900px){.side{display:none}.main{margin-left:0;padding:var(--s5) var(--s4) 64px}}
 .topbar{display:none}
 @media(max-width:900px){.topbar{display:flex;align-items:center;gap:var(--s2);padding:var(--s4);color:var(--heading);font-weight:700}.topbar svg{color:var(--accent)}}
+/* 内容顶栏:页级 actions(如门户右上角管理入口)靠右排布 */
+.main-head{display:flex;justify-content:flex-end;align-items:center;gap:var(--s3);margin-bottom:var(--s4)}
 /* 居中认证布局 */
 .auth-wrap{min-height:100vh;display:grid;place-items:center;padding:var(--s6) var(--s4)}
 .auth-col{width:100%;max-width:460px}
@@ -142,12 +144,13 @@ pre.block{background:var(--code-bg);color:var(--code-text);border-radius:var(--r
 .login-brand{position:relative;overflow:hidden;display:flex;flex-direction:column;justify-content:space-between;gap:var(--s7);
   padding:var(--s8) var(--s7) var(--s6);color:var(--login-on);background:linear-gradient(150deg,var(--login-grad-a),var(--login-grad-b))}
 .login-brand-deco{position:absolute;right:-72px;bottom:-72px;opacity:.12;pointer-events:none}
-.login-brand-body{position:relative}
+.login-brand-body{position:relative;flex:1;display:flex;flex-direction:column;justify-content:center;align-items:center;
+  text-align:center;padding-left:var(--s6);padding-right:var(--s6)}
 .login-brand-mark{display:inline-flex;align-items:center;justify-content:center;width:72px;height:72px;border-radius:20px;background:var(--login-chip)}
 .login-brand-name{color:var(--login-on);font-size:2.1rem;font-weight:700;margin:var(--s5) 0 0}
 .login-brand-slogan{margin:var(--s2) 0 0;font-size:17px;color:var(--login-on-soft)}
-.login-brand-feats{list-style:none;margin:var(--s6) 0 0;padding:0;display:flex;flex-direction:column;gap:var(--s4)}
-.login-brand-feats li{display:flex;align-items:flex-start;gap:var(--s3)}
+.login-brand-feats{list-style:none;margin:var(--s6) 0 0;padding:0;display:flex;flex-direction:column;gap:var(--s4);align-items:center}
+.login-brand-feats li{display:flex;align-items:center;gap:var(--s3)}
 .login-brand-feats .feat-ico{width:34px;height:34px;border-radius:10px;background:var(--login-chip);color:var(--login-on);display:inline-flex;align-items:center;justify-content:center;flex:none}
 .login-brand-feats b{display:block;color:var(--login-on);font-size:14px;font-weight:600;line-height:1.5}
 .login-brand-feats small{display:block;color:var(--login-on-soft);font-size:13px;line-height:1.55}
@@ -280,7 +283,7 @@ export function brandPage({
 }
 
 /** 控制台骨架:左侧玻璃侧栏 + 内容区;导航按身份渲染 —— 管理员含管理项,普通用户仅「我的」分组 */
-export function adminPage({ theme, siteName, user, active = '', title, content, cur = '/' }) {
+export function adminPage({ theme, siteName, user, active = '', title, content, cur = '/', actions = '' }) {
   const link = (href, label, key) =>
     `<a href="${href}"${key === active ? ' class="active"' : ''}>${label}</a>`;
   const adminNav = user.is_admin
@@ -307,6 +310,7 @@ export function adminPage({ theme, siteName, user, active = '', title, content, 
   </div>
 </aside>
 <main class="main">
+${actions ? `<div class="main-head">${actions}</div>` : ''}
 ${content}
 </main>
 </body></html>`;
