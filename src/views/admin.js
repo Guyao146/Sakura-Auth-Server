@@ -59,7 +59,8 @@ export function groupsPage({ theme, siteName, user, cur, list, csrf, msg, err })
 }
 
 /* ---------------- 控制台首页 ---------------- */
-export function dashboardPage({ theme, siteName, user, cur, stats, issuer, allowRegister, csrf, msg, err }) {
+export function dashboardPage({ theme, siteName, user, cur, stats, issuer, allowRegister, csrf, msg, err, msOAuth = {} }) {
+  const ms = { enabled: false, clientId: '', clientSecret: '', tenant: 'common', redirectUri: '', ...msOAuth };
   return adminPage({
     theme, siteName, user, cur, active: 'dashboard', title: `控制台 · ${siteName}`,
     content: `
@@ -88,6 +89,27 @@ export function dashboardPage({ theme, siteName, user, cur, stats, issuer, allow
           <button class="btn ${allowRegister ? 'btn-danger' : 'btn-primary'}" type="submit">
             ${allowRegister ? '关闭自助注册' : '开启自助注册'}
           </button>
+        </form>
+      </div>
+      <div class="card">
+        <h3 style="margin-top:0">Microsoft 登录</h3>
+        <p class="small" style="margin:var(--s2) 0">当前状态:${ms.enabled ? badge('已启用') : badge('未启用', '')}</p>
+        <p class="muted small">启用后,登录页出现「使用 Microsoft 账号登录」按钮;未绑定的 Microsoft 身份可在首次登录时关联已有本地账号或注册新号。</p>
+        <form method="post" action="/admin/ms-oauth">
+          ${hiddenInputs({ _csrf: csrf })}
+          <label class="checkline"><input type="checkbox" name="ms_enabled" value="1"${ms.enabled ? ' checked' : ''}>
+            <span>启用 Microsoft 账号登录<span class="muted">需先在 Microsoft Entra 管理中心注册应用,并把下方回调地址填入其「重定向 URI」</span></span></label>
+          <div class="grid2">
+            <div><label>Client ID</label>
+              <input type="text" name="ms_client_id" value="${esc(ms.clientId)}" placeholder="Microsoft 应用的应用程序(客户端)ID"></div>
+            <div><label>Tenant(common / 组织 ID / consumers)</label>
+              <input type="text" name="ms_tenant" value="${esc(ms.tenant)}" placeholder="common"></div>
+          </div>
+          <label>Client Secret${ms.clientSecret ? '(已配置,留空保留)' : ''}</label>
+          <input type="password" name="ms_client_secret" value="" autocomplete="new-password"
+            placeholder="${ms.clientSecret ? '留空则保留已保存的密钥' : 'Microsoft 应用的客户端密钥'}">
+          ${kvRow('回调地址', ms.redirectUri ? esc(ms.redirectUri) : '-')}
+          <div class="actions"><button class="btn btn-primary" type="submit">保存 Microsoft 登录设置</button></div>
         </form>
       </div>
       <div class="card">

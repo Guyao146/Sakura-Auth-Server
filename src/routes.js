@@ -9,6 +9,7 @@ import * as login from './services/auth/login.js';
 import * as register from './services/auth/register.js';
 import * as logout from './services/auth/logout.js';
 import * as account from './services/auth/account.js';
+import * as microsoft from './services/auth/microsoft.js';
 import * as reset from './services/auth/reset.js';
 import * as admin from './services/admin/index.js';
 import * as wizard from './services/setup/wizard.js';
@@ -57,6 +58,13 @@ export function registerRoutes() {
   r('GET', '/reset-password', reset.showReset);
   r('POST', '/reset-password', reset.handleReset);
 
+  // Microsoft 账号登录与绑定(发起/回调/关联匿名;解绑需登录态)
+  r('GET', '/auth/microsoft', microsoft.startAuth);
+  r('GET', '/auth/microsoft/callback', microsoft.callback);
+  r('POST', '/auth/microsoft/link', microsoft.link);
+  r('POST', '/auth/microsoft/register', microsoft.registerNew);
+  r('POST', '/auth/microsoft/unbind', microsoft.unbind, { auth: 'user' });
+
   r('GET', '/setup', wizard.showSetup);
   r('POST', '/setup/step1', wizard.step1);
   r('POST', '/setup/step2', wizard.step2);
@@ -76,6 +84,7 @@ export function registerRoutes() {
 
   r('GET', '/admin', admin.showDashboard, { auth: 'admin' });
   r('POST', '/admin/register-toggle', admin.toggleRegister, { auth: 'admin' });
+  r('POST', '/admin/ms-oauth', admin.saveMsOAuth, { auth: 'admin' });
   r('GET', '/admin/users', admin.listUsers, { auth: 'admin' });
   r('GET', '/admin/users/new', admin.newUserForm, { auth: 'admin' });
   r('POST', '/admin/users/create', admin.createUser, { auth: 'admin' });

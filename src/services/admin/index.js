@@ -11,6 +11,7 @@ import { randomToken } from '../../core/crypto.js';
 import { splitLines, redirectUri as validUri } from '../../core/util.js';
 import { SCOPES, DEFAULT_CLIENT_SCOPES } from '../../core/config.js';
 import { sendHtml, redirect } from '../../core/http.js';
+import { logger } from '../../core/logger.js';
 import { dashboardPage, groupsPage, usersPage, userFormPage, appsPage, appFormPage, appDetailPage, secretRevealPage } from '../../views/admin.js';
 
 const CSRF = (ctx) => ctx.session.csrf;
@@ -24,6 +25,7 @@ export function showDashboard(ctx) {
     stats: { users: users.count(), clients: clients.count(), activeTokens: tokens.countActive(), sessions: sessions.count() },
     issuer: rt.issuer,
     allowRegister: rt.allowRegister,
+    msOAuth: rt.msOAuth,
     csrf: CSRF(ctx),
     msg: ctx.query.get('msg'), err: ctx.query.get('err'),
   }));
@@ -38,6 +40,26 @@ export function toggleRegister(ctx) {
   const next = rt.allowRegister ? '0' : '1';
   updateRuntime({ allow_register: next }, settingsApi.setSetting);
   redirect(ctx.res, '/admin?msg=' + encodeURIComponent(next === '1' ? '已开启自助注册。' : '已关闭自助注册。'));
+}
+
+/* ---------------- Microsoft 登录配置 ---------------- */
+export function saveMsOAuth(ctx) {
+  const b = ctx.body || {};
+  if (b._csrf !== CSRF(ctx)) {
+    return redirect(ctx.res, '/admin?err=' + encodeURIComponent('页面已过期,请重试。'));
+  }
+  const fields = {
+    ms_enabled: b.ms_enabled === '1' ? '1' : '0',
+    ms_client_id: String(b.ms_client_id || '').trim(),
+    ms_tenant: String(b.ms_tenant || '').trim() || 'common',
+  };
+  const secret = String(b.ms_client_secret || '');
+  if (secret) fields.ms_client_secret = secret; // 留空 = 保留已保存的密钥
+  const authority = String(b.ms_authority || '').trim();
+  if (authority) fields.ms_authority = authority.replace(/\/+$/, ''); // 默认由向导/测试直接指定,常规表单不展示
+  updateRuntime(fields, settingsApi.setSetting);
+  logger.info('管理员更新了 Microsoft 登录配置', { enabled: fields.ms_enabled });
+  redirect(ctx.res, '/admin?msg=' + encodeURIComponent('Microsoft 登录设置已保存。'));
 }
 
 /* ---------------- 权限组管理 ---------------- */

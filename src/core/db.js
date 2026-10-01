@@ -18,6 +18,8 @@ CREATE TABLE IF NOT EXISTS users (
   disabled      INTEGER NOT NULL DEFAULT 0,
   totp_secret   TEXT,
   totp_enabled  INTEGER NOT NULL DEFAULT 0,
+  ms_sub        TEXT,
+  ms_email      TEXT,
   created_at    INTEGER NOT NULL,
   updated_at    INTEGER NOT NULL
 );
@@ -112,6 +114,8 @@ function migrate() {
   const cols = db.prepare('PRAGMA table_info(users)').all().map((c) => c.name);
   if (!cols.includes('totp_secret')) db.exec('ALTER TABLE users ADD COLUMN totp_secret TEXT');
   if (!cols.includes('totp_enabled')) db.exec('ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0');
+  if (!cols.includes('ms_sub')) db.exec('ALTER TABLE users ADD COLUMN ms_sub TEXT');
+  if (!cols.includes('ms_email')) db.exec('ALTER TABLE users ADD COLUMN ms_email TEXT');
   const ccols = db.prepare('PRAGMA table_info(clients)').all().map((c) => c.name);
   if (!ccols.includes('allowed_groups')) {
     db.exec("ALTER TABLE clients ADD COLUMN allowed_groups TEXT NOT NULL DEFAULT '[]'");

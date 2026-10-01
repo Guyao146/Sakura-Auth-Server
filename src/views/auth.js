@@ -1,6 +1,7 @@
 import { escapeHtml as esc } from '../core/util.js';
 import { authPage, adminPage, brandPage } from './layout.js';
 import { banner, hiddenInputs, kvRow, scopeItems, scopeIcon, SCOPE_NAMES } from './components.js';
+import { getRuntime } from '../core/runtime.js';
 
 /* 登录页品牌面板的特性条目:线性小图标随 currentColor,零外部资源 */
 const featIcon = (paths) =>
@@ -20,8 +21,14 @@ const LOGIN_FEATURES = [
   },
 ];
 
-/** 登录页(品牌化分栏:左侧品牌渐变面板 + 右侧登录表单;窄屏仅表单) */
-export function loginPage({ theme, siteName, csrf, next, err, username = '', allowRegister = false, msg = '' }) {
+/** 微软四色方块标(16px,品牌固定色) */
+const MS_LOGO = `<svg width="16" height="16" viewBox="0 0 23 23" aria-hidden="true" style="flex:none"><rect width="11" height="11" fill="#f25022"/><rect x="12" width="11" height="11" fill="#7fba00"/><rect y="12" width="11" height="11" fill="#00a4ef"/><rect x="12" y="12" width="11" height="11" fill="#ffb900"/></svg>`;
+
+/** 登录页(品牌化分栏:左侧品牌渐变面板 + 右侧登录表单;窄屏仅表单)。
+ *  msEnabled 缺省时回退读运行时配置(启用后表单下方出现 Microsoft 登录入口)。 */
+export function loginPage({ theme, siteName, csrf, next, err, username = '', allowRegister = false, msg = '', msEnabled }) {
+  const rt = getRuntime();
+  const showMs = msEnabled !== undefined ? !!msEnabled : !!(rt && rt.msOAuth && rt.msOAuth.enabled);
   return brandPage({
     theme, siteName, title: `登录 · ${siteName}`,
     tagline: '这一站,管好你所有系统的登录。',
@@ -41,6 +48,15 @@ export function loginPage({ theme, siteName, csrf, next, err, username = '', all
           <button class="btn btn-primary" type="submit">登 录</button>
         </div>
       </form>
+      ${showMs ? `
+      <div style="display:flex;align-items:center;gap:var(--s3);margin:var(--s4) 0 0">
+        <span style="flex:1;border-top:1px solid var(--border)"></span>
+        <span class="muted small">或</span>
+        <span style="flex:1;border-top:1px solid var(--border)"></span>
+      </div>
+      <div class="actions" style="margin-top:var(--s3)">
+        <a class="btn" href="/auth/microsoft" style="flex:1;justify-content:center;padding:var(--s3) var(--s4);font-size:15px">${MS_LOGO}使用 Microsoft 账号登录</a>
+      </div>` : ''}
       <p class="muted small" style="margin:var(--s3) 0 0"><a href="/forgot-password">忘记密码?</a></p>
       ${allowRegister ? `<p class="muted small" style="text-align:center;margin:var(--s4) 0 0">还没有账号?<a href="/register">注册新账号</a></p>` : ''}`,
   });
@@ -221,6 +237,47 @@ export function logoutPage({ theme, siteName, csrf }) {
 }
 
 /**
+ * Microsoft 关联本地账号页:MS 身份验证成功但未绑定任何本站账号。
+ * 表单 A:已有账号绑定(用户名/密码);表单 B(自助注册开启时):注册新号并绑定。
+ * 两个表单都携带一次性 linkToken(隐藏字段 state)与 cookie 双提交 CSRF。
+ */
+export function msLinkPage({ theme, siteName, csrf, linkToken, msEmail, allowRegister = false, err, values = {} }) {
+  const v = values;
+  return authPage({
+    theme, siteName, title: `关联本地账号 · ${siteName}`,
+    content: `
+      ${banner(err ? esc(err) : '', 'err')}
+      <h3 style="margin-top:0">关联本地账号</h3>
+      <p class="muted small">Microsoft 身份验证成功:<b style="color:var(--text)">${esc(msEmail || '未知账号')}</b>。这个 Microsoft 账号还没有绑定本站账号,请选择一种方式继续。</p>
+      <form method="post" action="/auth/microsoft/link">
+        ${hiddenInputs({ state: linkToken, _csrf: csrf })}
+        <label>已有账号:用户名</label>
+        <input type="text" name="username" value="${esc(v.username || '')}" required autofocus autocomplete="username">
+        <label>密码</label>
+        <input type="password" name="password" required autocomplete="current-password">
+        <div class="actions"><button class="btn btn-primary" type="submit">绑定并登录</button></div>
+      </form>
+      ${allowRegister ? `
+      <hr>
+      <h3>注册新账号</h3>
+      <p class="muted small">还没有本站账号?直接用当前 Microsoft 身份注册一个并自动绑定。</p>
+      <form method="post" action="/auth/microsoft/register">
+        ${hiddenInputs({ state: linkToken, _csrf: csrf })}
+        <label>用户名</label>
+        <input type="text" name="username" value="${esc(v.username || '')}" required autocomplete="username"
+          pattern="[a-zA-Z0-9_.@-]{2,64}" title="2-64 位字母数字与 _.@-">
+        <label>密码(至少 8 位)</label>
+        <input type="password" name="password" required minlength="8" autocomplete="new-password">
+        <label>确认密码</label>
+        <input type="password" name="password2" required minlength="8" autocomplete="new-password">
+        <label>显示姓名(可选)</label>
+        <input type="text" name="name" value="${esc(v.name || '')}" maxlength="40" autocomplete="name">
+        <div class="actions"><button class="btn btn-primary" type="submit">注册并绑定</button></div>
+      </form>` : ''}`,
+  });
+}
+
+/**
  * 账号设置页(密码 + 两步验证管理),并入控制台侧栏布局。
  * twoFa: { enabled, pendingSecret, otpauth, secret, recoveryCodes }
  */
@@ -278,6 +335,20 @@ export function accountPage({ theme, siteName, user, csrf, msg, err, twoFa, cur 
         <div class="actions"><button class="btn btn-primary" type="submit">开始设置两步验证</button></div>
       </form>`;
   }
+  // Microsoft 账号绑定区块:绑定状态直接读 users 行的 ms_sub / ms_email 列
+  const msBound = !!user.ms_sub;
+  const msBlock = `
+    <hr>
+    <h3>Microsoft 账号</h3>
+    ${msBound
+      ? `<div class="kv"><b>绑定邮箱</b><span>${esc(user.ms_email || '-')}</span></div>
+      <form method="post" action="/auth/microsoft/unbind">
+        ${hiddenInputs({ _csrf: csrf })}
+        <p class="muted small">解绑后将无法继续使用该 Microsoft 账号登录本站。</p>
+        <div class="actions"><button class="btn btn-danger" type="submit">解绑 Microsoft 账号</button></div>
+      </form>`
+      : `<p class="muted small">绑定后,可以使用 Microsoft 账号一键登录,无需再输入本站密码。</p>
+      <div class="actions"><a class="btn" href="/auth/microsoft?bind=1">绑定 Microsoft 账号</a></div>`}`;
   return adminPage({
     theme, siteName, user, active: 'account', cur,
     title: `账号设置 · ${siteName}`,
@@ -302,7 +373,8 @@ export function accountPage({ theme, siteName, user, csrf, msg, err, twoFa, cur 
         <div class="actions"><button class="btn btn-primary" type="submit">保存修改</button></div>
       </form>
       <hr>
-      ${twofaBlock}`,
+      ${twofaBlock}
+      ${msBlock}`,
   });
 }
 
