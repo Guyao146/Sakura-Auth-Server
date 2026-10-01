@@ -110,7 +110,7 @@ pre.block{background:var(--code-bg);color:var(--code-text);border-radius:var(--r
 .stat b{display:block;color:var(--heading);font-size:2rem;font-weight:700;line-height:1.2}
 .stat span{color:var(--muted);font-size:13px}
 /* 侧栏:玻璃化,当前项 2px 指示条 */
-.side{position:fixed;top:0;left:0;bottom:0;width:264px;display:flex;flex-direction:column;
+.side{position:fixed;top:0;left:0;bottom:0;width:304px;display:flex;flex-direction:column;
   background:color-mix(in srgb,var(--surface) 88%,transparent);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);overflow-y:auto}
 .side-brand{display:flex;align-items:center;gap:var(--s3);padding:var(--s5) var(--s5) var(--s4)}
 .side-brand svg{color:var(--accent);flex:none}
@@ -123,9 +123,8 @@ pre.block{background:var(--code-bg);color:var(--code-text);border-radius:var(--r
 .side nav a.active::before{content:"";position:absolute;left:-10px;top:50%;transform:translateY(-50%);width:2px;height:18px;border-radius:2px;background:var(--accent)}
 .side-foot{padding:var(--s4) var(--s5);border-top:1px solid var(--border);font-size:13px;color:var(--muted)}
 .side-foot .row{display:flex;justify-content:space-between;align-items:center;gap:var(--s2)}
-/* 内容列在侧栏右侧空间内水平居中,超宽屏不再整体偏左 */
-.main{margin-left:264px;padding:var(--s7) var(--s6) 100px}
-.main > *{max-width:1160px;margin-left:auto;margin-right:auto}
+/* 侧栏加宽(304px),内容列恢复靠左排布 */
+.main{margin-left:304px;padding:var(--s7) var(--s6) 100px;max-width:1500px}
 @media(max-width:900px){.side{display:none}.main{margin-left:0;padding:var(--s5) var(--s4) 64px}}
 .topbar{display:none}
 @media(max-width:900px){.topbar{display:flex;align-items:center;gap:var(--s2);padding:var(--s4);color:var(--heading);font-weight:700}.topbar svg{color:var(--accent)}}
