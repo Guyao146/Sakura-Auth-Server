@@ -21,13 +21,14 @@ const LOGIN_FEATURES = [
 ];
 
 /** 登录页(品牌化分栏:左侧品牌渐变面板 + 右侧登录表单;窄屏仅表单) */
-export function loginPage({ theme, siteName, csrf, next, err, username = '', allowRegister = false }) {
+export function loginPage({ theme, siteName, csrf, next, err, username = '', allowRegister = false, msg = '' }) {
   return brandPage({
     theme, siteName, title: `登录 · ${siteName}`,
     tagline: '这一站,管好你所有系统的登录。',
     features: LOGIN_FEATURES,
     content: `
       ${banner(err ? esc(err) : '', 'err')}
+      ${banner(msg ? esc(msg) : '', 'ok')}
       <h2 class="login-form-title">欢迎回来</h2>
       <p class="login-form-sub muted small">登录 ${esc(siteName)} 账号,继续访问你的应用。</p>
       <form method="post" action="/login">

@@ -1,12 +1,6 @@
-import { sendHtml } from '../core/http.js';
-import { getRuntime } from '../core/runtime.js';
-import { landingPage } from '../views/landing.js';
+import { redirect } from '../core/http.js';
 
-/** GET / —— 首页(服务介绍 + 接入入口) */
+/** GET / —— 站点入口:未登录去登录页,已登录去应用门户 */
 export function showLanding(ctx) {
-  const rt = getRuntime();
-  sendHtml(ctx.res, 200, landingPage({
-    theme: ctx.theme, siteName: rt.siteName, issuer: rt.issuer,
-    logged: !!ctx.session, msg: ctx.query.get('msg'),
-  }));
+  redirect(ctx.res, ctx.session ? '/apps' : '/login');
 }

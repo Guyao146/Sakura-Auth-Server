@@ -17,5 +17,5 @@ export function handleLogout(ctx) {
   if (ctx.body?._csrf !== ctx.session.csrf) return redirect(ctx.res, '/');
   sessions.remove(ctx.session.id_hash);
   clearCookie(ctx.res, 'sid', getRuntime().secureCookies);
-  redirect(ctx.res, '/?msg=' + encodeURIComponent('已退出登录'));
+  redirect(ctx.res, '/login?msg=' + encodeURIComponent('已退出登录'));
 }

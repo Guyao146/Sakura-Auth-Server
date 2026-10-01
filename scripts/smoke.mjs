@@ -135,6 +135,10 @@ async function main() {
     const jwks = await (await fetch(BASE + '/jwks.json')).json();
     ok('JWKS 暴露 RS256 公钥', jwks.keys?.[0]?.kty === 'RSA' && !!jwks.keys[0].n);
 
+    /* ---------- 登录流转:首页跳转约定 ---------- */
+    const anonHome = await call(new Jar(), '/');
+    ok('流转:未登录访问首页重定向登录页', anonHome.status === 302 && location(anonHome) === '/login');
+
     /* ---------- 完整授权码 + PKCE(含登录、同意) ---------- */
     const verifier = crypto.randomBytes(48).toString('base64url');
     const challenge = b64urlSha256(verifier);
@@ -165,6 +169,10 @@ async function main() {
       form: { username: 'bob', password: 'BobPassw0rd!', _csrf: loginForm._csrf, next: authUrl },
     });
     ok('登录成功回到 /authorize', r.status === 302 && location(r).startsWith('/authorize?'));
+
+    const loginWhileIn = await call(uj, '/login');
+    ok('流转:已登录访问 /login(无 next)重定向门户', loginWhileIn.status === 302
+      && location(loginWhileIn) === '/apps');
 
     r = await call(uj, location(r));
     const consentHtml = await r.text();
@@ -292,6 +300,20 @@ async function main() {
     });
     ok('错误密钥返回 invalid_client', r.status === 401 && (await r.json()).error === 'invalid_client');
 
+    /* ---------- 登录流转:无 next 登录直达门户,登出回登录页带提示 ---------- */
+    const qj = new Jar();
+    r = await call(qj, '/login');
+    const qf = extractHidden(await r.text());
+    r = await call(qj, '/login', { method: 'POST', form: { username: 'bob', password: 'BobPassw0rd!', _csrf: qf._csrf } });
+    ok('流转:无 next 登录成功直达门户 /apps', r.status === 302 && location(r) === '/apps');
+    r = await call(qj, '/logout');
+    const qlo = extractHidden(await r.text());
+    r = await call(qj, '/logout', { method: 'POST', form: { _csrf: qlo._csrf } });
+    ok('流转:登出重定向登录页并携带提示参数', r.status === 302
+      && location(r) === '/login?msg=' + encodeURIComponent('已退出登录'));
+    r = await call(qj, location(r));
+    ok('流转:登录页渲染「已退出登录」提示横幅', r.status === 200 && (await r.text()).includes('已退出登录'));
+
     /* ---------- 两步验证(TOTP + 恢复代码) ---------- */
     const totp = await import('../src/core/totp.js');
     const recovery = await import('../src/models/recovery.js');
@@ -311,7 +333,7 @@ async function main() {
     ok('错误验证码被拒', r.status === 401);
     const tf2 = extractHidden(await r.text());
     r = await call(fj, '/login/2fa', { method: 'POST', form: { code: totp.currentCode(totpSecret), _csrf: tf2._csrf, pending: tf2.pending } });
-    ok('正确 TOTP 完成登录', r.status === 302 && location(r) === '/');
+    ok('正确 TOTP 完成登录', r.status === 302 && location(r) === '/apps');
 
     // 登出后重新走一遍,验证恢复代码可以代替验证码完成登录
     r = await call(fj, '/logout');
@@ -435,7 +457,7 @@ async function main() {
     r = await call(nj, '/login');
     const nf = extractHidden(await r.text());
     r = await call(nj, '/login', { method: 'POST', form: { username: 'alice', password: 'NewPass#123', _csrf: nf._csrf } });
-    ok('找回密码:新密码可登录', r.status === 302 && location(r) === '/');
+    ok('找回密码:新密码可登录', r.status === 302 && location(r) === '/apps');
 
     const oj = new Jar();
     r = await call(oj, '/login');
@@ -478,7 +500,7 @@ async function main() {
         name: '卡萝尔', email: 'carol@example.com', _csrf: regForm._csrf,
       },
     });
-    ok('自助注册:注册成功并自动登录', r.status === 302 && location(r) === '/');
+    ok('自助注册:注册成功并自动登录', r.status === 302 && location(r) === '/apps');
     r = await call(rj, '/account');
     const carolAcct = await r.text();
     ok('自助注册:新会话可访问账号页并显示新用户名', r.status === 200 && carolAcct.includes('carol'));
@@ -854,7 +876,8 @@ async function main() {
     ok('向导:跳过创建直接完成配置', r.status === 200 && wz4.includes('配置完成'));
     const homeAfter = await call(new Jar(), '/');
     const regAfter = await call(new Jar(), '/register');
-    ok('向导:完成后全站恢复正常且注册开关生效', homeAfter.status === 200 && regAfter.status === 200);
+    ok('向导:完成后首页未登录重定向登录页', homeAfter.status === 302 && location(homeAfter) === '/login');
+    ok('向导:完成后注册开关生效且注册页可用', regAfter.status === 200 && (await regAfter.text()).includes('确认密码'));
 
     console.log(failed ? `\n${failed} 项失败` : '\n全部通过 ✔');
   } finally {

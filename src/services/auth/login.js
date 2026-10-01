@@ -72,7 +72,7 @@ function verifyPending(token) {
 
 /** GET /login */
 export function showLogin(ctx, { err, username = '' } = {}) {
-  if (ctx.session) return redirect(ctx.res, safeNext(ctx.query.get('next')));
+  if (ctx.session) return redirect(ctx.res, safeNext(ctx.query.get('next'), '') || '/apps');
   let csrf = ctx.cookies.csrf;
   if (!csrf) {
     csrf = randomToken(18);
@@ -82,6 +82,7 @@ export function showLogin(ctx, { err, username = '' } = {}) {
   sendHtml(ctx.res, err ? 401 : 200, loginPage({
     theme: ctx.theme, siteName: ctx.runtime.siteName,
     csrf, next: safeNext(nextRaw, ''), err, username,
+    msg: ctx.query.get('msg') || '',
     allowRegister: ctx.runtime.allowRegister,
   }));
 }
@@ -89,7 +90,7 @@ export function showLogin(ctx, { err, username = '' } = {}) {
 /** POST /login —— 第一因子:密码 */
 export function handleLogin(ctx) {
   const body = ctx.body || {};
-  const next = safeNext(body.next);
+  const next = safeNext(body.next, '');
   const cookieCsrf = ctx.cookies.csrf || '';
   if (!cookieCsrf || typeof body._csrf !== 'string' || body._csrf !== cookieCsrf) {
     return showLogin(ctx, { err: '页面已过期,请重新提交。' });
@@ -128,7 +129,7 @@ export function handleTwoFa(ctx) {
   if (!user || user.disabled || !user.totp_enabled || !user.totp_secret) {
     return redirect(ctx.res, '/login');
   }
-  const next = safeNext(b.next);
+  const next = safeNext(b.next, '');
   if (isLocked(ctx, user.username)) {
     return redirect(ctx.res, '/login?err=' + encodeURIComponent('失败次数过多,请 1 分钟后再试。'));
   }
@@ -162,7 +163,7 @@ export function startSession(res, user, secureCookies) {
 
 function finishLogin(ctx, user, next, cookieCsrf) {
   startSession(ctx.res, user);
-  redirect(ctx.res, next || '/');
+  redirect(ctx.res, next || '/apps');
 }
 
 /** 登录失败/受限时统一 403 页:显示当前身份,避免「我是谁、怎么切换」的困惑 */

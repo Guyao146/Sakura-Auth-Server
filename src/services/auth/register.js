@@ -33,7 +33,7 @@ const pickValues = (b = {}) => ({
 /** GET /register —— 开关关闭时不可用 */
 export function showRegister(ctx, { err, values } = {}) {
   if (!ctx.runtime.allowRegister) return redirect(ctx.res, '/login');
-  if (ctx.session) return redirect(ctx.res, '/');
+  if (ctx.session) return redirect(ctx.res, '/apps');
   let csrf = ctx.cookies.csrf;
   if (!csrf) {
     csrf = randomToken(18);
@@ -82,5 +82,5 @@ export function handleRegister(ctx) {
   setCookie(ctx.res, 'sid', sid, { maxAge: rt.sessionTtl, secure: rt.secureCookies });
   clearCookie(ctx.res, 'csrf', rt.secureCookies);
   logger.info('新用户注册', { username: user.username });
-  redirect(ctx.res, '/');
+  redirect(ctx.res, '/apps');
 }
