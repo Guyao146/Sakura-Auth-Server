@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -5,9 +6,19 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, '..', '..');
 const port = Number(process.env.PORT || 9000);
 
+/** 启动时读取一次 package.json 的版本号并缓存(心跳接口 /api/heartbeat 用) */
+const pkgVersion = (() => {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8')).version || 'unknown';
+  } catch {
+    return 'unknown';
+  }
+})();
+
 /** 环境变量默认配置。站点相关项(siteName/issuer/TTL)会被配置向导写入的
  *  settings 表覆盖,见 core/runtime.js;env 优先级高于向导值,便于容器化时锁定。 */
 export const config = {
+  version: pkgVersion,
   port,
   envBaseUrl: (process.env.BASE_URL || '').replace(/\/+$/, ''),
   dataDir: process.env.DATA_DIR || path.join(projectRoot, 'data'),

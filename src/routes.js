@@ -13,6 +13,7 @@ import * as reset from './services/auth/reset.js';
 import * as admin from './services/admin/index.js';
 import * as wizard from './services/setup/wizard.js';
 import * as portal from './services/portal.js';
+import * as api from './services/api.js';
 import { showLanding } from './services/home.js';
 import { setTheme } from './views/theme.js';
 
@@ -25,6 +26,13 @@ export function registerRoutes() {
   r('GET', '/favicon.ico', (ctx) => { ctx.res.writeHead(204); ctx.res.end(); });
   r('GET', '/', showLanding);
   r('GET', '/-/theme/:mode', setTheme);
+
+  // JSON API 套件:处理器内部自行判定登录态(未登录返回 JSON 错误,不重定向)
+  r('GET', '/api/heartbeat', api.heartbeat, { cors: true });
+  r('GET', '/api/session', api.session);
+  r('POST', '/api/login', api.login);
+  r('POST', '/api/logout', api.logout);
+  r('GET', '/api/apps', api.apps);
 
   r('GET', '/login', login.showLogin);
   r('POST', '/login', login.handleLogin);

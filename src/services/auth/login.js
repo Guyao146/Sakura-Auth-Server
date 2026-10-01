@@ -40,6 +40,8 @@ function clearFails(ctx, username) {
   attempts.delete(failKey(ctx, username));
 }
 
+export { isLocked, recordFail, clearFails };
+
 /* 二步验证的中间态:把「密码已通过的用户」签成短时 HMAC 令牌(5 分钟),不落会话 */
 let hmacKeyCache = null;
 const hmacKey = () => {
@@ -147,12 +149,19 @@ export function handleTwoFa(ctx) {
   return finishLogin(ctx, user, next, cookieCsrf);
 }
 
-function finishLogin(ctx, user, next, cookieCsrf) {
+/** 建立会话并写入 sid cookie(清除 csrf cookie);供 web 登录与 JSON API 共用,返回明文 sid */
+export function startSession(res, user, secureCookies) {
   const rt = getRuntime();
   const sid = sessions.create(user.id, randomToken(24), rt.sessionTtl);
-  setCookie(ctx.res, 'sid', sid, { maxAge: rt.sessionTtl, secure: rt.secureCookies });
-  clearCookie(ctx.res, 'csrf', rt.secureCookies);
+  const secure = secureCookies ?? rt.secureCookies;
+  setCookie(res, 'sid', sid, { maxAge: rt.sessionTtl, secure });
+  clearCookie(res, 'csrf', secure);
   logger.info('登录成功', { username: user.username });
+  return sid;
+}
+
+function finishLogin(ctx, user, next, cookieCsrf) {
+  startSession(ctx.res, user);
   redirect(ctx.res, next || '/');
 }
 
