@@ -1,13 +1,35 @@
 import { escapeHtml as esc } from '../core/util.js';
-import { authPage } from './layout.js';
+import { authPage, brandPage } from './layout.js';
 import { banner, hiddenInputs, kvRow, scopeItems, scopeIcon, SCOPE_NAMES } from './components.js';
 
-/** 登录页 */
+/* 登录页品牌面板的特性条目:线性小图标随 currentColor,零外部资源 */
+const featIcon = (paths) =>
+  `<svg viewBox="0 0 16 16" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+const LOGIN_FEATURES = [
+  {
+    icon: featIcon('<path d="M6.6 2.6h5.2c.7 0 1.2.5 1.2 1.2v8.4c0 .7-.5 1.2-1.2 1.2H6.6"/><path d="M2 8h7.2M6.8 5.6 9.2 8l-2.4 2.4"/>'),
+    title: '统一登录', desc: '一套账号通行所有接入的业务系统',
+  },
+  {
+    icon: featIcon('<path d="M8 1.9 13.3 3.7v3.5c0 3.3-2.2 5.8-5.3 6.9-3.1-1.1-5.3-3.6-5.3-6.9V3.7z"/><path d="M5.8 7.9l1.6 1.6 2.9-3.1"/>'),
+    title: '两步验证', desc: '验证器动态码为密码再加一道锁',
+  },
+  {
+    icon: featIcon('<circle cx="5.6" cy="5.8" r="2.4"/><circle cx="11.3" cy="6.5" r="1.9"/><path d="M2.2 13.4c.5-2.4 2.3-3.6 4.4-3.6M9.3 13.4c.3-1.8 1.7-2.8 3.3-2.8"/>'),
+    title: '权限组管控', desc: '按权限组精细分配应用访问范围',
+  },
+];
+
+/** 登录页(品牌化分栏:左侧品牌渐变面板 + 右侧登录表单;窄屏仅表单) */
 export function loginPage({ theme, siteName, csrf, next, err, username = '', allowRegister = false }) {
-  return authPage({
+  return brandPage({
     theme, siteName, title: `登录 · ${siteName}`,
+    tagline: '这一站,管好你所有系统的登录。',
+    features: LOGIN_FEATURES,
     content: `
       ${banner(err ? esc(err) : '', 'err')}
+      <h2 class="login-form-title">欢迎回来</h2>
+      <p class="login-form-sub muted small">登录 ${esc(siteName)} 账号,继续访问你的应用。</p>
       <form method="post" action="/login">
         ${hiddenInputs({ _csrf: csrf, next: next || '' })}
         <label for="username">用户名</label>

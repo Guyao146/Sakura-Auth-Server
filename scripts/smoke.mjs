@@ -149,8 +149,15 @@ async function main() {
     ok('未登录访问 /authorize 跳登录页', r.status === 302 && location(r).startsWith('/login?next='));
 
     r = await call(uj, location(r));
-    const loginForm = extractHidden(await r.text());
+    const loginHtml = await r.text();
+    const loginForm = extractHidden(loginHtml);
     ok('登录页带 CSRF', !!loginForm._csrf);
+    ok('登录页含品牌面板与产品口号文案', loginHtml.includes('login-brand')
+      && loginHtml.includes('管好你所有系统的登录') && loginHtml.includes('统一登录'));
+    ok('登录页保留登录表单与 CSRF/next 兼容字段', loginHtml.includes('action="/login"')
+      && loginHtml.includes('name="next"') && loginHtml.includes('autocomplete="current-password"'));
+    ok('登录页使用分栏品牌样式与窄屏断点', loginHtml.includes('.login-split')
+      && loginHtml.includes('@media(max-width:899px)'));
 
     r = await call(uj, '/login', {
       method: 'POST',
