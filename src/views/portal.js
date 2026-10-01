@@ -10,13 +10,21 @@ const scopeBadges = (app) =>
 /** 应用门户:普通用户可见的业务线(按权限组过滤),支持格子/条状两种视图;并入侧栏布局 */
 export function portalPage({ theme, siteName, user, list, msg, err, csrf, cur = '/', actions = '', view = 'grid' }) {
   const initial = (name) => (String(name || '?').trim()[0] || '?').toUpperCase();
+  // 有 Logo 用 44px 圆角图片,否则回退首字母徽标
+  const appLogo = (app) => app.logoUrl
+    ? `<img src="${esc(app.logoUrl)}" alt="" loading="lazy" style="width:44px;height:44px;border-radius:12px;object-fit:cover;flex:none">`
+    : `<div class="app-badge">${esc(initial(app.name))}</div>`;
+  const descLine = (app) => (app.description
+    ? `<div class="muted small" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(app.description)}</div>`
+    : '');
 
   const tiles = list.map((app) => `
     <div class="portal-tile">
       <div style="display:flex;align-items:center;gap:var(--s3)">
-        <div class="app-badge">${esc(initial(app.name))}</div>
+        ${appLogo(app)}
         <div style="min-width:0">
           <div class="name">${esc(app.name)}</div>
+          ${descLine(app)}
           <div class="muted small">${typeBadge(app)}</div>
         </div>
       </div>
@@ -26,13 +34,14 @@ export function portalPage({ theme, siteName, user, list, msg, err, csrf, cur = 
 
   const rows = list.map((app) => `
     <div class="app-item">
-      <div class="app-badge">${esc(initial(app.name))}</div>
+      ${appLogo(app)}
       <div style="min-width:0;flex:1">
         <div class="rowline">
           <b style="color:var(--text);font-size:15px">${esc(app.name)}</b>
           <span class="badge">${typeBadge(app)}</span>
           ${scopeBadges(app)}
         </div>
+        ${descLine(app)}
         <div class="muted small" style="word-break:break-all"><code>${esc(app.client_id)}</code></div>
       </div>
       <a class="btn btn-primary btn-sm" href="/apps/launch/${esc(app.client_id)}">进入应用</a>

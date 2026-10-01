@@ -99,7 +99,7 @@ const baseHeaders = (res) => {
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'no-referrer');
   res.setHeader('Content-Security-Policy',
-    "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; " +
+    "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; " +
     "form-action 'self'; frame-ancestors 'none'; base-uri 'self'");
 };
 

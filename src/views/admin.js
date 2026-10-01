@@ -1,6 +1,6 @@
 import { escapeHtml as esc, fmtTime } from '../core/util.js';
 import { adminPage, pageTitle } from './layout.js';
-import { banner, badge, hiddenInputs, kvRow, scopeList, scopeItems, statCard } from './components.js';
+import { banner, badge, hiddenInputs, kvRow, scopeList, scopeItems, statCard, SCOPE_NAMES } from './components.js';
 import { SCOPES, DEFAULT_CLIENT_SCOPES } from '../core/config.js';
 
 const scopeItemsFor = (selectedStr, checkedSet) =>
@@ -262,6 +262,11 @@ export function appFormPage({ theme, siteName, user, cur, err, values, allGroups
           </select>
           <label>重定向地址(每行一个,必须完全匹配)</label>
           <textarea name="redirect_uris" required placeholder="https://app.example.com/callback">${esc(urisText)}</textarea>
+          <label>应用描述(可选,展示在门户与授权页)</label>
+          <input type="text" name="description" value="${esc(v.description || '')}" maxlength="200" placeholder="一句话介绍这个应用">
+          <label>Logo 图片地址(可选,https:// 开头,留空用首字母徽标)</label>
+          <input type="text" name="logo_url" value="${esc(v.logo_url || '')}" maxlength="500"
+            placeholder="https://example.com/logo.png" spellcheck="false">
           <label>允许的 scope</label>
           ${scopeList(scopeItemsFor(null, v.scopeSet))}
           <label>可访问的权限组</label>
@@ -280,10 +285,22 @@ export function appFormPage({ theme, siteName, user, cur, err, values, allGroups
   });
 }
 
-export function appDetailPage({ theme, siteName, user, cur, app, allGroups = [], err, msg, issuer }) {
+export function appDetailPage({ theme, siteName, user, cur, app, allGroups = [], consentedUsers = [], err, msg, issuer }) {
   const a = app;
   const uris = a.uriList;
   const allowed = a.allowedGroupList || [];
+  const consentRows = consentedUsers.map((row) => `<tr>
+      <td class="wrap"><b style="color:var(--text)">${esc(row.username)}</b></td>
+      <td class="wrap">${esc(row.name || '-')}</td>
+      <td class="wrap">${row.scopeList.map((s) => badge(SCOPE_NAMES[s] || s)).join(' ')}</td>
+      <td class="muted">${fmtTime(row.granted_at)}</td>
+      <td class="rowline">
+        <form method="post" action="/admin/apps/${esc(a.client_id)}/revoke-user" style="margin:0">
+          ${hiddenInputs({ _csrf: a._csrf, user_id: row.user_id })}
+          <button class="btn btn-sm btn-danger" type="submit">撤销授权</button>
+        </form>
+      </td>
+    </tr>`).join('\n');
   return adminPage({
     theme, siteName, user, cur, active: 'apps', title: `${a.name} · ${siteName}`,
     content: `
@@ -296,6 +313,8 @@ export function appDetailPage({ theme, siteName, user, cur, app, allGroups = [],
         ${a.token_auth === 'none' ? '' : kvRow('client_secret', '<span class="muted">已加密存储,仅创建/重置时展示一次</span>')}
         ${kvRow('发现文档', esc(issuer + '/.well-known/openid-configuration'))}
         ${kvRow('访问限制', allowed.length ? allowed.map(esc).join('、') : '<span class="muted">不限制(所有用户可访问)</span>')}
+        ${kvRow('应用描述', a.description ? esc(a.description) : '<span class="muted">未设置</span>')}
+        ${kvRow('Logo 地址', a.logoUrl ? esc(a.logoUrl) : '<span class="muted">未设置(门户与授权页用首字母徽标)</span>')}
         <h3>端点</h3>
         ${kvRow('授权端点', esc(issuer + '/authorize'))}
         ${kvRow('令牌端点', esc(issuer + '/token'))}
@@ -310,6 +329,11 @@ export function appDetailPage({ theme, siteName, user, cur, app, allGroups = [],
           <input type="text" name="name" value="${esc(a.name)}" required maxlength="40">
           <label>重定向地址(每行一个)</label>
           <textarea name="redirect_uris" required>${esc(uris.join('\n'))}</textarea>
+          <label>应用描述(可选,展示在门户与授权页)</label>
+          <input type="text" name="description" value="${esc(a.description || '')}" maxlength="200" placeholder="一句话介绍这个应用">
+          <label>Logo 图片地址(可选,https:// 开头,留空用首字母徽标)</label>
+          <input type="text" name="logo_url" value="${esc(a.logoUrl || '')}" maxlength="500"
+            placeholder="https://example.com/logo.png" spellcheck="false">
           <label>允许的 scope</label>
           ${scopeList(scopeItemsFor(null, new Set(a.scopeList)))}
           <label>可访问的权限组</label>
@@ -321,6 +345,16 @@ export function appDetailPage({ theme, siteName, user, cur, app, allGroups = [],
             <span>每次访问都询问用户确认</span></label>
           <div class="actions"><button class="btn btn-primary" type="submit">保存设置</button></div>
         </form>
+      </div>
+      <div class="card">
+        <h3 style="margin-top:0">已授权用户</h3>
+        <p class="muted small" style="margin:0 0 var(--s2)">撤销后,该用户对此应用的记住授权与现有令牌立即失效,下次访问需重新确认。</p>
+        ${consentRows
+          ? `<div class="tblwrap"><table class="tbl">
+              <thead><tr><th>用户名</th><th>姓名</th><th>授权范围</th><th>授权时间</th><th>操作</th></tr></thead>
+              <tbody>${consentRows}</tbody>
+            </table></div>`
+          : '<p class="muted" style="margin:var(--s1) 0 0">暂无用户授权。</p>'}
       </div>
       <div class="card">
         <h3 style="margin-top:0">危险操作</h3>

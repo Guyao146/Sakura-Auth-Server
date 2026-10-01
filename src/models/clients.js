@@ -8,25 +8,28 @@ export const list = () => getDb().prepare('SELECT * FROM clients ORDER BY create
 export const count = () => getDb().prepare('SELECT COUNT(*) AS n FROM clients').get().n;
 
 /** redirectUris: string[];scopes: 空格分隔;public=true 时无密钥(token_auth=none);
- *  allowedGroups: 可访问的权限组名数组,空数组 = 不限制 */
-export function create({ name, redirectUris, scopes, isPublic, pkceRequired, requireConsent = true, secretHash = null, allowedGroups = [] }) {
+ *  allowedGroups: 可访问的权限组名数组,空数组 = 不限制;
+ *  description: 应用描述(门户/授权页展示);logoUrl: https 图片地址,空串用首字母徽标 */
+export function create({ name, redirectUris, scopes, isPublic, pkceRequired, requireConsent = true, secretHash = null, allowedGroups = [], description = '', logoUrl = '' }) {
   const clientId = 'app-' + randomToken(9);
   getDb().prepare(
-    `INSERT INTO clients (client_id, name, secret_hash, redirect_uris, scopes, token_auth, pkce_required, require_consent, allowed_groups, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO clients (client_id, name, secret_hash, redirect_uris, scopes, token_auth, pkce_required, require_consent, allowed_groups, description, logo_url, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     clientId, name, secretHash, JSON.stringify(redirectUris), scopes,
     isPublic ? 'none' : 'client_secret_basic',
-    pkceRequired ? 1 : 0, requireConsent ? 1 : 0, JSON.stringify(allowedGroups || []), nowSec()
+    pkceRequired ? 1 : 0, requireConsent ? 1 : 0, JSON.stringify(allowedGroups || []),
+    description || '', logoUrl || '', nowSec()
   );
   return byId(clientId);
 }
 
-export function update(clientId, { name, redirectUris, scopes, pkceRequired, requireConsent, allowedGroups, secretHash = null }) {
+export function update(clientId, { name, redirectUris, scopes, pkceRequired, requireConsent, allowedGroups, description, logoUrl, secretHash = null }) {
   const cur = byId(clientId);
   if (!cur) return;
   getDb().prepare(
-    `UPDATE clients SET name = ?, redirect_uris = ?, scopes = ?, pkce_required = ?, require_consent = ?, allowed_groups = ?
+    `UPDATE clients SET name = ?, redirect_uris = ?, scopes = ?, pkce_required = ?, require_consent = ?, allowed_groups = ?,
+     description = ?, logo_url = ?
      ${secretHash ? ', secret_hash = ?' : ''} WHERE client_id = ?`
   ).run(
     name ?? cur.name,
@@ -35,6 +38,8 @@ export function update(clientId, { name, redirectUris, scopes, pkceRequired, req
     pkceRequired !== undefined ? (pkceRequired ? 1 : 0) : cur.pkce_required,
     requireConsent !== undefined ? (requireConsent ? 1 : 0) : cur.require_consent,
     allowedGroups !== undefined ? JSON.stringify(allowedGroups || []) : cur.allowed_groups,
+    description !== undefined ? (description || '') : cur.description,
+    logoUrl !== undefined ? (logoUrl || '') : cur.logo_url,
     ...(secretHash ? [secretHash] : []),
     clientId
   );
@@ -56,6 +61,8 @@ export function withUris(client) {
     uriList: JSON.parse(client.redirect_uris || '[]'),
     scopeList: (client.scopes || '').split(/\s+/).filter(Boolean),
     allowedGroupList: allowedGroupNames(client),
+    description: client.description || '',
+    logoUrl: client.logo_url || '',
   };
 }
 

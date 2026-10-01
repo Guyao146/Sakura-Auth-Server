@@ -3,12 +3,13 @@ import * as clients from '../../models/clients.js';
 import * as groups from '../../models/groups.js';
 import * as sessions from '../../models/sessions.js';
 import * as tokens from '../../models/tokens.js';
+import * as consents from '../../models/consents.js';
 import * as recovery from '../../models/recovery.js';
 import { getRuntime, updateRuntime } from '../../core/runtime.js';
 import * as settingsApi from '../../models/settings.js';
 import { hashPassword } from '../../core/password.js';
 import { randomToken } from '../../core/crypto.js';
-import { splitLines, redirectUri as validUri } from '../../core/util.js';
+import { splitLines, redirectUri as validUri, httpUrl } from '../../core/util.js';
 import { SCOPES, DEFAULT_CLIENT_SCOPES } from '../../core/config.js';
 import { sendHtml, redirect } from '../../core/http.js';
 import { logger } from '../../core/logger.js';
@@ -241,7 +242,18 @@ function validateAppInput(b) {
   }
   const scopes = collectScopes(b);
   if (!scopes.length) return { error: '至少勾选一个 scope。' };
-  return { name, uris, scopes };
+  const description = String(b.description || '').trim();
+  if (description.length > 200) return { error: '应用描述不超过 200 字。' };
+  const logoRaw = String(b.logo_url || '').trim();
+  let logoUrl = '';
+  if (logoRaw) {
+    const canonical = httpUrl(logoRaw);
+    if (!canonical || !canonical.startsWith('https://')) {
+      return { error: 'Logo 图片地址不合法,需以 https:// 开头。' };
+    }
+    logoUrl = canonical;
+  }
+  return { name, uris, scopes, description, logoUrl };
 }
 
 export function listApps(ctx) {
@@ -260,6 +272,7 @@ export function newAppForm(ctx, { err, values } = {}) {
     cur: ctx.url.pathname, err, allGroups: groups.list(),
     values: values || {
       name: '', client_type: 'confidential', redirect_uris: '',
+      description: '', logo_url: '',
       scopeSet: new Set(DEFAULT_CLIENT_SCOPES.split(/\s+/)),
       allowedGroupSet: new Set(),
       pkce_required: true, require_consent: true,
@@ -287,7 +300,7 @@ export function createApp(ctx) {
   const app = clients.create({
     name: v.name, redirectUris: v.uris, scopes: v.scopes.join(' '),
     isPublic, pkceRequired: pkce, requireConsent: b.require_consent === '1',
-    secretHash, allowedGroups,
+    secretHash, allowedGroups, description: v.description, logoUrl: v.logoUrl,
   });
   record(ctx, 'admin.app_created', v.name);
   if (secret) {
@@ -302,10 +315,13 @@ export function createApp(ctx) {
 export function appDetail(ctx) {
   const app = clients.byId(ctx.params.id);
   if (!app) return redirect(ctx.res, '/admin/apps?err=' + encodeURIComponent('应用不存在。'));
+  const consentedUsers = consents.listForClient(app.client_id)
+    .map((row) => ({ ...row, scopeList: (row.scope || '').split(/\s+/).filter(Boolean) }));
   sendHtml(ctx.res, 200, appDetailPage({
     theme: ctx.theme, siteName: getRuntime().siteName, user: ctx.user,
     cur: ctx.url.pathname, allGroups: groups.list(),
     app: { ...clients.withUris(app), _csrf: CSRF(ctx) },
+    consentedUsers,
     issuer: getRuntime().issuer,
     msg: ctx.query.get('msg'), err: ctx.query.get('err'),
   }));
@@ -323,9 +339,26 @@ export function updateApp(ctx) {
     pkceRequired: app.token_auth === 'none' ? true : b.pkce_required === '1',
     requireConsent: b.require_consent === '1',
     allowedGroups: collectAllowedGroups(b),
+    description: v.description, logoUrl: v.logoUrl,
   });
   record(ctx, 'admin.app_updated', v.name);
   redirect(ctx.res, `/admin/apps/${app.client_id}?msg=` + encodeURIComponent('设置已保存。'));
+}
+
+/** 撤销单个用户对某应用的授权:删除记住授权并吊销其在该应用下的全部令牌 */
+export function revokeAppUserConsent(ctx) {
+  const app = clients.byId(ctx.params.id);
+  if (!app) return redirect(ctx.res, '/admin/apps?err=' + encodeURIComponent('应用不存在。'));
+  if (ctx.body?._csrf !== CSRF(ctx)) return redirect(ctx.res, `/admin/apps/${app.client_id}?err=` + encodeURIComponent('页面已过期,请重试。'));
+  const target = users.byId(String(ctx.body?.user_id || ''));
+  if (!target) return redirect(ctx.res, `/admin/apps/${app.client_id}?err=` + encodeURIComponent('用户不存在。'));
+  if (!consents.get(target.id, app.client_id)) {
+    return redirect(ctx.res, `/admin/apps/${app.client_id}?err=` + encodeURIComponent(`用户 ${target.username} 尚未授权该应用。`));
+  }
+  consents.revoke(target.id, app.client_id);
+  tokens.revokeForClientUser(app.client_id, target.id);
+  logger.info('管理员撤销用户对应用的授权', { client: app.client_id, user: target.username });
+  redirect(ctx.res, `/admin/apps/${app.client_id}?msg=` + encodeURIComponent(`已撤销用户 ${target.username} 对该应用的授权,其现有令牌已一并失效。`));
 }
 
 export function regenerateSecret(ctx) {

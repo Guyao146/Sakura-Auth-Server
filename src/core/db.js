@@ -33,6 +33,8 @@ CREATE TABLE IF NOT EXISTS clients (
   pkce_required   INTEGER NOT NULL DEFAULT 0,
   require_consent INTEGER NOT NULL DEFAULT 1,
   allowed_groups  TEXT NOT NULL DEFAULT '[]',
+  description     TEXT NOT NULL DEFAULT '',
+  logo_url        TEXT NOT NULL DEFAULT '',
   created_at      INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS sessions (
@@ -128,6 +130,12 @@ function migrate() {
   const ccols = db.prepare('PRAGMA table_info(clients)').all().map((c) => c.name);
   if (!ccols.includes('allowed_groups')) {
     db.exec("ALTER TABLE clients ADD COLUMN allowed_groups TEXT NOT NULL DEFAULT '[]'");
+  }
+  if (!ccols.includes('description')) {
+    db.exec("ALTER TABLE clients ADD COLUMN description TEXT NOT NULL DEFAULT ''");
+  }
+  if (!ccols.includes('logo_url')) {
+    db.exec("ALTER TABLE clients ADD COLUMN logo_url TEXT NOT NULL DEFAULT ''");
   }
   const acols = db.prepare('PRAGMA table_info(auth_codes)').all().map((c) => c.name);
   if (!acols.includes('launch_verifier')) {

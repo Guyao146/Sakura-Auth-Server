@@ -13,6 +13,15 @@ export function listForUser(userId) {
   ).all(userId);
 }
 
+/** 某应用的全部已授权用户(联 users 取用户名/姓名;管理端应用详情用) */
+export function listForClient(clientId) {
+  return getDb().prepare(
+    `SELECT cs.user_id, u.username, u.name, cs.scope, cs.granted_at
+     FROM consents cs JOIN users u ON u.id = cs.user_id
+     WHERE cs.client_id = ? ORDER BY cs.granted_at DESC`
+  ).all(clientId);
+}
+
 /** 撤销某应用的授权 */
 export const revoke = (userId, clientId) =>
   getDb().prepare('DELETE FROM consents WHERE user_id = ? AND client_id = ?').run(userId, clientId);
