@@ -1,6 +1,6 @@
 {
   "name": "oauth2-idp",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "private": true,
   "type": "module",
   "description": "类 authentik 的轻量 OAuth2 / OpenID Connect 认证服务(零依赖,Node >= 22.5)",
