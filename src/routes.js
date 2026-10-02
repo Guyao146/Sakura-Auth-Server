@@ -115,10 +115,15 @@ export function registerRoutes() {
   r('POST', '/admin/apps/create', admin.createApp, { auth: 'admin' });
   r('GET', '/admin/apps/:id', admin.appDetail, { auth: 'admin' });
   r('POST', '/admin/apps/:id/update', admin.updateApp, { auth: 'admin' });
+  r('POST', '/admin/apps/:id/logo', admin.uploadAppLogo, { auth: 'admin' });
+  r('POST', '/admin/apps/:id/logo/delete', admin.deleteAppLogo, { auth: 'admin' });
   r('POST', '/admin/apps/:id/secret', admin.regenerateSecret, { auth: 'admin' });
   r('POST', '/admin/apps/:id/revoke-tokens', admin.revokeAppTokens, { auth: 'admin' });
   r('POST', '/admin/apps/:id/revoke-user', admin.revokeAppUserConsent, { auth: 'admin' });
   r('POST', '/admin/apps/:id/delete', admin.deleteApp, { auth: 'admin' });
+
+  // 应用 Logo 静态服务(匿名可访问;文件名严格白名单防目录穿越)
+  r('GET', '/uploads/:file', admin.serveUpload);
 
   // 审计日志:管理端查看、CSV 导出与清空(危险操作)
   r('GET', '/admin/audit', audit.showAudit, { auth: 'admin' });

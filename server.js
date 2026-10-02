@@ -20,10 +20,12 @@ import { setupGate } from './src/services/setup/wizard.js';
 import { forbidden } from './src/services/auth/login.js';
 import { themeFromCookies } from './src/views/theme.js';
 import { errorPage } from './src/views/error.js';
+import { ensureUploadsDir } from './src/core/upload.js';
 
 initDb();
 initKeys();
 bindSettings(() => settings.getMap());
+ensureUploadsDir(); // 应用 Logo 等上传文件目录({DATA_DIR}/uploads)
 
 const router = registerRoutes();
 
@@ -110,8 +112,15 @@ const server = (useTls ? https : http).createServer(serverOptions, async (req, r
       cookies, theme, session, user, runtime: rt, body: null,
     };
     if (method === 'POST') {
-      const raw = await readBody(req, config.bodyLimit);
-      ctx.body = parseBody(raw, String(req.headers['content-type'] || ''));
+      const contentType = String(req.headers['content-type'] || '');
+      if (contentType.toLowerCase().includes('multipart/form-data')) {
+        // multipart 含二进制文件,文本 readBody 会破坏内容:跳过读取并保留 req 可读流,
+        // 由上传 handler 内部用 parseMultipart 自行按字节读取
+        ctx.body = null;
+      } else {
+        const raw = await readBody(req, config.bodyLimit);
+        ctx.body = parseBody(raw, contentType);
+      }
     }
     await m.route.handler(ctx);
   } catch (err) {

@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import * as users from '../../models/users.js';
 import * as clients from '../../models/clients.js';
 import * as groups from '../../models/groups.js';
@@ -11,9 +13,14 @@ import { hashPassword } from '../../core/password.js';
 import { randomToken } from '../../core/crypto.js';
 import { splitLines, redirectUri as validUri, httpUrl } from '../../core/util.js';
 import { SCOPES, DEFAULT_CLIENT_SCOPES } from '../../core/config.js';
-import { sendHtml, redirect } from '../../core/http.js';
+import { sendHtml, sendJson, redirect } from '../../core/http.js';
 import { logger } from '../../core/logger.js';
+import {
+  parseMultipart, sniffImageExt, ensureUploadsDir, uploadsDir,
+  uploadContentType, UPLOAD_FILE_RE,
+} from '../../core/upload.js';
 import { dashboardPage, groupsPage, groupDetailPage, usersPage, userFormPage, appsPage, appFormPage, appDetailPage, secretRevealPage } from '../../views/admin.js';
+import { errorPage } from '../../views/error.js';
 import { record } from '../audit.js';
 import * as appHealth from '../app-health.js';
 
@@ -516,7 +523,88 @@ export function deleteApp(ctx) {
   const app = clients.byId(ctx.params.id);
   if (!app) return redirect(ctx.res, '/admin/apps?err=' + encodeURIComponent('应用不存在。'));
   if (ctx.body?._csrf !== CSRF(ctx)) return redirect(ctx.res, '/admin/apps?err=' + encodeURIComponent('页面已过期,请重试。'));
+  removeLogoFile(app); // 应用删除时一并清理其上传的 Logo 文件
   clients.remove(app.client_id);
   record(ctx, 'admin.app_deleted', app.name);
   redirect(ctx.res, '/admin/apps?msg=' + encodeURIComponent(`应用 ${app.name} 已删除。`));
+}
+
+/* ---------------- 应用 Logo:直接上传 / 删除 / 静态服务 ---------------- */
+
+/** Logo 单文件大小上限:2MB */
+export const MAX_LOGO_SIZE = 2 * 1024 * 1024;
+
+/** 删除应用当前的上传 Logo 文件(仅清理本应用名下的 /uploads/ 文件;外链地址不动) */
+function removeLogoFile(app) {
+  const url = app?.logo_url || '';
+  if (!url.startsWith('/uploads/')) return;
+  const name = url.slice('/uploads/'.length);
+  // 双重保险:文件名须过严格白名单且确属本应用(clientId 前缀)
+  if (!UPLOAD_FILE_RE.test(name) || !name.startsWith(app.client_id + '.')) return;
+  try { fs.unlinkSync(path.join(uploadsDir(), name)); } catch { /* 文件不存在视为已清理 */ }
+}
+
+/** POST /admin/apps/:id/logo —— multipart 上传应用 Logo(魔数校验,覆盖旧文件,更新 logo_url) */
+export async function uploadAppLogo(ctx) {
+  const app = clients.byId(ctx.params.id);
+  if (!app) return redirect(ctx.res, '/admin/apps?err=' + encodeURIComponent('应用不存在。'));
+  const back = (e) => redirect(ctx.res, `/admin/apps/${app.client_id}?err=` + encodeURIComponent(e));
+  let fields, files;
+  try {
+    ({ fields, files } = await parseMultipart(ctx.req, { maxSize: MAX_LOGO_SIZE }));
+  } catch (err) {
+    if (err?.status === 413) throw err; // 管线统一渲染 413 页
+    if (err?.status === 400) return back('上传报文不完整,请重新提交。');
+    throw err;
+  }
+  // multipart 中 CSRF 位于文本字段 _csrf
+  if (fields._csrf !== CSRF(ctx)) return back('页面已过期,请重试。');
+  const file = files.logo;
+  if (!file || !file.data?.length) return back('请选择要上传的图片文件。');
+  const ext = sniffImageExt(file.data);
+  if (!ext) {
+    return sendHtml(ctx.res, 415, errorPage({
+      theme: ctx.theme, siteName: getRuntime().siteName,
+      title: '不支持的图片格式',
+      message: 'Logo 仅支持 PNG / JPEG / WebP / GIF 图片(按文件内容校验),且不超过 2MB。',
+    }));
+  }
+  ensureUploadsDir();
+  removeLogoFile(app); // 扩展名变化时清掉旧文件,避免残留
+  const name = `${app.client_id}.${ext}`;
+  fs.writeFileSync(path.join(uploadsDir(), name), file.data);
+  clients.update(app.client_id, { logoUrl: `/uploads/${name}` });
+  record(ctx, 'admin.app_logo_uploaded', app.name);
+  logger.info('管理员上传应用 Logo', { client: app.client_id, file: name, size: file.data.length });
+  redirect(ctx.res, `/admin/apps/${app.client_id}?msg=` + encodeURIComponent('应用 Logo 已上传。'));
+}
+
+/** POST /admin/apps/:id/logo/delete —— 清理 Logo 文件并把 logo_url 置空 */
+export function deleteAppLogo(ctx) {
+  const app = clients.byId(ctx.params.id);
+  if (!app) return redirect(ctx.res, '/admin/apps?err=' + encodeURIComponent('应用不存在。'));
+  if (ctx.body?._csrf !== CSRF(ctx)) return redirect(ctx.res, `/admin/apps/${app.client_id}?err=` + encodeURIComponent('页面已过期,请重试。'));
+  removeLogoFile(app);
+  clients.update(app.client_id, { logoUrl: '' });
+  record(ctx, 'admin.app_logo_deleted', app.name);
+  redirect(ctx.res, `/admin/apps/${app.client_id}?msg=` + encodeURIComponent('应用 Logo 已删除,门户与授权页恢复首字母徽标。'));
+}
+
+/** GET /uploads/:file —— 上传文件静态服务(匿名;Logo 属公开品牌资产)。文件名严格白名单,防目录穿越 */
+export function serveUpload(ctx) {
+  const name = String(ctx.params.file || '');
+  const m = name.match(UPLOAD_FILE_RE);
+  const notFound = () => sendJson(ctx.res, 404, { error: 'not_found' });
+  if (!m) return notFound();
+  let data;
+  try {
+    data = fs.readFileSync(path.join(uploadsDir(), name));
+  } catch {
+    return notFound();
+  }
+  ctx.res.setHeader('Content-Type', uploadContentType(m[2]));
+  ctx.res.setHeader('Cache-Control', 'public, max-age=604800');
+  ctx.res.setHeader('X-Content-Type-Options', 'nosniff');
+  ctx.res.writeHead(200, { 'Content-Length': data.length });
+  ctx.res.end(data);
 }
