@@ -1,6 +1,6 @@
 # 宝塔面板部署(Ubuntu)
 
-> Wiki 文档版本:`v1.0.0` · 更新日期:`2026-09-29`(SakuraID 独立版本)
+> Wiki 文档版本:`v1.1.0` · 更新日期:`2026-10-01`(SakuraID 独立版本)
 
 宝塔部署分四步:装 Node → 起服务 → 建站反代 → 跑配置向导。全程不需要编译依赖,项目零 npm 包。
 
@@ -56,6 +56,10 @@ location / {
 ```
 
 保存后用「SSL」页签签发 Let's Encrypt 证书并开启强制 HTTPS。
+
+## 可选:TLS 直连(不经宝塔反代)
+
+不使用宝塔反向代理时,也可以让服务自身直接对外 HTTPS:设置环境变量 `TLS_CERT`(证书)与 `TLS_KEY`(私钥)后服务以 HTTPS 启动并自动附加 HSTS,`TLS_REDIRECT_PORT` 可另起一个 HTTP 端口把全部请求 301 到 HTTPS。PM2 方式在 `ecosystem.config.js` 的 `env` 里加这三项后重启即可。证书放置、端口映射与完整示例见 [Docker 部署的「TLS 直连」](docker.md#tls-直连不用反向代理),变量含义两种部署方式一致。
 
 ## 第 4 步:配置向导
 

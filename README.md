@@ -18,6 +18,15 @@ node server.js
 
 零 npm 依赖,无需 `npm install`;Windows / Linux / macOS 均可直接运行。
 
+## 部署
+
+两种官方部署方式:
+
+1. **Docker Compose(推荐)**:拉取官方镜像或本地构建,数据落在 `./data` 卷,升级只换镜像 —— 见 `deploy/docker.md`;
+2. **Node + systemd**:Ubuntu 上以 systemd 托管 Node 进程,开机自启、崩溃拉起 —— 见 `deploy/node.md`。
+
+宝塔面板(PM2)部署见 `deploy/baotao.md`;环境变量完整清单见 `.env.example`。
+
 ## 当前状态
 
 | 项 | 状态 |
@@ -26,7 +35,7 @@ node server.js
 | 依赖 | 零 npm 依赖 |
 | 存储 | SQLite(WAL,单文件,位于 `data/`) |
 | 令牌签名 | RS256(RSA-2048,密钥自动生成并落库)+ JWKS |
-| 部署 | Docker / docker-compose / PM2(宝塔),见 `deploy/` |
+| 部署 | Docker Compose(拉取镜像或本地构建)/ Node + systemd / 宝塔 PM2,见 `deploy/` |
 
 ## 功能概览
 
