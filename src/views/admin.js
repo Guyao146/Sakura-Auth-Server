@@ -514,9 +514,20 @@ export function secretRevealPage({ theme, siteName, user, cur, app, secret, issu
 }
 
 /* ---------------- 审计日志 ---------------- */
-export function auditPage({ theme, siteName, user, cur, list, allActions = [], filters = {}, total = 0, csrf, msg, err }) {
+export function auditPage({ theme, siteName, user, cur, list, allActions = [], filters = {}, total = 0, page = 1, pages = 1, perPage = 50, csrf, msg, err }) {
   const selAction = filters.action || '';
   const q = filters.q || '';
+  // 链接构造:保留当前 action/q 筛选参数,可覆盖 page(分页/导出共用)
+  const buildQs = (over = {}) => {
+    const usp = new URLSearchParams();
+    if (selAction) usp.set('action', selAction);
+    if (q) usp.set('q', q);
+    if (over.page) usp.set('page', over.page);
+    const qs = usp.toString();
+    return qs ? `?${qs}` : '';
+  };
+  const pageHref = (p) => `/admin/audit${buildQs({ page: p })}`;
+  const exportHref = `/admin/audit/export.csv${buildQs()}`;
   const options = allActions.map((a) =>
     `<option value="${esc(a)}"${a === selAction ? ' selected' : ''}>${esc(a)}</option>`).join('\n');
   const filterForm = `
@@ -528,7 +539,8 @@ export function auditPage({ theme, siteName, user, cur, list, allActions = [], f
         <input type="text" name="q" value="${esc(q)}" placeholder="操作者或详情关键词" style="width:200px" aria-label="关键词">
         <button class="btn" type="submit">筛选</button>
         ${selAction || q ? '<a class="btn" href="/admin/audit">重置</a>' : ''}
-      </form>`;
+      </form>
+      <a class="btn" href="${esc(exportHref)}">导出 CSV</a>`;
   const clearForm = `
       <form method="post" action="/admin/audit/clear" class="rowline" style="gap:var(--s2)">
         ${hiddenInputs({ _csrf: csrf })}
@@ -542,10 +554,20 @@ export function auditPage({ theme, siteName, user, cur, list, allActions = [], f
       <td class="wrap">${esc(row.detail || '-')}</td>
       <td class="muted wrap">${esc(row.ip || '-')}</td>
     </tr>`).join('\n');
+  // 分页页脚:上一页/下一页(保留筛选参数),边界用禁用样式占位
+  const pagerBtn = (label, target, enabled) => (enabled
+    ? `<a class="btn" href="${esc(pageHref(target))}">${label}</a>`
+    : `<span class="btn" style="opacity:.45;cursor:not-allowed" aria-disabled="true">${label}</span>`);
+  const pager = `
+      <div class="rowline" style="gap:var(--s2);margin-top:var(--s3)">
+        ${pagerBtn('上一页', page - 1, page > 1)}
+        <span class="muted small">第 ${page} / ${pages} 页 · 共 ${total} 条</span>
+        ${pagerBtn('下一页', page + 1, page < pages)}
+      </div>`;
   return adminPage({
     theme, siteName, user, cur, active: 'audit', title: `审计日志 · ${siteName}`,
     headTitle: `<h3>审计日志</h3>
-    <p class="muted small">登录、授权与关键管理动作的留痕记录 · 共 ${total} 条,当前展示 ${list.length} 条</p>`,
+    <p class="muted small">登录、授权与关键管理动作的留痕记录 · 共 ${total} 条,每页 ${perPage} 条,当前展示 ${list.length} 条</p>`,
     actions: `${filterForm}${clearForm}`,
     content: `
       ${banner(msg ? esc(msg) : '', 'ok')}
@@ -554,6 +576,7 @@ export function auditPage({ theme, siteName, user, cur, list, allActions = [], f
         <thead><tr><th>时间</th><th>操作者</th><th>动作</th><th>详情</th><th>IP</th></tr></thead>
         <tbody>${rows || '<tr><td colspan="5" class="muted">暂无审计记录。</td></tr>'}</tbody>
       </table></div>
-      <p class="muted small">审计日志滚动保留最新 5000 条,不随过期数据清理;清空后历史留痕无法找回。</p>`,
+      ${pager}
+      <p class="muted small">审计日志滚动保留最新 5000 条,不随过期数据清理;清空后历史留痕无法找回。导出 CSV 最多包含最新 5000 条。</p>`,
   });
 }

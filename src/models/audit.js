@@ -19,8 +19,8 @@ export function log({ actor = 'anonymous', action, detail = '', ip = '' }) {
   }
 }
 
-/** 按时间倒序列出:可选 action 精确过滤、actor/detail 关键词 LIKE 过滤 */
-export function list({ limit = 200, action = '', q = '' } = {}) {
+/** 组装筛选条件:action 精确匹配 + actor/detail 关键词 LIKE(list/listPaged 共用) */
+function buildWhere(action = '', q = '') {
   const conds = [];
   const params = [];
   if (action) {
@@ -33,10 +33,28 @@ export function list({ limit = 200, action = '', q = '' } = {}) {
     const like = `%${kw}%`;
     params.push(like, like);
   }
-  const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
+  return { where: conds.length ? `WHERE ${conds.join(' AND ')}` : '', params };
+}
+
+/** 按时间倒序列出:可选 action 精确过滤、actor/detail 关键词 LIKE 过滤 */
+export function list({ limit = 200, action = '', q = '' } = {}) {
+  const { where, params } = buildWhere(action, q);
   return getDb()
     .prepare(`SELECT * FROM audit_logs ${where} ORDER BY ts DESC, rowid DESC LIMIT ?`)
     .all(...params, Math.max(1, Number(limit) || 200));
+}
+
+/** 分页列出(page 从 1 起):返回 { rows, total, pages, page },page 越界自动收敛到有效页码 */
+export function listPaged({ page = 1, perPage = 50, action = '', q = '' } = {}) {
+  const size = Math.max(1, Number(perPage) || 50);
+  const { where, params } = buildWhere(action, q);
+  const total = getDb().prepare(`SELECT COUNT(*) AS n FROM audit_logs ${where}`).get(...params).n;
+  const pages = Math.max(1, Math.ceil(total / size));
+  const cur = Math.min(Math.max(1, Math.floor(Number(page) || 1)), pages);
+  const rows = getDb()
+    .prepare(`SELECT * FROM audit_logs ${where} ORDER BY ts DESC, rowid DESC LIMIT ? OFFSET ?`)
+    .all(...params, size, (cur - 1) * size);
+  return { rows, total, pages, page: cur };
 }
 
 export const count = () => getDb().prepare('SELECT COUNT(*) AS n FROM audit_logs').get().n;
