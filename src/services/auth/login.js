@@ -17,7 +17,7 @@ import { errorPage } from '../../views/error.js';
 import { record } from '../audit.js';
 
 /* 登录失败限流:同 IP+用户名 5 次失败锁定 60 秒 */
-const MAX_FAILS = 5, LOCK_SEC = 60;
+const MAX_FAILS = 5, LOCK_SEC = 60, MAX_ATTEMPT_KEYS = 5000;
 const attempts = new Map();
 
 function failKey(ctx, username) {
@@ -25,13 +25,29 @@ function failKey(ctx, username) {
   return `${ip}|${String(username || '').toLowerCase()}`;
 }
 
+/** 惰性清理:删除已过锁定期的计数,并对 Map 硬上限兜底(防内存无限增长) */
+function pruneAttempts() {
+  if (attempts.size === 0) return;
+  const now = Date.now();
+  if (attempts.size > 64) {
+    for (const [k, v] of attempts) {
+      if (now - v.first > LOCK_SEC * 1000) attempts.delete(k);
+    }
+  }
+  while (attempts.size > MAX_ATTEMPT_KEYS) {
+    attempts.delete(attempts.keys().next().value);
+  }
+}
+
 function isLocked(ctx, username) {
+  pruneAttempts();
   const rec = attempts.get(failKey(ctx, username));
   return rec && rec.count >= MAX_FAILS && Date.now() - rec.first < LOCK_SEC * 1000;
 }
 
 /** 记一次凭据失败(限流计数 + 审计;web 与 /api 登录共用,action 可区分两步验证失败) */
 function recordFail(ctx, username, action = 'auth.login_failed') {
+  pruneAttempts();
   const key = failKey(ctx, username);
   const rec = attempts.get(key);
   if (!rec || Date.now() - rec.first > LOCK_SEC * 1000) attempts.set(key, { count: 1, first: Date.now() });

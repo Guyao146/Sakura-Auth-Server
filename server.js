@@ -3,6 +3,8 @@
  * 入口:初始化(数据库 → 签名密钥 → 运行时配置)→ 组装请求管线 → 监听。
  */
 import http from 'node:http';
+import https from 'node:https';
+import fs from 'node:fs';
 import { config } from './src/core/config.js';
 import { logger } from './src/core/logger.js';
 import { initDb, purgeExpired } from './src/core/db.js';
@@ -54,8 +56,14 @@ function resolveSession(cookies) {
   return { session: row, user: u };
 }
 
-const server = http.createServer(async (req, res) => {
+// 传输加密:TLS_CERT/TLS_KEY 同时提供时走 HTTPS(并全局附加 HSTS),否则 HTTP
+const useTls = !!(config.tls.cert && config.tls.key);
+const serverOptions = useTls
+  ? { cert: fs.readFileSync(config.tls.cert), key: fs.readFileSync(config.tls.key) }
+  : {};
+const server = (useTls ? https : http).createServer(serverOptions, async (req, res) => {
   const started = Date.now();
+  if (useTls) res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   let method = req.method.toUpperCase();
   let url;
   try {
@@ -132,12 +140,26 @@ setInterval(() => {
   try { purgeExpired(); } catch (e) { logger.error('过期数据清理失败', { err: String(e) }); }
 }, 10 * 60 * 1000).unref();
 
+// 可选:TLS_REDIRECT_PORT 指定时,另起一个 HTTP 端口把全部请求 301 到 HTTPS
+if (useTls && config.tls.redirectPort) {
+  const proto = config.tls.redirectPort === 443 ? 'https' : `https:${config.port}`;
+  http.createServer((req, res) => {
+    const host = (req.headers.host || '').split(':')[0];
+    res.writeHead(301, { Location: `${proto}://${host}${req.url}` });
+    res.end();
+  }).listen(config.tls.redirectPort, () => {
+    logger.info(`HTTP 跳转端口已启动:${config.tls.redirectPort} → HTTPS ${config.port}`);
+  });
+}
+
 server.listen(config.port, () => {
   const rt = getRuntime();
   const line = '='.repeat(56);
+  const scheme = useTls ? 'https' : 'http';
   console.log(`\n${line}\n  ${rt.siteName} 已启动\n`);
-  console.log(`  本机访问   http://localhost:${config.port}`);
+  console.log(`  本机访问   ${scheme}://localhost:${config.port}`);
   console.log(`  Issuer     ${rt.issuer}`);
+  console.log(`  传输加密   ${useTls ? 'HTTPS(TLS 直连 + HSTS)' : 'HTTP(反代终止 TLS 时请配置 BASE_URL 为 https)'}`);
   console.log(`  数据目录   ${config.dataDir}`);
   if (!rt.setupDone) {
     console.log(`\n  首次部署:请打开配置向导完成初始化`);

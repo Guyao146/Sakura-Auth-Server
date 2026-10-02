@@ -41,6 +41,13 @@ export const config = {
     pass: process.env.SMTP_PASS?.trim() || null,
     from: process.env.SMTP_FROM?.trim() || null,
   },
+  // 传输加密:TLS_CERT/TLS_KEY 同时提供时以 HTTPS 直接对外(并自动附加 HSTS);
+  // TLS_REDIRECT_PORT 可选,另起一个 HTTP 端口把全部请求 301 到 HTTPS。
+  tls: {
+    cert: process.env.TLS_CERT || null,
+    key: process.env.TLS_KEY || null,
+    redirectPort: Number(process.env.TLS_REDIRECT_PORT || 0) || null,
+  },
 };
 
 /** 内置 scope 及其中文描述(向导/管理端/同意页共用) */

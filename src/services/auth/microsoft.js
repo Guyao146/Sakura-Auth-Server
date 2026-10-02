@@ -27,6 +27,8 @@ const authStashes = new Map(); // state → { exp, verifier, bindUserId }
 const linkTokens = new Map();  // linkToken → { exp, sub, email, name }
 
 function stashPut(map, key, value) {
+  const now = nowSec();
+  for (const [k, v] of map) if (v.exp <= now) map.delete(k); // 先清过期,防占坑挤掉有效项
   if (map.size >= MAX_STASH) {
     const oldest = map.keys().next().value;
     if (oldest !== undefined) map.delete(oldest);
