@@ -39,8 +39,21 @@ export async function probeOne(client) {
   }
 }
 
-/** 探测全部应用(串行,单次 5s 超时),并清理已删除应用的快照条目。返回快照 Map */
+/** 探测全部应用(串行,单次 5s 超时),并清理已删除应用的快照条目。返回快照 Map。
+ *  带运行守卫:应用多且大量离线时单轮可能超过 60s 间隔,防止轮次重叠堆积。 */
+let probing = false;
+
 export async function probeAll() {
+  if (probing) return snapshots;
+  probing = true;
+  try {
+    return await probeAllInner();
+  } finally {
+    probing = false;
+  }
+}
+
+async function probeAllInner() {
   const apps = clients.list();
   const alive = new Set(apps.map((c) => c.client_id));
   for (const id of [...snapshots.keys()]) {

@@ -591,14 +591,15 @@ export function deleteAppLogo(ctx) {
 }
 
 /** GET /uploads/:file —— 上传文件静态服务(匿名;Logo 属公开品牌资产)。文件名严格白名单,防目录穿越 */
-export function serveUpload(ctx) {
+export async function serveUpload(ctx) {
   const name = String(ctx.params.file || '');
   const m = name.match(UPLOAD_FILE_RE);
   const notFound = () => sendJson(ctx.res, 404, { error: 'not_found' });
   if (!m) return notFound();
   let data;
   try {
-    data = fs.readFileSync(path.join(uploadsDir(), name));
+    // 异步读:避免大 Logo 在高并发下阻塞事件循环
+    data = await fs.promises.readFile(path.join(uploadsDir(), name));
   } catch {
     return notFound();
   }
