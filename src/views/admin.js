@@ -76,8 +76,9 @@ export function dashboardPage({ theme, siteName, user, cur, stats, issuer, allow
       <div class="card">
         <h3 style="margin-top:0">服务信息</h3>
         ${kvRow('Issuer', esc(issuer))}
-        ${kvRow('发现文档', `<a href="/.well-known/openid-configuration">/.well-known/openid-configuration</a>`)}
-        ${kvRow('JWKS', `<a href="/jwks.json">/jwks.json</a>`)}
+        ${kvRow('发现文档', `<a href="${esc(issuer + '/.well-known/openid-configuration')}">${esc(issuer + '/.well-known/openid-configuration')}</a>`)}
+        ${kvRow('JWKS', `<a href="${esc(issuer + '/jwks.json')}">${esc(issuer + '/jwks.json')}</a>`)}
+        ${kvRow('心跳接口', `<a href="${esc(issuer + '/api/heartbeat')}">${esc(issuer + '/api/heartbeat')}</a>`)}
         <p class="muted small">接入方只需发现文档地址即可自动完成 OIDC 配置。</p>
       </div>
       <div class="card">

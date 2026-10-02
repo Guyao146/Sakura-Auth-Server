@@ -33,7 +33,9 @@ export function bindSettings(getter) {
 
 export function reloadRuntime() {
   const s = settingsGetter ? settingsGetter() : {};
-  const issuer = config.envBaseUrl || s.issuer || `http://localhost:${config.port}`;
+  // issuer 去尾部斜杠:避免 /auth/microsoft/callback 等拼接地址出现双斜杠,
+  // 也保证 iss / 发现文档地址全站一致(旧值含尾斜杠的库会被这里统一纠正)
+  const issuer = (config.envBaseUrl || s.issuer || `http://localhost:${config.port}`).replace(/\/+$/, '');
   rt = {
     siteName: s.site_name || '樱落统一认证',
     issuer,
