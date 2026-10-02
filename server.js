@@ -28,7 +28,7 @@ bindSettings(() => settings.getMap());
 const router = registerRoutes();
 
 const CORS_PATHS = new Set(['/token', '/introspect', '/revoke', '/userinfo', '/jwks.json',
-  '/authorize', '/.well-known/openid-configuration', '/api/heartbeat']);
+  '/authorize', '/.well-known/openid-configuration', '/api/heartbeat', '/api/registry']);
 
 const applyCors = (res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');

@@ -7,6 +7,7 @@ import { sendHtml, redirect, setCookie } from '../core/http.js';
 import { portalPage } from '../views/portal.js';
 import { forbidden } from './auth/login.js';
 import { record } from './audit.js';
+import * as appHealth from './app-health.js';
 
 /* 启动参数暂存:门户代发的 PKCE,verifier 留在服务端(单实例内存),发码时写入授权码记录 */
 const launchStash = new Map();
@@ -37,7 +38,8 @@ export function showPortal(ctx, { msg, err } = {}) {
   const actions = `${toggle}${ctx.user.is_admin ? '<a class="btn btn-primary" href="/admin">管理后台</a>' : ''}`;
   sendHtml(ctx.res, 200, portalPage({
     theme: ctx.theme, siteName: ctx.runtime.siteName, user: ctx.user,
-    list: visibleApps(ctx.user), msg, err, view,
+    // 附带健康快照:磁贴/条状行渲染状态点(无记录显示未知)
+    list: visibleApps(ctx.user).map((c) => ({ ...c, health: appHealth.get(c.client_id) })), msg, err, view,
     cur: ctx.url.pathname + ctx.url.search,
     actions,
   }));

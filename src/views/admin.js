@@ -350,6 +350,9 @@ export function appFormPage({ theme, siteName, user, cur, err, values, allGroups
           <label>Logo 图片地址(可选,https:// 开头,留空用首字母徽标)</label>
           <input type="text" name="logo_url" value="${esc(v.logo_url || '')}" maxlength="500"
             placeholder="https://example.com/logo.png" spellcheck="false">
+          <label>健康检查地址(可选,http(s)://,用于门户状态点与注册表 API)</label>
+          <input type="text" name="health_url" value="${esc(v.health_url || '')}" maxlength="500"
+            placeholder="https://app.example.com/healthz" spellcheck="false">
           <label>允许的 scope</label>
           ${scopeList(scopeItemsFor(null, v.scopeSet))}
           <label>可访问的权限组</label>
@@ -372,6 +375,17 @@ export function appDetailPage({ theme, siteName, user, cur, app, allGroups = [],
   const a = app;
   const uris = a.uriList;
   const allowed = a.allowedGroupList || [];
+  // 健康探测状态:未配置地址 / 尚未探测 / 在线 / 离线
+  const h = a.health;
+  const healthText = !a.healthUrl
+    ? '<span class="status-dot unknown"></span><span class="muted">未配置健康检查地址,不参与探测</span>'
+    : !h
+      ? '<span class="status-dot unknown"></span><span class="muted">尚未探测,将自动进行</span>'
+      : h.status === 'up'
+        ? `<span class="status-dot up"></span>在线(${esc(String(h.latencyMs))}ms)<span class="muted small">· 上次探测 ${esc(new Date(h.checkedAt).toLocaleString('zh-CN', { hour12: false }))}</span>`
+        : h.status === 'down'
+          ? `<span class="status-dot down"></span>离线${h.code ? `(HTTP ${esc(String(h.code))})` : '(无响应)'}<span class="muted small">· 上次探测 ${esc(new Date(h.checkedAt).toLocaleString('zh-CN', { hour12: false }))}</span>`
+          : '<span class="status-dot unknown"></span><span class="muted">未知</span>';
   const consentRows = consentedUsers.map((row) => `<tr>
       <td class="wrap"><b style="color:var(--text)">${esc(row.username)}</b></td>
       <td class="wrap">${esc(row.name || '-')}</td>
@@ -398,6 +412,8 @@ export function appDetailPage({ theme, siteName, user, cur, app, allGroups = [],
         ${kvRow('访问限制', allowed.length ? allowed.map(esc).join('、') : '<span class="muted">不限制(所有用户可访问)</span>')}
         ${kvRow('应用描述', a.description ? esc(a.description) : '<span class="muted">未设置</span>')}
         ${kvRow('Logo 地址', a.logoUrl ? esc(a.logoUrl) : '<span class="muted">未设置(门户与授权页用首字母徽标)</span>')}
+        ${kvRow('健康检查地址', a.healthUrl ? esc(a.healthUrl) : '<span class="muted">未设置(可在下方应用设置中填写)</span>')}
+        ${kvRow('健康状态', healthText)}
         <h3>端点</h3>
         ${kvRow('授权端点', esc(issuer + '/authorize'))}
         ${kvRow('令牌端点', esc(issuer + '/token'))}
@@ -417,6 +433,9 @@ export function appDetailPage({ theme, siteName, user, cur, app, allGroups = [],
           <label>Logo 图片地址(可选,https:// 开头,留空用首字母徽标)</label>
           <input type="text" name="logo_url" value="${esc(a.logoUrl || '')}" maxlength="500"
             placeholder="https://example.com/logo.png" spellcheck="false">
+          <label>健康检查地址(可选,http(s)://,用于门户状态点与注册表 API)</label>
+          <input type="text" name="health_url" value="${esc(a.healthUrl || '')}" maxlength="500"
+            placeholder="https://app.example.com/healthz" spellcheck="false">
           <label>允许的 scope</label>
           ${scopeList(scopeItemsFor(null, new Set(a.scopeList)))}
           <label>可访问的权限组</label>

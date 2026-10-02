@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS clients (
   allowed_groups  TEXT NOT NULL DEFAULT '[]',
   description     TEXT NOT NULL DEFAULT '',
   logo_url        TEXT NOT NULL DEFAULT '',
+  health_url      TEXT NOT NULL DEFAULT '',
   created_at      INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS sessions (
@@ -136,6 +137,9 @@ function migrate() {
   }
   if (!ccols.includes('logo_url')) {
     db.exec("ALTER TABLE clients ADD COLUMN logo_url TEXT NOT NULL DEFAULT ''");
+  }
+  if (!ccols.includes('health_url')) {
+    db.exec("ALTER TABLE clients ADD COLUMN health_url TEXT NOT NULL DEFAULT ''");
   }
   const acols = db.prepare('PRAGMA table_info(auth_codes)').all().map((c) => c.name);
   if (!acols.includes('launch_verifier')) {

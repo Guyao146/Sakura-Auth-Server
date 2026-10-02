@@ -10,6 +10,18 @@ const scopeBadges = (app) =>
 /** 应用门户:普通用户可见的业务线(按权限组过滤),支持格子/条状两种视图;并入侧栏布局 */
 export function portalPage({ theme, siteName, user, list, msg, err, csrf, cur = '/', actions = '', view = 'grid' }) {
   const initial = (name) => (String(name || '?').trim()[0] || '?').toUpperCase();
+  // 健康状态点:在线=绿 / 离线=红 / 未知=灰,title 提示探测详情
+  const healthDot = (app) => {
+    const h = app.health;
+    const status = h?.status || 'unknown';
+    const cls = status === 'up' ? 'up' : status === 'down' ? 'down' : 'unknown';
+    const tip = status === 'up'
+      ? `健康检查:在线(${h.latencyMs}ms)`
+      : status === 'down'
+        ? `健康检查:离线${h.code ? `(HTTP ${h.code})` : '(无响应)'}`
+        : '健康检查:未知(未配置地址或尚未探测)';
+    return `<span class="status-dot ${cls}" title="${esc(tip)}"></span>`;
+  };
   // 有 Logo 用 44px 圆角图片,否则回退首字母徽标
   const appLogo = (app) => app.logoUrl
     ? `<img src="${esc(app.logoUrl)}" alt="" loading="lazy" style="width:44px;height:44px;border-radius:12px;object-fit:cover;flex:none">`
@@ -23,7 +35,7 @@ export function portalPage({ theme, siteName, user, list, msg, err, csrf, cur = 
       <div style="display:flex;align-items:center;gap:var(--s3)">
         ${appLogo(app)}
         <div style="min-width:0">
-          <div class="name">${esc(app.name)}</div>
+          <div class="name">${healthDot(app)}${esc(app.name)}</div>
           ${descLine(app)}
           <div class="muted small">${typeBadge(app)}</div>
         </div>
@@ -38,6 +50,7 @@ export function portalPage({ theme, siteName, user, list, msg, err, csrf, cur = 
       <div style="min-width:0;flex:1">
         <div class="rowline">
           <b style="color:var(--text);font-size:15px">${esc(app.name)}</b>
+          ${healthDot(app)}
           <span class="badge">${typeBadge(app)}</span>
           ${scopeBadges(app)}
         </div>

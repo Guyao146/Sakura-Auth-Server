@@ -1448,6 +1448,129 @@ async function main() {
     ok('模拟:普通用户带 sim_group 启动受限应用仍被拦截(403)', r.status === 403
       && (await r.text()).includes('仅对特定权限组开放'));
 
+    /* ---------- 应用健康探测与注册表 API(向导重跑段之前;本地健康目标随用例启停) ---------- */
+    let healthState = 200; // 探测目标的响应码,可切换 200/500
+    const healthMock = http.createServer((req, res) => {
+      res.writeHead(healthState, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end(healthState === 200 ? 'healthy' : 'unhealthy');
+    });
+    await new Promise((resolve) => healthMock.listen(0, '127.0.0.1', resolve));
+    const healthUrl = `http://127.0.0.1:${healthMock.address().port}/healthz`;
+    try {
+      const appHealth = await import('../src/services/app-health.js');
+
+      // 服务层直探(await probeOne 保证确定性,不依赖 60s 定时器)
+      const upSnap = await appHealth.probeOne({ client_id: 'direct-up', health_url: healthUrl });
+      ok('健康探测:probeOne 对 2xx 目标返回 up 并记录延迟', upSnap.status === 'up'
+        && Number.isFinite(upSnap.latencyMs) && !!upSnap.checkedAt, JSON.stringify(upSnap));
+      // 先占一个端口再释放,得到必然拒绝连接的目标
+      const deadPort = await new Promise((resolve) => {
+        const s = http.createServer(() => {});
+        s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => resolve(p)); });
+      });
+      const downSnap = await appHealth.probeOne({ client_id: 'direct-down', health_url: `http://127.0.0.1:${deadPort}/x` });
+      ok('健康探测:probeOne 对拒绝连接的目标返回 down', downSnap.status === 'down', JSON.stringify(downSnap));
+      const unknownSnap = await appHealth.probeOne({ client_id: 'direct-none', health_url: '' });
+      ok('健康探测:probeOne 对未配置健康地址返回 unknown', unknownSnap.status === 'unknown');
+
+      // 管理端表单:健康检查地址输入与校验
+      r = await call(aj, '/admin/apps/new');
+      const healthFormHtml = await r.text();
+      ok('健康探测:新建应用表单提供健康检查地址输入', r.status === 200
+        && healthFormHtml.includes('name="health_url"') && healthFormHtml.includes('健康检查地址'));
+
+      r = await call(aj, '/admin/apps/create', {
+        method: 'POST',
+        form: [['name', '健康探针'], ['client_type', 'public'],
+          ['redirect_uris', 'http://127.0.0.1:8080/health-cb'],
+          ['scopes', 'openid'], ['health_url', healthUrl]],
+      });
+      ok('健康探测:创建带健康检查地址的应用成功', r.status === 302 && location(r).startsWith('/admin/apps/'));
+      const healthAppId = new URL(location(r), BASE).pathname.split('/').pop();
+      r = await call(aj, `/admin/apps/${healthAppId}`);
+      ok('健康探测:详情页回显健康检查地址', r.status === 200 && (await r.text()).includes(healthUrl));
+
+      r = await call(aj, '/admin/apps/create', {
+        method: 'POST',
+        form: { name: 'Bad Health App', client_type: 'public', redirect_uris: 'http://127.0.0.1:8080/bh',
+          scopes: 'openid', health_url: 'ftp://example.com/x' },
+      });
+      ok('健康探测:非 http(s) 健康地址被拒绝', r.status === 200 && (await r.text()).includes('健康检查地址不合法'));
+
+      // 注册表 API:client_credentials 令牌(机器身份)作为 Bearer 查询
+      r = await fetch(BASE + '/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', Authorization: basic(svc.client_id, 'svc-secret-123') },
+        body: new URLSearchParams({ grant_type: 'client_credentials' }).toString(),
+      });
+      const regTok = (await r.json()).access_token;
+      ok('健康探测:client_credentials 令牌签发成功', !!regTok);
+      const fetchRegistry = (headers) => fetch(BASE + '/api/registry', headers ? { headers } : {});
+      const findRow = (body, id) => body.apps?.find((a) => a.client_id === id);
+      // 创建应用时子进程已立即探测,轮询至多 5s 等待 up 快照落定
+      let reg = null;
+      for (let i = 0; i < 25 && reg?.row?.status !== 'up'; i++) {
+        const res = await fetchRegistry({ Authorization: `Bearer ${regTok}` });
+        const body = await res.json();
+        reg = { res, body, row: findRow(body, healthAppId) };
+        if (reg.row?.status !== 'up') await sleep(200);
+      }
+      ok('健康探测:/api/registry 返回 up 且含延迟/时间/health_url', reg?.res?.status === 200
+        && reg?.row?.status === 'up' && Number.isFinite(reg?.row?.latency_ms) && !!reg?.row?.checked_at
+        && reg?.row?.name === '健康探针' && reg?.row?.type === 'public'
+        && reg?.row?.health_url === healthUrl, JSON.stringify(reg?.row));
+      ok('健康探测:/api/registry 开放 CORS 且 no-store', reg?.res?.headers?.get('access-control-allow-origin') === '*'
+        && (reg?.res?.headers?.get('cache-control') || '').includes('no-store'));
+      ok('健康探测:未配置健康地址的应用在注册表中为 unknown',
+        reg?.body?.apps?.some((a) => a.name === 'Meta Portal' && a.status === 'unknown'));
+
+      r = await call(aj, `/admin/apps/${healthAppId}`);
+      ok('健康探测:详情页展示在线探测状态', r.status === 200 && (await r.text()).includes('在线('));
+
+      // 未认证与普通用户会话均被拒
+      const anonReg = await fetchRegistry();
+      ok('健康探测:未带凭证请求注册表返回 401', anonReg.status === 401
+        && (await anonReg.json()).error === 'unauthenticated');
+      ok('健康探测:普通用户会话请求注册表返回 401', (await call(fj, '/api/registry')).status === 401);
+
+      // 目标切 500:经表单保存触发立即复探 → down
+      healthState = 500;
+      r = await call(aj, `/admin/apps/${healthAppId}`);
+      const huForm = extractHidden(await r.text());
+      r = await call(aj, `/admin/apps/${healthAppId}/update`, {
+        method: 'POST',
+        form: [['name', '健康探针'], ['redirect_uris', 'http://127.0.0.1:8080/health-cb'],
+          ['scopes', 'openid'], ['health_url', healthUrl], ['_csrf', huForm._csrf]],
+      });
+      ok('健康探测:更新表单保存成功(触发复探)', r.status === 302 && location(r).includes('msg='));
+      let downRow = null;
+      for (let i = 0; i < 25 && !downRow; i++) {
+        const body = await (await fetchRegistry({ Authorization: `Bearer ${regTok}` })).json();
+        const row = findRow(body, healthAppId);
+        if (row?.status === 'down') downRow = row; else await sleep(200);
+      }
+      ok('健康探测:目标切 500 后注册表返回 down', !!downRow && downRow.status === 'down', JSON.stringify(downRow));
+      r = await call(aj, `/admin/apps/${healthAppId}`);
+      ok('健康探测:详情页展示离线探测状态', r.status === 200 && (await r.text()).includes('离线'));
+
+      const adminReg = await call(aj, '/api/registry');
+      ok('健康探测:管理员会话可查询注册表', adminReg.status === 200 && Array.isArray((await adminReg.json()).apps));
+
+      // 门户状态点:磁贴与条状行均渲染,提示文案与 CSS 变体随页面下发
+      r = await call(fj, '/apps?view=grid');
+      const dotGrid = await r.text();
+      ok('健康探测:门户磁贴含状态点与探测提示', dotGrid.includes('class="status-dot') && dotGrid.includes('健康检查:'));
+      r = await call(fj, '/apps?view=list');
+      const dotList = await r.text();
+      ok('健康探测:门户条状行含状态点', dotList.includes('class="app-item"') && dotList.includes('class="status-dot'));
+      r = await call(fj, '/apps?view=grid'); // 恢复格子视图偏好
+      ok('健康探测:状态点 CSS 三种变体随页面下发', (await r.text()).includes('.status-dot.up')
+        && dotGrid.includes('.status-dot.down') && dotGrid.includes('.status-dot.unknown'));
+    } finally {
+      healthMock.closeAllConnections?.();
+      await new Promise((resolve) => healthMock.close(resolve));
+    }
+
     /* ---------- 配置向导增强:管理员重新运行向导(放在最后,尾部恢复 setup_done=1) ---------- */
     r = await call(aj, '/admin');
     const rerunDash = await r.text();

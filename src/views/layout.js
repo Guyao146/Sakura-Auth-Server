@@ -202,6 +202,12 @@ pre.block{background:var(--code-bg);color:var(--code-text);border-radius:var(--r
 .portal-tile .name{color:var(--heading);font-weight:650;font-size:15px;line-height:1.35}
 .portal-tile .scope-badges{display:flex;flex-wrap:wrap;gap:var(--s1) var(--s2)}
 .portal-tile .btn{justify-content:center;margin-top:auto}
+/* 应用健康状态点(up=在线/down=离线/unknown=未知) */
+.status-dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--muted);flex:none;vertical-align:middle}
+.status-dot.up{background:var(--ok)}
+.status-dot.down{background:var(--danger)}
+.status-dot.unknown{background:var(--muted)}
+.portal-tile .name .status-dot{margin-right:7px}
 /* 向导步骤 */
 .steps{display:flex;gap:var(--s2);margin-bottom:var(--s5)}
 .step{flex:1;text-align:center;font-size:12px;color:var(--muted);padding-top:10px;position:relative}

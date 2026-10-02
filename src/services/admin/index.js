@@ -15,6 +15,7 @@ import { sendHtml, redirect } from '../../core/http.js';
 import { logger } from '../../core/logger.js';
 import { dashboardPage, groupsPage, groupDetailPage, usersPage, userFormPage, appsPage, appFormPage, appDetailPage, secretRevealPage } from '../../views/admin.js';
 import { record } from '../audit.js';
+import * as appHealth from '../app-health.js';
 
 const CSRF = (ctx) => ctx.session.csrf;
 
@@ -368,7 +369,14 @@ function validateAppInput(b) {
     }
     logoUrl = canonical;
   }
-  return { name, uris, scopes, description, logoUrl };
+  const healthRaw = String(b.health_url || '').trim();
+  let healthUrl = '';
+  if (healthRaw) {
+    const canonical = httpUrl(healthRaw);
+    if (!canonical) return { error: '健康检查地址不合法,需为 http(s) 地址。' };
+    healthUrl = canonical;
+  }
+  return { name, uris, scopes, description, logoUrl, healthUrl };
 }
 
 export function listApps(ctx) {
@@ -415,8 +423,9 @@ export function createApp(ctx) {
   const app = clients.create({
     name: v.name, redirectUris: v.uris, scopes: v.scopes.join(' '),
     isPublic, pkceRequired: pkce, requireConsent: b.require_consent === '1',
-    secretHash, allowedGroups, description: v.description, logoUrl: v.logoUrl,
+    secretHash, allowedGroups, description: v.description, logoUrl: v.logoUrl, healthUrl: v.healthUrl,
   });
+  appHealth.probeSoon(app); // 填了健康检查地址则立即探测一次(fire-and-forget)
   record(ctx, 'admin.app_created', v.name);
   if (secret) {
     return sendHtml(ctx.res, 200, secretRevealPage({
@@ -435,7 +444,7 @@ export function appDetail(ctx) {
   sendHtml(ctx.res, 200, appDetailPage({
     theme: ctx.theme, siteName: getRuntime().siteName, user: ctx.user,
     cur: ctx.url.pathname, allGroups: groups.list(),
-    app: { ...clients.withUris(app), _csrf: CSRF(ctx) },
+    app: { ...clients.withUris(app), health: appHealth.get(app.client_id), _csrf: CSRF(ctx) },
     consentedUsers,
     issuer: getRuntime().issuer,
     msg: ctx.query.get('msg'), err: ctx.query.get('err'),
@@ -454,8 +463,9 @@ export function updateApp(ctx) {
     pkceRequired: app.token_auth === 'none' ? true : b.pkce_required === '1',
     requireConsent: b.require_consent === '1',
     allowedGroups: collectAllowedGroups(b),
-    description: v.description, logoUrl: v.logoUrl,
+    description: v.description, logoUrl: v.logoUrl, healthUrl: v.healthUrl,
   });
+  appHealth.probeSoon(clients.byId(app.client_id)); // 健康检查地址变更后立即复探
   record(ctx, 'admin.app_updated', v.name);
   redirect(ctx.res, `/admin/apps/${app.client_id}?msg=` + encodeURIComponent('设置已保存。'));
 }

@@ -38,6 +38,7 @@ export function registerRoutes() {
   r('POST', '/api/login', api.login);
   r('POST', '/api/logout', api.logout);
   r('GET', '/api/apps', api.apps);
+  r('GET', '/api/registry', api.registry, { cors: true });
 
   r('GET', '/login', login.showLogin);
   r('POST', '/login', login.handleLogin);

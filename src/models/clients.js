@@ -1,5 +1,12 @@
 import { getDb } from '../core/db.js';
 import { randomToken, nowSec } from '../core/crypto.js';
+import { httpUrl } from '../core/util.js';
+
+/** 规范化健康检查地址:空 → '';合法 http(s) URL → 规范值;非法 → ''(表单层会先行校验并报错,此处兜底) */
+export function normalizeHealthUrl(raw) {
+  if (!raw) return '';
+  return httpUrl(raw) || '';
+}
 
 export const byId = (clientId) => getDb().prepare('SELECT * FROM clients WHERE client_id = ?').get(clientId);
 
@@ -9,27 +16,28 @@ export const count = () => getDb().prepare('SELECT COUNT(*) AS n FROM clients').
 
 /** redirectUris: string[];scopes: 空格分隔;public=true 时无密钥(token_auth=none);
  *  allowedGroups: 可访问的权限组名数组,空数组 = 不限制;
- *  description: 应用描述(门户/授权页展示);logoUrl: https 图片地址,空串用首字母徽标 */
-export function create({ name, redirectUris, scopes, isPublic, pkceRequired, requireConsent = true, secretHash = null, allowedGroups = [], description = '', logoUrl = '' }) {
+ *  description: 应用描述(门户/授权页展示);logoUrl: https 图片地址,空串用首字母徽标;
+ *  healthUrl: 健康检查地址(http(s),空串不探测;驱动门户状态点与 /api/registry) */
+export function create({ name, redirectUris, scopes, isPublic, pkceRequired, requireConsent = true, secretHash = null, allowedGroups = [], description = '', logoUrl = '', healthUrl = '' }) {
   const clientId = 'app-' + randomToken(9);
   getDb().prepare(
-    `INSERT INTO clients (client_id, name, secret_hash, redirect_uris, scopes, token_auth, pkce_required, require_consent, allowed_groups, description, logo_url, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO clients (client_id, name, secret_hash, redirect_uris, scopes, token_auth, pkce_required, require_consent, allowed_groups, description, logo_url, health_url, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     clientId, name, secretHash, JSON.stringify(redirectUris), scopes,
     isPublic ? 'none' : 'client_secret_basic',
     pkceRequired ? 1 : 0, requireConsent ? 1 : 0, JSON.stringify(allowedGroups || []),
-    description || '', logoUrl || '', nowSec()
+    description || '', logoUrl || '', normalizeHealthUrl(healthUrl), nowSec()
   );
   return byId(clientId);
 }
 
-export function update(clientId, { name, redirectUris, scopes, pkceRequired, requireConsent, allowedGroups, description, logoUrl, secretHash = null }) {
+export function update(clientId, { name, redirectUris, scopes, pkceRequired, requireConsent, allowedGroups, description, logoUrl, healthUrl, secretHash = null }) {
   const cur = byId(clientId);
   if (!cur) return;
   getDb().prepare(
     `UPDATE clients SET name = ?, redirect_uris = ?, scopes = ?, pkce_required = ?, require_consent = ?, allowed_groups = ?,
-     description = ?, logo_url = ?
+     description = ?, logo_url = ?, health_url = ?
      ${secretHash ? ', secret_hash = ?' : ''} WHERE client_id = ?`
   ).run(
     name ?? cur.name,
@@ -40,6 +48,7 @@ export function update(clientId, { name, redirectUris, scopes, pkceRequired, req
     allowedGroups !== undefined ? JSON.stringify(allowedGroups || []) : cur.allowed_groups,
     description !== undefined ? (description || '') : cur.description,
     logoUrl !== undefined ? (logoUrl || '') : cur.logo_url,
+    healthUrl !== undefined ? normalizeHealthUrl(healthUrl) : cur.health_url,
     ...(secretHash ? [secretHash] : []),
     clientId
   );
@@ -63,6 +72,7 @@ export function withUris(client) {
     allowedGroupList: allowedGroupNames(client),
     description: client.description || '',
     logoUrl: client.logo_url || '',
+    healthUrl: client.health_url || '',
   };
 }
 

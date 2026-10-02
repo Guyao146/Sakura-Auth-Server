@@ -1,15 +1,19 @@
-/** JSON API 套件:心跳 / 会话状态 / 登录 / 登出 / 可见应用。
+/** JSON API 套件:心跳 / 会话状态 / 登录 / 登出 / 可见应用 / 应用健康注册表。
  *  全部返回 JSON 且 Cache-Control: no-store;登录态由处理器自行判定,
  *  未登录不重定向(区别于 auth 路由选项),便于脚本与非浏览器客户端调用。 */
 import * as users from '../models/users.js';
 import * as sessions from '../models/sessions.js';
 import * as groups from '../models/groups.js';
 import * as recovery from '../models/recovery.js';
+import * as clients from '../models/clients.js';
+import * as tokens from '../models/tokens.js';
 import * as portal from './portal.js';
+import * as appHealth from './app-health.js';
 import { getDb } from '../core/db.js';
 import { config } from '../core/config.js';
 import { getRuntime } from '../core/runtime.js';
 import { sendJson, clearCookie } from '../core/http.js';
+import { verifyJwt } from '../core/jwt.js';
 import { verifyTotp } from '../core/totp.js';
 import { verifyPassword } from '../core/password.js';
 import { isLocked, recordFail, clearFails, startSession } from './auth/login.js';
@@ -99,4 +103,38 @@ export function apps(ctx) {
     scopes: c.scopeList,
   }));
   sendJson(ctx.res, 200, { apps: list }, NO_STORE);
+}
+
+/** Bearer 访问令牌校验:任何存活的 access 令牌均可(含 client_credentials 的机器身份) */
+function bearerLive(ctx) {
+  const header = ctx.req.headers['authorization'];
+  if (!header || !header.startsWith('Bearer ')) return false;
+  const payload = verifyJwt(header.slice(7).trim());
+  if (!payload) return false;
+  const row = tokens.byId(payload.jti);
+  return !!row && row.kind === 'access' && tokens.isLive(row);
+}
+
+/** GET /api/registry —— 应用健康状态注册表(应用读取其它应用的状态)。
+ *  认证(任一):Bearer 访问令牌(机器身份,client_credentials 令牌也可)或管理员会话;
+ *  未认证 → 401 unauthenticated。CORS 与 /api/heartbeat 一致。 */
+export function registry(ctx) {
+  const isAdmin = !!(ctx.user && ctx.user.is_admin);
+  if (!isAdmin && !bearerLive(ctx)) {
+    return sendJson(ctx.res, 401, { error: 'unauthenticated' }, NO_STORE);
+  }
+  const apps = clients.list().map((c) => {
+    const w = clients.withUris(c);
+    const h = appHealth.get(c.client_id);
+    return {
+      client_id: c.client_id,
+      name: c.name,
+      type: c.token_auth === 'none' ? 'public' : 'confidential',
+      status: h?.status || 'unknown',
+      latency_ms: h?.latencyMs ?? null,
+      checked_at: h?.checkedAt || null,
+      health_url: w.healthUrl || '',
+    };
+  });
+  sendJson(ctx.res, 200, { apps }, NO_STORE);
 }
