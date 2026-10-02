@@ -163,7 +163,7 @@ export function resetDonePage({ theme, siteName }) {
   });
 }
 
-/** 同意授权页:应用徽标 + 身份标识 + 图标化权限清单 + 跳转目标提示 */
+/** 同意授权页(品牌化分栏,与登录页同一骨架):应用徽标 + 身份标识 + 图标化权限清单 + 跳转目标提示 */
 export function consentPage({ theme, siteName, user, client, scopeList: scopes, csrf, replay, remember }) {
   const items = scopeItems(scopes);
   let target = String(replay.redirect_uri || '');
@@ -171,10 +171,17 @@ export function consentPage({ theme, siteName, user, client, scopeList: scopes, 
   const appInitial = (String(client.name || '?').trim()[0] || '?').toUpperCase();
   const userInitial = (String(user.name || user.username).trim()[0] || '?').toUpperCase();
   const appLogo = client.logoUrl
-    ? `<img src="${esc(client.logoUrl)}" alt="" loading="lazy" style="width:44px;height:44px;border-radius:12px;object-fit:cover;flex:none">`
+    ? `<img src="${esc(client.logoUrl)}" alt="" loading="lazy" class="consent-logo">`
     : `<div class="app-badge">${esc(appInitial)}</div>`;
-  return authPage({
-    theme, siteName, wide: true, title: `授权 · ${siteName}`,
+  // 主题切换后回到同一授权页:由 replay 还原 /authorize 查询串(空值剔除,防止缺参报错)
+  const backParams = new URLSearchParams();
+  for (const [k, v] of Object.entries(replay)) if (v) backParams.set(k, String(v));
+  const back = '/authorize' + (backParams.toString() ? `?${backParams}` : '');
+  return brandPage({
+    theme, siteName, title: `授权 · ${siteName}`,
+    tagline: '确认授权,一键进入应用。',
+    features: LOGIN_FEATURES,
+    wide: true, cur: back,
     content: `
       <div class="app-row">
         ${appLogo}
@@ -184,7 +191,8 @@ export function consentPage({ theme, siteName, user, client, scopeList: scopes, 
           <div class="muted small" style="word-break:break-all">${esc(client.client_id)}</div>
         </div>
       </div>
-      <h3 style="margin:0 0 var(--s3)">请求访问你的账号</h3>
+      <h2 class="login-form-title">请求访问你的账号</h2>
+      <p class="login-form-sub muted small" style="margin-bottom:var(--s4)">验证你的身份后,${esc(siteName)} 才会向应用披露下面所请求的信息。</p>
       <div class="identity">
         <span class="avatar">${esc(userInitial)}</span>
         <span>以 <b style="color:var(--text)">${esc(user.name || user.username)}</b>(<span>${esc(user.username)}</span>)的身份继续</span>
@@ -200,8 +208,8 @@ export function consentPage({ theme, siteName, user, client, scopeList: scopes, 
         ${remember ? `<label class="checkline"><input type="checkbox" name="remember" value="on" checked><span>记住此应用的授权,下次不再询问<span class="muted">可在管理员撤销后重新确认</span></span></label>` : ''}
         <p class="muted small" style="margin:var(--s2) 0 0">同意后将跳转至 <code>${esc(target)}</code> 完成登录;拒绝则不产生任何授权。</p>
         <div class="consent-actions">
-          <button class="btn" type="submit" name="decision" value="deny">拒 绝</button>
-          <button class="btn btn-primary" type="submit" name="decision" value="approve">同 意 并 继续</button>
+          <button class="btn btn-ghost" type="submit" name="decision" value="deny">拒 绝</button>
+          <button class="btn btn-primary" type="submit" name="decision" value="approve">同意并继续</button>
         </div>
       </form>`,
   });
