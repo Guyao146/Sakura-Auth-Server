@@ -250,6 +250,15 @@ async function main() {
     const consentHtml = await r.text();
     const consentForm = extractHidden(consentHtml);
     ok('渲染同意授权页', consentHtml.includes('请求访问你的账号'));
+    ok('授权页:品牌化分栏布局与品牌面板口号/特性文案(与登录页统一)', consentHtml.includes('class="login-split"')
+      && consentHtml.includes('class="login-brand"')
+      && consentHtml.includes('确认授权,一键进入应用')
+      && consentHtml.includes('统一登录') && consentHtml.includes('权限组管控'));
+    ok('授权页:首字母徽标回退、client_id 与身份胶囊展示', consentHtml.includes('class="app-badge"')
+      && consentHtml.includes(web.client_id) && consentHtml.includes('的身份继续'));
+    ok('授权页:记住授权勾选、拒绝/同意按钮与跳转目标提示保留', consentHtml.includes('name="remember"')
+      && consentHtml.includes('value="deny"') && consentHtml.includes('value="approve"')
+      && consentHtml.includes('完成登录'));
 
     r = await call(uj, '/authorize', {
       method: 'POST',
@@ -1031,6 +1040,9 @@ async function main() {
       && metaConsentHtml.includes('请求访问你的账号')
       && metaConsentHtml.includes('<img src="https://cdn.example.com/logo2.png" alt="" loading="lazy"')
       && metaConsentHtml.includes('更新后的统一运维描述'));
+    ok('授权页:带 Logo 应用展示图片 Logo 与描述展示位', metaConsentHtml.includes('<img src="https://cdn.example.com/logo2.png" alt="" loading="lazy" class="consent-logo"')
+      && metaConsentHtml.includes('更新后的统一运维描述')
+      && metaConsentHtml.includes('class="login-form-col login-form-col-wide"'));
     const metaConsentForm = extractHidden(metaConsentHtml);
     r = await call(fj, '/authorize', { method: 'POST', form: { ...metaConsentForm, decision: 'approve', remember: 'on' } });
     const metaCode = new URL(location(r), BASE).searchParams.get('code');

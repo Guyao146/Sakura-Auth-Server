@@ -76,6 +76,8 @@ table.tbl{width:100%;border-collapse:collapse;font-size:14px;line-height:1.5}
 .btn-primary:hover{background:var(--accent-strong)}
 .btn-danger{color:var(--danger);background:transparent;box-shadow:inset 0 0 0 1px var(--border)}
 .btn-danger:hover{background:color-mix(in srgb,var(--danger) 10%,transparent);box-shadow:inset 0 0 0 1px var(--border)}
+.btn-ghost{background:transparent;color:var(--text);box-shadow:inset 0 0 0 1px var(--border)}
+.btn-ghost:hover{background:var(--surface-soft);box-shadow:inset 0 0 0 1px var(--border)}
 .btn-sm{padding:var(--s1) var(--s3);font-size:13px}
 /* 表单 */
 label{display:block;font-size:13px;font-weight:600;color:var(--text-soft);margin:var(--s3) 0 var(--s1)}
@@ -168,6 +170,7 @@ pre.block{background:var(--code-bg);color:var(--code-text);border-radius:var(--r
 .login-brand svg circle[style]{fill:transparent !important}
 .login-form{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:var(--s7) var(--s5)}
 .login-form-col{width:100%;max-width:400px}
+.login-form-col-wide{max-width:480px}
 .login-form-brand{display:none;align-items:center;gap:var(--s2);color:var(--accent);margin-bottom:var(--s5)}
 .login-form-brand b{color:var(--heading);font-size:17px;line-height:1.3}
 .login-form-title{margin:0;padding-bottom:0;border-bottom:0;font-size:1.45rem}
@@ -180,9 +183,10 @@ pre.block{background:var(--code-bg);color:var(--code-text);border-radius:var(--r
   .login-form{min-height:100vh;padding:var(--s6) var(--s4)}
   .login-form-brand{display:flex}
 }
-/* 授权同意页 */
+/* 授权同意页(品牌化分栏,与登录页同骨架) */
 .app-row{display:flex;align-items:center;gap:var(--s3);margin-bottom:var(--s5)}
 .app-badge{width:52px;height:52px;border-radius:14px;background:color-mix(in srgb,var(--accent) 12%,transparent);color:var(--accent);display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;flex:none}
+.consent-logo{width:52px;height:52px;border-radius:14px;object-fit:cover;flex:none}
 .identity{display:flex;align-items:center;gap:var(--s2);background:var(--surface-soft);border-radius:99px;padding:4px 14px 4px 4px;font-size:14px;margin:0 0 var(--s4);width:fit-content;max-width:100%}
 .identity .avatar{width:28px;height:28px;border-radius:99px;background:var(--accent);color:var(--on-accent);display:inline-flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;flex:none}
 .scope-item{display:flex;gap:var(--s3);align-items:flex-start;padding:var(--s3) 0;border-bottom:1px solid var(--border)}
@@ -260,11 +264,12 @@ export function authPage({ theme, siteName, title, content, footer = true, wide 
 }
 
 /**
- * 品牌化分栏骨架(登录页专用):左侧樱色渐变品牌面板(全页唯一重强调色块),
+ * 品牌化分栏骨架(登录页 / 同意授权页):左侧樱色渐变品牌面板(全页唯一重强调色块),
  * 右侧表单面板;窄屏(≤899px)单栏仅表单,改由表单面板内的紧凑品牌行承接识别。
+ * wide=true 时右栏加宽(同意页的徽标行 / 权限清单需要更多横向空间),登录页不受影响。
  */
 export function brandPage({
-  theme, siteName, title, tagline = '', features = [], content, footer = true, cur = '/login',
+  theme, siteName, title, tagline = '', features = [], content, footer = true, cur = '/login', wide = false,
 }) {
   const feats = features.map((f) => `
       <li><span class="feat-ico">${f.icon}</span><span><b>${esc(f.title)}</b><small>${esc(f.desc)}</small></span></li>`).join('\n');
@@ -282,7 +287,7 @@ export function brandPage({
     </div>
     <p class="login-brand-foot">由樱落生态设计语言驱动</p>
   </aside>
-  <main class="login-form"><div class="login-form-col">
+  <main class="login-form"><div class="login-form-col${wide ? ' login-form-col-wide' : ''}">
     <div class="login-form-brand">${mark(24)}<b>${esc(siteName)}</b></div>
     ${content}
     ${footer ? `<p class="login-form-foot">SakuraID · ${themeToggle(theme, cur)}</p>` : ''}
