@@ -1394,6 +1394,76 @@ async function main() {
     r = await call(aj, '/admin/audit');
     ok('审计:清空后页面显示空状态', r.status === 200 && (await r.text()).includes('暂无审计记录'));
 
+    /* ---------- 审计分页与 CSV 导出(放最后段:向导重跑段之前;测试记录本段内清理) ---------- */
+    const { getDb: getAuditDb } = await import('../src/core/db.js');
+    // 清空段之后审计表为空:造 60 条 pagetest 记录(每页 50 → 恰好 2 页)
+    for (let i = 1; i <= 60; i++) {
+      auditM.log({ actor: 'pagetester', action: 'pagetest', detail: `分页测试记录 #${i}`, ip: '127.0.0.1' });
+    }
+
+    // 第 1 页:最新 50 条,含「下一页」链接,「上一页」为禁用占位
+    r = await call(aj, '/admin/audit');
+    const pg1 = await r.text();
+    ok('审计分页:第 1 页显示「第 1 / 2 页 · 共 60 条」且含下一页链接', r.status === 200
+      && pg1.includes('第 1 / 2 页 · 共 60 条') && pg1.includes('href="/admin/audit?page=2"')
+      && pg1.includes('分页测试记录 #60') && !pg1.includes('分页测试记录 #1</td>'));
+    ok('审计分页:第 1 页「上一页」为禁用样式(无 page=1 链接)', !pg1.includes('href="/admin/audit?page=1"')
+      && pg1.includes('aria-disabled="true"') && pg1.includes('上一页'));
+
+    // 第 2 页:较早的 10 条,含「上一页」链接,「下一页」为禁用占位
+    r = await call(aj, '/admin/audit?page=2');
+    const pg2 = await r.text();
+    ok('审计分页:第 2 页含上一页链接与「第 2 / 2 页」,内容与第 1 页不同', r.status === 200
+      && pg2.includes('href="/admin/audit?page=1"') && pg2.includes('第 2 / 2 页 · 共 60 条')
+      && pg2.includes('分页测试记录 #1</td>') && !pg2.includes('分页测试记录 #60'));
+    ok('审计分页:末页「下一页」为禁用样式(无 page=3 链接)', !pg2.includes('href="/admin/audit?page=3"')
+      && pg2.includes('下一页') && pg2.includes('aria-disabled="true"'));
+
+    // 筛选 + 分页叠加:翻页/导出链接需保留 action 参数
+    r = await call(aj, `/admin/audit?action=${encodeURIComponent('pagetest')}&page=2`);
+    const pgF = await r.text();
+    ok('审计分页:筛选与分页叠加且翻页/导出链接保留筛选参数', r.status === 200
+      && pgF.includes('第 2 / 2 页 · 共 60 条')
+      && pgF.includes('href="/admin/audit?action=pagetest&amp;page=1"')
+      && pgF.includes('href="/admin/audit/export.csv?action=pagetest"'));
+    r = await call(aj, '/admin/audit?page=999');
+    ok('审计分页:页码越界自动收敛到末页', r.status === 200 && (await r.text()).includes('第 2 / 2 页 · 共 60 条'));
+
+    // CSV 导出:造一条中文操作者 + 逗号引号明细的记录,验证转义与计数
+    auditM.log({ actor: 'csv测试员', action: 'csvtest', detail: '导出,含"引号"与,逗号', ip: '10.0.0.2' });
+    r = await call(aj, '/admin/audit/export.csv');
+    const csvBody = await r.text();
+    const csvLines = csvBody.replace(/^\uFEFF/, '').split('\n').filter((l) => l !== '');
+    ok('审计导出:响应头正确(text/csv;charset=utf-8 + attachment 文件名 + no-store)', r.status === 200
+      && (r.headers.get('content-type') || '') === 'text/csv; charset=utf-8'
+      && /^attachment; filename="audit-\d{8}-\d{6}\.csv"$/.test(r.headers.get('content-disposition') || '')
+      && (r.headers.get('cache-control') || '') === 'no-store');
+    // fetch 的 text() 会按规范剥除开头 BOM,故用原始字节验证 BOM 真实存在
+    const csvRaw = Buffer.from(await (await fetch(BASE + '/admin/audit/export.csv',
+      { headers: { Cookie: aj.header() } })).arrayBuffer());
+    ok('审计导出:BOM 开头且首行为中文表头', csvRaw[0] === 0xEF && csvRaw[1] === 0xBB && csvRaw[2] === 0xBF
+      && csvRaw.slice(3).toString('utf8').split('\n')[0] === '时间,操作者,动作,详情,IP');
+    ok('审计导出:数据行数等于当前记录数', csvLines.length - 1 === auditM.count()
+      && auditM.count() === 61 && csvBody.includes('分页测试记录 #1,127.0.0.1'));
+    ok('审计导出:含中文操作者与转义后的引号/逗号字段', csvBody.includes('csv测试员')
+      && csvBody.includes('"导出,含""引号""与,逗号"'));
+    ok('审计导出:时间列为本地可读格式', csvLines
+      .some((l) => /^20\d{2}\/\d{1,2}\/\d{1,2} \d{2}:\d{2}:\d{2},pagetester/.test(l)));
+
+    // 带 action 筛选导出:只含 pagetest 的 60 条,不含 csvtest
+    r = await call(aj, `/admin/audit/export.csv?action=${encodeURIComponent('pagetest')}`);
+    const csvFBody = await r.text();
+    const csvFLines = csvFBody.replace(/^\uFEFF/, '').split('\n').filter((l) => l !== '');
+    ok('审计导出:按 action 筛选导出生效', csvFLines.length === 61 && !csvFBody.includes('csv测试员')
+      && csvFLines[0] === '时间,操作者,动作,详情,IP');
+    ok('审计导出:普通用户访问导出被拒(403)', (await call(rj, '/admin/audit/export.csv')).status === 403);
+
+    // 清理本段测试数据(只删 pagetest/csvtest,不影响后续用例)
+    getAuditDb().prepare("DELETE FROM audit_logs WHERE action IN ('pagetest','csvtest')").run();
+    ok('审计分页:测试记录清理完毕(无 pagetest/csvtest 残留)',
+      auditM.list({ action: 'pagetest', limit: 10 }).length === 0
+      && auditM.list({ action: 'csvtest', limit: 10 }).length === 0);
+
     /* ---------- 健康状态页与应用模拟权限组启动(放在向导重跑段之前) ---------- */
     // 匿名 /health:品牌化状态页,含版本/运行状态/时长/数据库/发现文档链接,无敏感计数
     r = await call(new Jar(), '/health');

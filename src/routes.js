@@ -114,8 +114,9 @@ export function registerRoutes() {
   r('POST', '/admin/apps/:id/revoke-user', admin.revokeAppUserConsent, { auth: 'admin' });
   r('POST', '/admin/apps/:id/delete', admin.deleteApp, { auth: 'admin' });
 
-  // 审计日志:管理端查看与清空(危险操作)
+  // 审计日志:管理端查看、CSV 导出与清空(危险操作)
   r('GET', '/admin/audit', audit.showAudit, { auth: 'admin' });
+  r('GET', '/admin/audit/export.csv', audit.exportCsv, { auth: 'admin' });
   r('POST', '/admin/audit/clear', audit.clearAudit, { auth: 'admin' });
 
   return router;
