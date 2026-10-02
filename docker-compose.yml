@@ -1,19 +1,44 @@
+# SakuraID Docker Compose 部署
+# 默认拉取官方镜像(路径 A);需要本地构建时见文件中部的 build 注释(路径 B)。
+# 环境变量完整清单与中文注释见项目根目录 .env.example(复制为 .env 后 compose 自动读取)。
 services:
   sakura-idp:
-    build: .
-    # 使用镜像仓库时改为:
-    # image: your-registry/sakura-idp:latest
+    # 拉取优先:镜像地址可用 .env 里的 SAKURAID_IMAGE 覆盖(自托管 registry / 锁定版本)
+    image: ${SAKURAID_IMAGE:-ghcr.io/sakura-eco/sakuraid:latest}
+    # 拉取策略:本地已有该标签就不再拉取;想让每次 up 都检查远端改为 always
+    pull_policy: missing
+    # 本地构建兜底(路径 B):注释掉上面的 image 行,再取消下面两行注释
+    # build:
+    #   context: .
     container_name: sakura-idp
     ports:
-      - "9000:9000"
+      # 宿主机端口:容器端口(容器内固定 9000,由 .env 的 PORT 控制宿主侧)
+      - "${PORT:-9000}:9000"
+      # TLS 直连时改为映射 443(证书配置见 environment 的 TLS_* 与 volumes 注释):
+      # - "443:9000"
+      # TLS_REDIRECT_PORT=80 时映射 HTTP→HTTPS 跳转端口:
+      # - "80:80"
     environment:
       # 对外地址(同时是 OIDC issuer),通过域名/反代访问时必改
-      BASE_URL: https://sso.example.com
+      BASE_URL: ${BASE_URL:-https://sso.example.com}
+      # 数据目录(容器内固定 /data,配合下面的卷,一般不改)
+      # DATA_DIR: /data
+      # TLS 直连(不经过反代,容器内直接 HTTPS,自动附加 HSTS):
+      # 证书放到 ./data/tls/(随卷挂进容器),取消注释即启用:
+      # TLS_CERT: /data/tls/fullchain.pem
+      # TLS_KEY: /data/tls/privkey.pem
+      # TLS_REDIRECT_PORT: 80    # 可选:另起一个 HTTP 端口,把全部请求 301 到 HTTPS
       # 可选:覆盖向导里的有效期设置(秒)
       # ACCESS_TOKEN_TTL: 900
       # REFRESH_TOKEN_TTL: 2592000
       # SESSION_TTL: 1209600
+      # 找回密码邮件(设置后覆盖向导里的 SMTP 值;未配置时邮件内容打到日志):
+      # SMTP_HOST: smtp.example.com
+      # SMTP_PORT: 465
+      # SMTP_USER: no-reply@example.com
+      # SMTP_PASS: change-me
+      # SMTP_FROM: SakuraID <no-reply@example.com>
     volumes:
-      # SQLite 数据、签名密钥都在这里,务必持久化
+      # SQLite 数据、签名密钥都在这里,务必持久化;TLS 证书也可放 ./data/tls
       - ./data:/data
     restart: unless-stopped
