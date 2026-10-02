@@ -55,7 +55,7 @@ node server.js
 | 应用元数据 | 应用描述与 Logo(https)字段,门户磁贴/条状/同意页展示;应用详情「已授权用户」列表,可单独撤销某用户的授权与令牌 |
 | 联邦登录 | Microsoft 账号 OIDC 登录与绑定:登录页一键登录、账号设置绑定/解绑、未绑定可关联本地账号或注册新号;管理端配置(client_id/secret/tenant) |
 | 流转 | 未登录访问首页跳登录页、登录后直达应用门户、已登录访问登录页跳门户 |
-| JSON API | /api/heartbeat 心跳(含版本/uptime/DB 探测)、/api/session 登录状态、/api/login 登录(支持 2FA)、/api/logout、/api/apps 可见应用 |
+| JSON API | /api/heartbeat 心跳(含版本/uptime/DB 探测)、/api/session 登录状态、/api/login 登录(支持 2FA)、/api/logout、/api/apps 可见应用、/api/sessions 会话列表与撤销、/api/registry 应用状态(令牌认证)。会话型写操作需带 `X-Requested-With: JSON` 头(防跨站纵深防御) |
 | 安全 | scrypt 口令哈希、CSRF 双提交、登录限流、授权码/刷新令牌哈希落库、授权码一次性、防用户枚举 |
 | 界面 | 配置向导、明暗双主题(跟随系统 + 手动切换)、樱落生态设计语言 |
 

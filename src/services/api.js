@@ -20,6 +20,11 @@ import { isLocked, recordFail, clearFails, startSession, sessionMeta } from './a
 
 const NO_STORE = { 'Cache-Control': 'no-store' };
 
+/** JSON API 深度防御:cookie 会话的写操作要求显式 X-Requested-With 头。
+ *  第一道防线是 cookie 的 SameSite=Lax(跨站 POST 不携带);此头为第二道,
+ *  防未来 SameSite 策略变化或同站子域发起的请求。Bearer 令牌路径不受影响。 */
+const requiresAjaxGuard = (ctx) => ctx.req.headers['x-requested-with'] !== 'JSON';
+
 /** 用户公开信息:groups 由组成员关系表驱动,与 userinfo 的 groups claim 同源 */
 const userPayload = (user) => ({
   username: user.username,
@@ -88,6 +93,7 @@ export function login(ctx) {
 
 /** POST /api/logout —— 销毁当前会话并清 cookie;未登录同样返回 ok(幂等) */
 export function logout(ctx) {
+  if (requiresAjaxGuard(ctx)) return sendJson(ctx.res, 403, { error: 'ajax_header_required' }, NO_STORE);
   if (ctx.session) sessions.remove(ctx.session.id_hash);
   clearCookie(ctx.res, 'sid', getRuntime().secureCookies);
   sendJson(ctx.res, 200, { ok: true }, NO_STORE);
@@ -127,6 +133,7 @@ function resolveSessionTarget(userId, target) {
 /** POST /api/sessions/revoke {id_hash} —— 撤销自己的指定会话(全值或列表返回的前缀均可)。
  *  撤销当前会话时 cookie 一并失效,返回 {ok:true, current_revoked:true}。 */
 export function revokeSession(ctx) {
+  if (requiresAjaxGuard(ctx)) return sendJson(ctx.res, 403, { error: 'ajax_header_required' }, NO_STORE);
   if (!ctx.user) return sendJson(ctx.res, 401, { error: 'unauthenticated' }, NO_STORE);
   const target = typeof ctx.body?.id_hash === 'string' ? ctx.body.id_hash.trim() : '';
   const row = target ? resolveSessionTarget(ctx.user.id, target) : null;
@@ -139,6 +146,7 @@ export function revokeSession(ctx) {
 
 /** POST /api/sessions/revoke-others —— 撤销当前会话以外的全部会话 */
 export function revokeOtherSessions(ctx) {
+  if (requiresAjaxGuard(ctx)) return sendJson(ctx.res, 403, { error: 'ajax_header_required' }, NO_STORE);
   if (!ctx.user) return sendJson(ctx.res, 401, { error: 'unauthenticated' }, NO_STORE);
   const revoked = sessions.removeAllOther(ctx.user.id, ctx.session.id_hash);
   sendJson(ctx.res, 200, { ok: true, revoked }, NO_STORE);

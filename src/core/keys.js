@@ -2,6 +2,9 @@ import crypto from 'node:crypto';
 import { getSetting, setSetting } from '../models/settings.js';
 
 let signingKey = null;
+// 密钥对象缓存:createPrivateKey 每次调用都要解析 PEM,签发/验签是每令牌热路径,模块级只建一次
+let privObj = null;
+let pubObj = null;
 
 /** 首次启动生成 RSA-2048 签名密钥并持久化到 settings 表;之后复用 */
 export function initKeys() {
@@ -31,9 +34,11 @@ export function jwks() {
 }
 
 export function privateKeyObject() {
-  return crypto.createPrivateKey(signingKey.privatePem);
+  if (!privObj) privObj = crypto.createPrivateKey(signingKey.privatePem);
+  return privObj;
 }
 
 export function publicKeyObject() {
-  return crypto.createPublicKey({ key: signingKey.publicJwk, format: 'jwk' });
+  if (!pubObj) pubObj = crypto.createPublicKey({ key: signingKey.publicJwk, format: 'jwk' });
+  return pubObj;
 }

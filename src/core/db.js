@@ -217,6 +217,8 @@ export function initDb() {
   db = new DatabaseSync(config.dbFile);
   db.exec('PRAGMA journal_mode = WAL;');
   db.exec('PRAGMA foreign_keys = ON;');
+  // 并发写(smoke 多进程/双实例误配)时等待而非立即 SQLITE_BUSY 报错
+  db.exec('PRAGMA busy_timeout = 5000;');
   db.exec(SCHEMA);
   migrate();
   logger.info('数据库已就绪', { file: config.dbFile });

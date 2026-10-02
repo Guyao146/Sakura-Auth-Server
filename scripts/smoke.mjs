@@ -1164,7 +1164,7 @@ async function main() {
       && (await appsAnon.json()).error === 'unauthenticated');
 
     // 登出:销毁会话、状态变回未登录
-    const apiLoRes = await call(apiJ, '/api/logout', { method: 'POST' });
+    const apiLoRes = await call(apiJ, '/api/logout', { method: 'POST', headers: { 'X-Requested-With': 'JSON' } });
     const apiLoBody = await apiLoRes.json();
     const afterLogout = await (await call(apiJ, '/api/session')).json();
     ok('API 登出成功且会话状态变回未登录', apiLoRes.status === 200 && apiLoBody.ok === true
@@ -1709,7 +1709,7 @@ async function main() {
       && sessPageHtml.includes('撤销其它全部会话'));
 
     // 撤销其它会话(当前会话保留):列表只剩一条,被撤销的 cookie 失效
-    const sessOthersRes = await call(sj1, '/api/sessions/revoke-others', { method: 'POST', json: {} });
+    const sessOthersRes = await call(sj1, '/api/sessions/revoke-others', { method: 'POST', json: {}, headers: { 'X-Requested-With': 'JSON' } });
     const sessAfterOthers = await (await call(sj1, '/api/sessions')).json();
     ok('会话:撤销其它会话后 /api/sessions 只剩当前一条', sessOthersRes.status === 200
       && (await sessOthersRes.json()).ok === true
@@ -1723,7 +1723,7 @@ async function main() {
     ok('会话:再次 API 登录产生新会话', sessLogin3.status === 200);
     const beforeRevoke = await (await call(sj1, '/api/sessions')).json();
     const otherRow = beforeRevoke.sessions.find((s) => !s.is_current);
-    const sessRevokeRes = await call(sj1, '/api/sessions/revoke', { method: 'POST', json: { id_hash: otherRow.id_hash } });
+    const sessRevokeRes = await call(sj1, '/api/sessions/revoke', { method: 'POST', json: { id_hash: otherRow.id_hash }, headers: { 'X-Requested-With': 'JSON' } });
     const afterSessRevoke = await (await call(sj1, '/api/sessions')).json();
     ok('会话:撤销指定会话生效(截断 id_hash 定位)', sessRevokeRes.status === 200
       && (await sessRevokeRes.json()).ok === true && afterSessRevoke.sessions.length === 1);
@@ -1770,7 +1770,7 @@ async function main() {
       && sessionsM.listForUser(sessAdminUser.id).some((s) => s.id_hash === adminHash)
       && (await (await call(aj, '/api/session')).json()).authenticated === true);
 
-    const notFoundRes = await call(swj, '/api/sessions/revoke', { method: 'POST', json: { id_hash: 'ffffffff' } });
+    const notFoundRes = await call(swj, '/api/sessions/revoke', { method: 'POST', json: { id_hash: 'ffffffff' }, headers: { 'X-Requested-With': 'JSON' } });
     ok('会话:撤销不存在的会话返回 404', notFoundRes.status === 404);
 
     /* ---------- 应用 Logo 直接上传(放在向导重跑段之前) ---------- */
