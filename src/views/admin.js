@@ -440,6 +440,19 @@ export function appDetailPage({ theme, siteName, user, cur, app, allGroups = [],
           : '<p class="muted" style="margin:var(--s1) 0 0">暂无用户授权。</p>'}
       </div>
       <div class="card">
+        <h3 style="margin-top:0">模拟启动</h3>
+        <p class="muted small">以所选权限组的视角发起一次统一登录,用于验证受限应用的授权链路(当前账号真实身份不变,动作会计入审计)。</p>
+        <form method="get" action="/apps/launch/${esc(a.client_id)}">
+          <label>模拟权限组</label>
+          <select name="sim_group">
+            ${allGroups.length
+              ? allGroups.map((g) => `<option value="${esc(g.name)}">${esc(g.name)}${g.description ? ` — ${esc(g.description)}` : ''}</option>`).join('\n')
+              : '<option value="">(暂无权限组)</option>'}
+          </select>
+          <div class="actions"><button class="btn btn-primary" type="submit">模拟启动</button></div>
+        </form>
+      </div>
+      <div class="card">
         <h3 style="margin-top:0">危险操作</h3>
         <div class="actions" style="margin-top:var(--s2)">
           ${a.token_auth === 'none' ? '' : `
