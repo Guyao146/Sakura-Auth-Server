@@ -421,6 +421,28 @@ export function appDetailPage({ theme, siteName, user, cur, app, allGroups = [],
         ${kvRow('吊销端点', esc(issuer + '/revoke'))}
       </div>
       <div class="card">
+        <h3 style="margin-top:0">应用 Logo</h3>
+        <div style="display:flex;align-items:center;gap:var(--s3);margin:0 0 var(--s3)">
+          ${a.logoUrl
+            ? `<img src="${esc(a.logoUrl)}" alt="应用 Logo 预览" style="width:48px;height:48px;object-fit:contain;border-radius:var(--radius);background:var(--surface-soft);box-shadow:inset 0 0 0 1px var(--border)">`
+            : '<span class="muted">当前未设置 Logo,门户与授权页展示首字母徽标。</span>'}
+          <span class="muted small" style="word-break:break-all">${a.logoUrl ? `当前:${esc(a.logoUrl)}` : '上传图片或填写外链地址均可。'}</span>
+        </div>
+        <form method="post" action="/admin/apps/${esc(a.client_id)}/logo" enctype="multipart/form-data">
+          ${hiddenInputs({ _csrf: a._csrf })}
+          <label>上传 Logo 图片</label>
+          <input type="file" name="logo" accept="image/*">
+          <p class="muted small" style="margin:var(--s1) 0">仅支持 PNG / JPEG / WebP / GIF,单文件不超过 2MB(按文件内容校验,与扩展名无关);上传成功后覆盖原有 Logo。</p>
+          <div class="actions"><button class="btn btn-primary" type="submit">上传 Logo</button></div>
+        </form>
+        ${a.logoUrl ? `
+        <form method="post" action="/admin/apps/${esc(a.client_id)}/logo/delete" style="margin-top:var(--s3)">
+          ${hiddenInputs({ _csrf: a._csrf })}
+          <button class="btn btn-danger" type="submit">删除 Logo</button>
+        </form>` : ''}
+        <p class="muted small" style="margin:var(--s3) 0 0">也可以在下方「应用设置」中填写 Logo 图片外链地址;外链与上传二选一,后保存者生效。</p>
+      </div>
+      <div class="card">
         <h3 style="margin-top:0">应用设置</h3>
         <form method="post" action="/admin/apps/${esc(a.client_id)}/update">
           ${hiddenInputs({ _csrf: a._csrf })}

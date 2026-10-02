@@ -33,7 +33,7 @@ class Jar {
   header() { return [...this.map].map(([k, v]) => `${k}=${v}`).join('; '); }
 }
 
-async function call(jar, pathOrUrl, { method = 'GET', form, json, headers = {} } = {}) {
+async function call(jar, pathOrUrl, { method = 'GET', form, json, headers = {}, raw } = {}) {
   const res = await fetch(pathOrUrl.startsWith('http') ? pathOrUrl : BASE + pathOrUrl, {
     method, redirect: 'manual',
     headers: {
@@ -42,7 +42,9 @@ async function call(jar, pathOrUrl, { method = 'GET', form, json, headers = {} }
       ...(jar.header() ? { Cookie: jar.header() } : {}),
       ...headers,
     },
-    body: form ? new URLSearchParams(form).toString() : json !== undefined ? JSON.stringify(json) : undefined,
+    body: raw !== undefined ? raw
+      : form ? new URLSearchParams(form).toString()
+      : json !== undefined ? JSON.stringify(json) : undefined,
   });
   jar.store(res);
   return res;
@@ -1583,6 +1585,142 @@ async function main() {
       healthMock.closeAllConnections?.();
       await new Promise((resolve) => healthMock.close(resolve));
     }
+
+    /* ---------- 应用 Logo 直接上传(放在向导重跑段之前) ---------- */
+    const PNG_1PX = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+    const GIF_1PX = Buffer.from('R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==', 'base64');
+    const uploadsDirSmoke = path.join(DATA, 'uploads');
+    const listUploads = () => (fs.existsSync(uploadsDirSmoke) ? fs.readdirSync(uploadsDirSmoke).sort() : []);
+    // 手拼 multipart:node 构造 boundary + 真实字节(零依赖,与浏览器表单行为一致)
+    const postMultipart = async (jar, pathName, { fields = {}, file } = {}) => {
+      const boundary = '----sakuralogosmoke' + crypto.randomBytes(10).toString('hex');
+      const parts = [];
+      for (const [k, v] of Object.entries(fields)) {
+        parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${k}"\r\n\r\n${v}\r\n`));
+      }
+      if (file) {
+        parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${file.name}"; filename="${file.filename}"\r\nContent-Type: ${file.contentType}\r\n\r\n`));
+        parts.push(file.data);
+        parts.push(Buffer.from('\r\n'));
+      }
+      parts.push(Buffer.from(`--${boundary}--\r\n`));
+      return call(jar, pathName, {
+        method: 'POST',
+        headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` },
+        raw: Buffer.concat(parts),
+      });
+    };
+
+    // 承载 Logo 用例的专用应用
+    r = await call(aj, '/admin/apps/create', {
+      method: 'POST',
+      form: [['name', 'Logo 演示'], ['client_type', 'public'],
+        ['redirect_uris', 'http://127.0.0.1:8080/logo-cb'], ['scopes', 'openid']],
+    });
+    ok('Logo:创建测试应用成功', r.status === 302 && location(r).startsWith('/admin/apps/'));
+    const logoAppId = new URL(location(r), BASE).pathname.split('/').pop();
+    r = await call(aj, `/admin/apps/${logoAppId}`);
+    const logoDetail0 = await r.text();
+    const logoCsrf = extractHidden(logoDetail0)._csrf;
+    ok('Logo:详情页提供上传卡片(multipart 表单/文件输入/限制说明)', r.status === 200
+      && logoDetail0.includes('应用 Logo')
+      && logoDetail0.includes(`action="/admin/apps/${logoAppId}/logo"`)
+      && logoDetail0.includes('enctype="multipart/form-data"')
+      && logoDetail0.includes('name="logo"') && logoDetail0.includes('accept="image/*"')
+      && logoDetail0.includes('2MB') && logoDetail0.includes('PNG') && logoDetail0.includes('WebP'));
+
+    // 上传 PNG:multipart 中 csrf 走 fields;302 回详情 + logo_url 更新 + 文件落盘
+    r = await postMultipart(aj, `/admin/apps/${logoAppId}/logo`, {
+      fields: { _csrf: logoCsrf },
+      file: { name: 'logo', filename: 'logo.png', contentType: 'image/png', data: PNG_1PX },
+    });
+    ok('Logo:上传 PNG 成功(302 回详情页)', r.status === 302 && location(r).startsWith(`/admin/apps/${logoAppId}?msg=`),
+      `status=${r.status} loc=${location(r)}`);
+    const logoPngPath = path.join(uploadsDirSmoke, `${logoAppId}.png`);
+    ok('Logo:上传后 logo_url 指向 /uploads 且文件字节与上传一致', clients.byId(logoAppId).logo_url === `/uploads/${logoAppId}.png`
+      && fs.existsSync(logoPngPath) && Buffer.compare(fs.readFileSync(logoPngPath), PNG_1PX) === 0);
+
+    // 静态服务:匿名 200 + image/png + 字节一致 + 公开缓存 + nosniff
+    r = await fetch(BASE + `/uploads/${logoAppId}.png`);
+    const servedLogo = Buffer.from(await r.arrayBuffer());
+    ok('Logo:GET /uploads 匿名返回 200 与 image/png 且字节一致', r.status === 200
+      && r.headers.get('content-type') === 'image/png' && Buffer.compare(servedLogo, PNG_1PX) === 0,
+      `status=${r.status} ct=${r.headers.get('content-type')}`);
+    ok('Logo:静态服务带 public 缓存与 nosniff 头', (r.headers.get('cache-control') || '').includes('max-age=604800')
+      && r.headers.get('x-content-type-options') === 'nosniff');
+
+    // 详情页出现上传 Logo 的预览 img
+    r = await call(aj, `/admin/apps/${logoAppId}`);
+    const logoDetail1 = await r.text();
+    ok('Logo:详情页渲染上传 Logo 预览 img', r.status === 200
+      && logoDetail1.includes(`<img src="/uploads/${logoAppId}.png"`));
+
+    // 目录穿越与白名单外文件名一律 404
+    ok('Logo:目录穿越路径被拒(404)', (await fetch(BASE + '/uploads/..%2F..%2Fidp.sqlite')).status === 404);
+    ok('Logo:白名单外扩展名被拒(404)', (await fetch(BASE + `/uploads/${logoAppId}.txt`)).status === 404);
+
+    // 非图片字节(伪造 .png):415 拒绝且不留文件、logo_url 不变
+    const beforeBad = listUploads();
+    r = await postMultipart(aj, `/admin/apps/${logoAppId}/logo`, {
+      fields: { _csrf: logoCsrf },
+      file: { name: 'logo', filename: 'fake.png', contentType: 'image/png', data: Buffer.from('definitely-not-an-image-bytes-0123456789') },
+    });
+    ok('Logo:非图片字节被拒(415)', r.status === 415, `status=${r.status}`);
+    ok('Logo:非图片拒绝后不留文件且 logo_url 不变', JSON.stringify(listUploads()) === JSON.stringify(beforeBad)
+      && clients.byId(logoAppId).logo_url === `/uploads/${logoAppId}.png`);
+
+    // 超过 2MB:413(魔数合法但体量超限)
+    r = await postMultipart(aj, `/admin/apps/${logoAppId}/logo`, {
+      fields: { _csrf: logoCsrf },
+      file: { name: 'logo', filename: 'big.png', contentType: 'image/png', data: Buffer.concat([PNG_1PX, Buffer.alloc(2 * 1024 * 1024 + 1024, 0x61)]) },
+    });
+    ok('Logo:超过 2MB 上传被拒(413)', r.status === 413, `status=${r.status}`);
+
+    // CSRF 错误被拒
+    r = await postMultipart(aj, `/admin/apps/${logoAppId}/logo`, {
+      fields: { _csrf: 'wrong-csrf-value' },
+      file: { name: 'logo', filename: 'x.png', contentType: 'image/png', data: PNG_1PX },
+    });
+    ok('Logo:CSRF 错误时上传被拒', r.status === 302 && location(r).includes('err='));
+
+    // 普通用户不可操作(路由 {auth:'admin'});未登录重定向登录页
+    ok('Logo:普通用户上传被拒(403)', (await postMultipart(fj, `/admin/apps/${logoAppId}/logo`, {
+      fields: { _csrf: 'x' },
+      file: { name: 'logo', filename: 'x.png', contentType: 'image/png', data: PNG_1PX },
+    })).status === 403);
+    ok('Logo:未登录上传重定向登录页', (await postMultipart(new Jar(), `/admin/apps/${logoAppId}/logo`, {
+      fields: { _csrf: 'x' },
+      file: { name: 'logo', filename: 'x.png', contentType: 'image/png', data: PNG_1PX },
+    })).status === 302);
+
+    // 换格式重传 GIF:扩展名变化 → 旧 PNG 清理、logo_url 指向新文件
+    r = await postMultipart(aj, `/admin/apps/${logoAppId}/logo`, {
+      fields: { _csrf: logoCsrf },
+      file: { name: 'logo', filename: 'logo.gif', contentType: 'image/gif', data: GIF_1PX },
+    });
+    ok('Logo:重传 GIF 成功且旧 PNG 文件被清理', r.status === 302
+      && clients.byId(logoAppId).logo_url === `/uploads/${logoAppId}.gif`
+      && !fs.existsSync(logoPngPath)
+      && fs.existsSync(path.join(uploadsDirSmoke, `${logoAppId}.gif`)));
+
+    // 删除 Logo:文件删除 + logo_url 置空
+    r = await call(aj, `/admin/apps/${logoAppId}/logo/delete`, { method: 'POST', form: { _csrf: logoCsrf } });
+    ok('Logo:删除后 logo_url 清空且文件删除', r.status === 302 && location(r).includes('msg=')
+      && clients.byId(logoAppId).logo_url === ''
+      && !fs.existsSync(path.join(uploadsDirSmoke, `${logoAppId}.gif`)));
+
+    // 外链 URL 字段仍可用(回归):与上传二选一,后保存者生效
+    r = await call(aj, `/admin/apps/${logoAppId}/update`, {
+      method: 'POST',
+      form: [['name', 'Logo 演示'], ['redirect_uris', 'http://127.0.0.1:8080/logo-cb'],
+        ['scopes', 'openid'], ['logo_url', 'https://cdn.example.com/external-logo.png'], ['_csrf', logoCsrf]],
+    });
+    ok('Logo:外链 URL 字段仍可用(回归)', r.status === 302 && location(r).includes('msg=')
+      && clients.byId(logoAppId).logo_url === 'https://cdn.example.com/external-logo.png');
+
+    // 审计留痕:上传 2 次 + 删除 1 次
+    ok('Logo:上传与删除计入审计', auditM.list({ action: 'admin.app_logo_uploaded', limit: 100 }).length === 2
+      && auditM.list({ action: 'admin.app_logo_deleted', limit: 100 }).length === 1);
 
     /* ---------- 配置向导增强:管理员重新运行向导(放在最后,尾部恢复 setup_done=1) ---------- */
     r = await call(aj, '/admin');
