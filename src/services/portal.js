@@ -6,6 +6,7 @@ import { randomToken, sha256b64url } from '../core/crypto.js';
 import { sendHtml, redirect, setCookie } from '../core/http.js';
 import { portalPage } from '../views/portal.js';
 import { forbidden } from './auth/login.js';
+import { record } from './audit.js';
 
 /* 启动参数暂存:门户代发的 PKCE,verifier 留在服务端(单实例内存),发码时写入授权码记录 */
 const launchStash = new Map();
@@ -48,10 +49,20 @@ export function launch(ctx) {
   if (!app.client_id || !app.uriList.length) {
     return redirect(ctx.res, '/apps?err=' + encodeURIComponent('应用不存在或未配置回调地址。'));
   }
-  const mine = groups.membersOf(ctx.user.id);
-  if (app.allowedGroupList.length && !app.allowedGroupList.some((g) => mine.includes(g))) {
-    return forbidden({ res: ctx.res, theme: ctx.theme, runtime: ctx.runtime, session: ctx.session, user: ctx.user },
-      `应用「${app.name}」仅对特定权限组开放,你不在所需组内。`);
+  // 管理员模拟启动:携带 sim_group(须为真实存在的组)时跳过组限制检查,受限应用也放行,
+  // 用于以所选权限组的视角验证授权链路(真实身份不变,动作计入审计);
+  // 普通用户或组名不存在时忽略该参数,照常执行组限制。
+  let simGroup = '';
+  const requested = ctx.query.get('sim_group');
+  if (requested && ctx.user.is_admin) simGroup = groups.byName(requested)?.name || '';
+  if (simGroup) {
+    record(ctx, 'admin.simulate_launch', `应用「${app.name}」· 模拟组「${simGroup}」`);
+  } else {
+    const mine = groups.membersOf(ctx.user.id);
+    if (app.allowedGroupList.length && !app.allowedGroupList.some((g) => mine.includes(g))) {
+      return forbidden({ res: ctx.res, theme: ctx.theme, runtime: ctx.runtime, session: ctx.session, user: ctx.user },
+        `应用「${app.name}」仅对特定权限组开放,你不在所需组内。`);
+    }
   }
   const params = new URLSearchParams({
     client_id: app.client_id,

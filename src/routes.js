@@ -18,6 +18,7 @@ import * as portal from './services/portal.js';
 import * as api from './services/api.js';
 import { showLanding } from './services/home.js';
 import { setTheme } from './views/theme.js';
+import { showHealth } from './views/health.js';
 
 /** 路由表:URL → 服务函数;opts.cors 开放跨域,opts.auth 做会话/管理员校验 */
 export function registerRoutes() {
@@ -25,6 +26,8 @@ export function registerRoutes() {
   const r = router.add.bind(router);
 
   r('GET', '/healthz', (ctx) => sendJson(ctx.res, 200, { status: 'ok' }));
+  // 品牌化健康状态页(匿名无需登录;no-store,不做 CORS —— 跨域 JSON 走 /api/heartbeat)
+  r('GET', '/health', showHealth);
   r('GET', '/favicon.ico', (ctx) => { ctx.res.writeHead(204); ctx.res.end(); });
   r('GET', '/', showLanding);
   r('GET', '/-/theme/:mode', setTheme);

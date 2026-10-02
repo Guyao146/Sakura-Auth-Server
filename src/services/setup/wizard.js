@@ -30,7 +30,7 @@ const isSetupPath = (p) => p === '/setup' || p.startsWith('/setup/');
 /** 部署守卫:未完成向导时,除向导与健康检查外全部重定向 */
 export function setupGate(pathname) {
   const rt = getRuntime();
-  if (!rt.setupDone && !isSetupPath(pathname) && pathname !== '/healthz' && !pathname.startsWith('/-/theme/')) {
+  if (!rt.setupDone && !isSetupPath(pathname) && pathname !== '/healthz' && pathname !== '/health' && !pathname.startsWith('/-/theme/')) {
     return '/setup';
   }
   if (rt.setupDone && isSetupPath(pathname)) return '/';

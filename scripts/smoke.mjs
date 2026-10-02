@@ -178,6 +178,9 @@ async function main() {
     const wj = new Jar();
     let r = await call(wj, '/setup');
     ok('未初始化时首页重定向到向导', (await call(new Jar(), '/')).status === 302 && r.status === 200 && (await r.text()).includes('环境检测'));
+    r = await call(new Jar(), '/health');
+    ok('健康:未初始化时 /health 在白名单内可直接访问', r.status === 200
+      && (await r.text()).includes('服务运行中'));
     r = await call(wj, '/setup/step1', { method: 'POST', form: {} });
     ok('向导第 1 步通过', r.status === 302 && location(r) === '/setup');
     r = await call(wj, '/setup/step2', {
@@ -1274,6 +1277,63 @@ async function main() {
     ok('审计:清空后列表为空', r.status === 302 && location(r).startsWith('/admin/audit') && auditM.count() === 0);
     r = await call(aj, '/admin/audit');
     ok('审计:清空后页面显示空状态', r.status === 200 && (await r.text()).includes('暂无审计记录'));
+
+    /* ---------- 健康状态页与应用模拟权限组启动(放在向导重跑段之前) ---------- */
+    // 匿名 /health:品牌化状态页,含版本/运行状态/时长/数据库/发现文档链接,无敏感计数
+    r = await call(new Jar(), '/health');
+    const healthHtml = await r.text();
+    ok('健康:匿名访问 200 且含版本号/运行状态/站点名/数据库状态', r.status === 200
+      && healthHtml.includes('服务运行中') && healthHtml.includes(pkgVersion)
+      && healthHtml.includes('樱落统一认证') && healthHtml.includes('连接正常') && healthHtml.includes('已运行'));
+    ok('健康:页面含发现文档与心跳 JSON 链接及 Issuer', healthHtml.includes('/.well-known/openid-configuration')
+      && healthHtml.includes('/api/heartbeat') && healthHtml.includes(BASE));
+    ok('健康:响应 no-store 且不开放跨域(跨域 JSON 专属 /api/heartbeat)',
+      (r.headers.get('cache-control') || '').includes('no-store')
+      && r.headers.get('access-control-allow-origin') === null);
+    ok('健康:不含用户/应用计数等敏感信息', !healthHtml.includes('用户')
+      && !healthHtml.includes('在线会话') && !healthHtml.includes('有效访问令牌')
+      && !healthHtml.includes('用户数') && !healthHtml.includes('应用数'));
+    r = await call(nj2, '/health');
+    ok('健康:普通用户(已登录)也可访问状态页', r.status === 200 && (await r.text()).includes('服务运行中'));
+
+    // 应用详情页:管理员可见「模拟启动」卡片与权限组下拉(Groups Only 限 dev)
+    r = await call(aj, `/admin/apps/${gApp.client_id}`);
+    const simDetail = await r.text();
+    ok('模拟:应用详情含模拟启动卡片与权限组下拉', simDetail.includes('模拟启动')
+      && simDetail.includes('以所选权限组的视角') && simDetail.includes('name="sim_group"')
+      && simDetail.includes('value="dev"'));
+
+    // 管理员携带 sim_group=dev 启动受限应用:跳过组限制,302 进入授权流程(非 403)
+    r = await call(aj, `/apps/launch/${gApp.client_id}?sim_group=dev`);
+    const simLoc = location(r);
+    ok('模拟:管理员带 sim_group 启动受限应用进入授权流程(非 403)', r.status === 302
+      && simLoc.startsWith('/authorize?') && simLoc.includes('client_id=' + gApp.client_id)
+      && simLoc.includes('code_challenge='), `status=${r.status} loc=${simLoc}`);
+
+    // 模拟启动的后续流程(authorize → 同意 → code 回调)完全复用现状:以未限制应用全链路验证
+    r = await call(aj, `/apps/launch/${web.client_id}?sim_group=dev`);
+    ok('模拟:管理员模拟启动未限制应用同样进入授权流程', r.status === 302 && location(r).startsWith('/authorize?'));
+    r = await call(aj, location(r));
+    const simConsentHtml = await r.text();
+    ok('模拟:模拟启动后进入同意授权页(其余流程复用现状)', r.status === 200
+      && simConsentHtml.includes('请求访问你的账号'));
+    const simForm = extractHidden(simConsentHtml);
+    r = await call(aj, '/authorize', { method: 'POST', form: { ...simForm, decision: 'approve', remember: 'on' } });
+    const simCb = new URL(location(r), BASE);
+    ok('模拟:同意后携带 code 与 state 回跳应用回调', r.status === 302
+      && !!simCb.searchParams.get('code') && !!simCb.searchParams.get('state'));
+
+    // 模拟启动计入审计(审计段刚清空;两次模拟启动各留痕,detail 含应用名与模拟组)
+    const simRows = auditM.list({ action: 'admin.simulate_launch', limit: 10 });
+    ok('模拟:产生 admin.simulate_launch 审计记录(含应用名与模拟组)', simRows.length === 2
+      && simRows.every((row) => row.actor === 'admin' && row.detail.includes('dev'))
+      && simRows.some((row) => row.detail.includes('Groups Only'))
+      && simRows.some((row) => row.detail.includes('Smoke Web')), JSON.stringify(simRows));
+
+    // 普通用户携带 sim_group:参数被忽略,组限制照常生效
+    r = await call(nj2, `/apps/launch/${gApp.client_id}?sim_group=dev`);
+    ok('模拟:普通用户带 sim_group 启动受限应用仍被拦截(403)', r.status === 403
+      && (await r.text()).includes('仅对特定权限组开放'));
 
     /* ---------- 配置向导增强:管理员重新运行向导(放在最后,尾部恢复 setup_done=1) ---------- */
     r = await call(aj, '/admin');
