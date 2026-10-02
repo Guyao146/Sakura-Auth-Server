@@ -1413,6 +1413,16 @@ async function main() {
       && simLoc.startsWith('/authorize?') && simLoc.includes('client_id=' + gApp.client_id)
       && simLoc.includes('code_challenge='), `status=${r.status} loc=${simLoc}`);
 
+    // 补:受限应用模拟启动走完整链路(authorize 层 sim 旁路 → 同意 → code 回调)
+    r = await call(aj, simLoc);
+    const gSimConsent = await r.text();
+    const gSimForm = extractHidden(gSimConsent);
+    ok('模拟:受限应用模拟启动进入同意页且 sim_group 随表单保留', r.status === 200
+      && gSimConsent.includes('请求访问你的账号') && gSimForm.sim_group === 'dev');
+    r = await call(aj, '/authorize', { method: 'POST', form: { ...gSimForm, decision: 'approve', remember: 'on' } });
+    ok('模拟:受限应用模拟启动同意后签发 code(全链路)', r.status === 302
+      && !!new URL(location(r), BASE).searchParams.get('code'));
+
     // 模拟启动的后续流程(authorize → 同意 → code 回调)完全复用现状:以未限制应用全链路验证
     r = await call(aj, `/apps/launch/${web.client_id}?sim_group=dev`);
     ok('模拟:管理员模拟启动未限制应用同样进入授权流程', r.status === 302 && location(r).startsWith('/authorize?'));

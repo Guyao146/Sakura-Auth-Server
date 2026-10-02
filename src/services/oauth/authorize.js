@@ -11,7 +11,7 @@ import { consentPage, accessDeniedPage } from '../../views/auth.js';
 import { record } from '../audit.js';
 
 const REPLAY_FIELDS = ['response_type', 'client_id', 'redirect_uri', 'scope', 'state',
-  'code_challenge', 'code_challenge_method', 'nonce', 'prompt'];
+  'code_challenge', 'code_challenge_method', 'nonce', 'prompt', 'sim_group'];
 
 /** 校验 client + redirect_uri;不合法时返回需要直接渲染的错误 */
 function resolveClient(clientId, redirectUri) {
@@ -42,6 +42,9 @@ function denyIfNotAllowed(ctx, client) {
   if (!allowed.length) return false;
   const mine = groups.membersOf(ctx.user.id);
   if (allowed.some((name) => mine.includes(name))) return false;
+  // 管理员模拟:应用详情「模拟启动」携带 sim_group 时放行(launch 层已审计)
+  const simGroup = ctx.query.get('sim_group') || (ctx.body && ctx.body.sim_group) || '';
+  if (simGroup && ctx.user.is_admin && groups.byName(simGroup)) return false;
   sendHtml(ctx.res, 403, accessDeniedPage({
     theme: ctx.theme, siteName: getRuntime().siteName, clientName: client.name, requiredGroups: allowed,
   }));

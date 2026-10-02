@@ -72,6 +72,8 @@ export function launch(ctx) {
     state: randomToken(12),
     nonce: randomToken(12),
   });
+  // sim_group 透传给授权端点:authorize 层的组限制检查与同意表单回放都依赖它
+  if (simGroup) params.set('sim_group', simGroup);
   if (app.pkce_required) {
     // 门户代发 PKCE:verifier 暂存于服务端,authorize 发码时写入授权码记录,
     // 应用回调后凭 code 即可正常换取令牌(IdP-initiated 委托)
