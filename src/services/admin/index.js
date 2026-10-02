@@ -13,7 +13,7 @@ import { splitLines, redirectUri as validUri, httpUrl } from '../../core/util.js
 import { SCOPES, DEFAULT_CLIENT_SCOPES } from '../../core/config.js';
 import { sendHtml, redirect } from '../../core/http.js';
 import { logger } from '../../core/logger.js';
-import { dashboardPage, groupsPage, usersPage, userFormPage, appsPage, appFormPage, appDetailPage, secretRevealPage } from '../../views/admin.js';
+import { dashboardPage, groupsPage, groupDetailPage, usersPage, userFormPage, appsPage, appFormPage, appDetailPage, secretRevealPage } from '../../views/admin.js';
 import { record } from '../audit.js';
 
 const CSRF = (ctx) => ctx.session.csrf;
@@ -95,6 +95,121 @@ export function deleteGroup(ctx) {
   if (!g) return back('权限组不存在。');
   groups.remove(g.id);
   redirect(ctx.res, '/admin/groups?msg=' + encodeURIComponent(`权限组 ${g.name} 已删除,成员关系已解除。`));
+}
+
+/* ---------------- 权限组详情:成员管理 + 组维度应用授权 ---------------- */
+
+/** GET /admin/groups/:id —— 组详情:成员 + 可访问应用 + 组信息编辑 */
+export function showGroupDetail(ctx) {
+  const g = groups.byId(ctx.params.id);
+  if (!g) return redirect(ctx.res, '/admin/groups?err=' + encodeURIComponent('权限组不存在。'));
+  const members = groups.listMembers(g.id);
+  const memberIds = new Set(members.map((m) => m.id));
+  const candidates = users.list().filter((u) => !memberIds.has(u.id));
+  const apps = clients.list().map((c) => {
+    const allowed = clients.allowedGroupNames(c);
+    return {
+      client_id: c.client_id,
+      name: c.name,
+      // open = 未限制(所有用户可访问);granted/denied = 已限制且含/不含本组
+      state: !allowed.length ? 'open' : allowed.includes(g.name) ? 'granted' : 'denied',
+    };
+  });
+  sendHtml(ctx.res, 200, groupDetailPage({
+    theme: ctx.theme, siteName: getRuntime().siteName, user: ctx.user,
+    cur: ctx.url.pathname + ctx.url.search, group: g, members, candidates, apps, csrf: CSRF(ctx),
+    msg: ctx.query.get('msg'), err: ctx.query.get('err'),
+  }));
+}
+
+/** POST /admin/groups/:id/update —— 组名/描述编辑(重名校验;重命名同步应用引用与镜像文本) */
+export function updateGroup(ctx) {
+  const b = ctx.body || {};
+  const g = groups.byId(ctx.params.id);
+  if (!g) return redirect(ctx.res, '/admin/groups?err=' + encodeURIComponent('权限组不存在。'));
+  const back = (e) => redirect(ctx.res, `/admin/groups/${g.id}?err=` + encodeURIComponent(e));
+  if (b._csrf !== CSRF(ctx)) return back('页面已过期,请重试。');
+  const name = String(b.name || '').trim();
+  const description = String(b.description || '').trim();
+  if (!name || name.length > 40) return back('组名必填且不超过 40 字。');
+  if (/\s/.test(name)) return back('组名不能包含空白字符。');
+  const dup = groups.byName(name);
+  if (dup && dup.id !== g.id) return back(`权限组 ${name} 已存在。`);
+  groups.update(g.id, { name, description });
+  if (name !== g.name) {
+    // 组名变更:同步引用旧组名的应用访问限制,避免授权悄悄失效
+    for (const c of clients.list()) {
+      const allowed = clients.allowedGroupNames(c);
+      if (allowed.includes(g.name)) {
+        clients.update(c.client_id, { allowedGroups: allowed.map((n) => (n === g.name ? name : n)) });
+      }
+    }
+  }
+  record(ctx, 'admin.group_updated', name);
+  redirect(ctx.res, `/admin/groups/${g.id}?msg=` + encodeURIComponent('权限组信息已更新。'));
+}
+
+/** POST /admin/groups/:id/members —— 批量添加成员(users 复选框多选;幂等) */
+export function addMembers(ctx) {
+  const b = ctx.body || {};
+  const g = groups.byId(ctx.params.id);
+  if (!g) return redirect(ctx.res, '/admin/groups?err=' + encodeURIComponent('权限组不存在。'));
+  const back = (e) => redirect(ctx.res, `/admin/groups/${g.id}?err=` + encodeURIComponent(e));
+  if (b._csrf !== CSRF(ctx)) return back('页面已过期,请重试。');
+  const raw = Array.isArray(b.users) ? b.users : b.users ? [b.users] : [];
+  const added = [];
+  for (const id of raw) {
+    const u = users.byId(String(id));
+    if (u) {
+      groups.addMember(g.id, u.id);
+      added.push(u.username);
+    }
+  }
+  if (!added.length) return back('请选择要添加的用户。');
+  record(ctx, 'admin.group_members_added', `${g.name} + ${added.join(',')}`);
+  redirect(ctx.res, `/admin/groups/${g.id}?msg=` + encodeURIComponent(`已添加 ${added.length} 名成员。`));
+}
+
+/** POST /admin/groups/:id/members/remove —— 移除单个成员(幂等) */
+export function removeMember(ctx) {
+  const b = ctx.body || {};
+  const g = groups.byId(ctx.params.id);
+  if (!g) return redirect(ctx.res, '/admin/groups?err=' + encodeURIComponent('权限组不存在。'));
+  const back = (e) => redirect(ctx.res, `/admin/groups/${g.id}?err=` + encodeURIComponent(e));
+  if (b._csrf !== CSRF(ctx)) return back('页面已过期,请重试。');
+  const u = users.byId(String(b.user_id || ''));
+  if (!u) return back('用户不存在。');
+  groups.removeMember(g.id, u.id);
+  record(ctx, 'admin.group_member_removed', `${g.name} - ${u.username}`);
+  redirect(ctx.res, `/admin/groups/${g.id}?msg=` + encodeURIComponent(`已移除成员 ${u.username}。`));
+}
+
+/** POST /admin/groups/:id/apps —— 组维度应用授权单端点(action = grant | revoke) */
+export function grantGroupApp(ctx) {
+  const b = ctx.body || {};
+  const g = groups.byId(ctx.params.id);
+  if (!g) return redirect(ctx.res, '/admin/groups?err=' + encodeURIComponent('权限组不存在。'));
+  const back = (e) => redirect(ctx.res, `/admin/groups/${g.id}?err=` + encodeURIComponent(e));
+  if (b._csrf !== CSRF(ctx)) return back('页面已过期,请重试。');
+  const app = clients.byId(String(b.client_id || ''));
+  if (!app) return back('应用不存在。');
+  const allowed = clients.allowedGroupNames(app);
+  if (b.action === 'grant') {
+    // 不受限应用(空 allowed_groups = 所有用户可访问)无需也无法在此授权
+    if (!allowed.length) return back('该应用未限制访问,所有用户均可访问,无需授权。');
+    if (!allowed.includes(g.name)) allowed.push(g.name);
+    clients.update(app.client_id, { allowedGroups: allowed });
+    record(ctx, 'admin.group_app_granted', `${g.name} 授权 ${app.name}`);
+    return redirect(ctx.res, `/admin/groups/${g.id}?msg=` + encodeURIComponent(`已授权组 ${g.name} 访问应用 ${app.name}。`));
+  }
+  if (b.action === 'revoke') {
+    if (!allowed.includes(g.name)) return back('该应用尚未授权本组。');
+    // 移除后列表为空则保留为空,应用回到不受限状态
+    clients.update(app.client_id, { allowedGroups: allowed.filter((n) => n !== g.name) });
+    record(ctx, 'admin.group_app_revoked', `${g.name} 取消授权 ${app.name}`);
+    return redirect(ctx.res, `/admin/groups/${g.id}?msg=` + encodeURIComponent(`已移除组 ${g.name} 对应用 ${app.name} 的授权。`));
+  }
+  return back('未知的操作类型。');
 }
 
 /* ---------------- 用户管理 ---------------- */

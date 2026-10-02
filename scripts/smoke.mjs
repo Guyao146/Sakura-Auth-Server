@@ -741,6 +741,109 @@ async function main() {
     ok('权限组:删除组后从列表与用户表单消失', r.status === 200 && !groupsM.byName('contractors')
       && !groupsM.membersOf(bob.id).includes('contractors') && !afterDeleteHtml.includes('contractors'));
 
+    /* ---------- 组详情:管理员默认组 + 成员管理 + 组维度应用授权 ---------- */
+    const { seedDefaultAdminGroup } = await import('../src/core/db.js');
+    const noah = users.byUsername('noah');
+    const carolUser = users.byUsername('carol');
+
+    // 管理员默认组种子:向导创建的 admin 在种子阶段补入 admin 组(幂等)
+    const seedFirst = seedDefaultAdminGroup();
+    const adminUser = users.byUsername('admin');
+    ok('组详情:默认组种子后 admin 组存在且管理员是成员', seedFirst === 1
+      && !!groupsM.byName('admin') && groupsM.membersOf(adminUser.id).includes('admin'));
+    ok('组详情:默认组种子幂等(重跑不再新增)', seedDefaultAdminGroup() === 0
+      && groupsM.membersOf(adminUser.id).filter((n) => n === 'admin').length === 1);
+
+    // 组详情页基本结构与组信息编辑
+    const devGroup = groupsM.byName('dev');
+    const opsGroup = groupsM.byName('ops');
+    r = await call(aj, `/admin/groups/${devGroup.id}`);
+    const devDetail = await r.text();
+    ok('组详情:详情页可访问且含成员/应用/编辑卡片', r.status === 200 && devDetail.includes('可访问的应用')
+      && devDetail.includes('添加成员') && devDetail.includes('编辑组信息') && devDetail.includes('返回权限组列表'));
+    const devForm = extractHidden(devDetail);
+    r = await call(aj, `/admin/groups/${devGroup.id}/update`, {
+      method: 'POST', form: { name: 'dev', description: '开发组', _csrf: devForm._csrf },
+    });
+    ok('组详情:组信息更新成功', r.status === 302 && location(r).startsWith(`/admin/groups/${devGroup.id}?msg=`)
+      && groupsM.byName('dev').description === '开发组');
+    r = await call(aj, `/admin/groups/${devGroup.id}`);
+    ok('组详情:页头展示组名与描述', r.status === 200 && (await r.text()).includes('开发组'));
+    r = await call(aj, `/admin/groups/${devGroup.id}/update`, {
+      method: 'POST', form: { name: 'ops', description: '', _csrf: devForm._csrf },
+    });
+    ok('组详情:组重命名重名被拒', r.status === 302 && location(r).includes('err=') && !!groupsM.byName('dev'));
+
+    // 成员管理:ops 组为空组,先验证空状态,再批量添加与移除
+    r = await call(aj, `/admin/groups/${opsGroup.id}`);
+    const opsEmpty = await r.text();
+    ok('组详情:空组显示空成员状态并列出候选用户', r.status === 200 && opsEmpty.includes('该组还没有成员')
+      && opsEmpty.includes(`name="users" value="${noah.id}"`));
+    const opsForm = extractHidden(opsEmpty);
+    r = await call(aj, `/admin/groups/${opsGroup.id}/members`, {
+      method: 'POST', form: [['users', noah.id], ['users', carolUser.id], ['_csrf', opsForm._csrf]],
+    });
+    ok('组详情:批量添加成员生效', r.status === 302 && location(r).startsWith(`/admin/groups/${opsGroup.id}?msg=`)
+      && groupsM.membersOf(noah.id).includes('ops') && groupsM.membersOf(carolUser.id).includes('ops'));
+    r = await call(aj, `/admin/groups/${opsGroup.id}/members/remove`, {
+      method: 'POST', form: { user_id: noah.id, _csrf: opsForm._csrf },
+    });
+    ok('组详情:移除成员生效', r.status === 302 && location(r).startsWith(`/admin/groups/${opsGroup.id}?msg=`)
+      && !groupsM.membersOf(noah.id).includes('ops') && groupsM.membersOf(carolUser.id).includes('ops'));
+
+    // 组维度应用授权:dev 组视角(Groups Only 限 dev;Detail Locked 限 dev+ops;Contractor Zone 限 ops)
+    const detailLocked = clients.create({
+      name: 'Detail Locked', redirectUris: ['http://127.0.0.1:8080/dl'],
+      scopes: 'openid profile', isPublic: true, pkceRequired: true, allowedGroups: ['dev', 'ops'],
+    });
+    const contractorZone = clients.create({
+      name: 'Contractor Zone', redirectUris: ['http://127.0.0.1:8080/cz'],
+      scopes: 'openid profile', isPublic: true, pkceRequired: true, allowedGroups: ['ops'],
+    });
+    r = await call(aj, `/admin/groups/${devGroup.id}`);
+    const devApps = await r.text();
+    const appRow = (html, from, to) => html.slice(html.indexOf(from), to ? html.indexOf(to) : undefined);
+    const webRow = appRow(devApps, 'Smoke Web', 'Smoke Service');
+    ok('组详情:不受限应用显示「不受限」且无操作按钮', webRow.includes('不受限(所有用户可访问)')
+      && !webRow.includes('授权本组') && !webRow.includes('移除授权') && !webRow.includes('method="post"'));
+    const gAppRow = appRow(devApps, 'Groups Only', 'Groups Svc');
+    ok('组详情:受限且已授权应用显示「已授权」并提供移除授权', gAppRow.includes('已授权')
+      && gAppRow.includes('移除授权') && gAppRow.includes('value="revoke"'));
+    const czRow = appRow(devApps, 'Contractor Zone');
+    ok('组详情:受限未授权应用显示「未授权」并提供授权本组', czRow.includes('未授权')
+      && czRow.includes('授权本组') && czRow.includes('value="grant"'));
+
+    // 授权本组:Contractor Zone(限 ops)加入 dev → allowed_groups 生效,bob(∈dev)可进同意页
+    const devAppsForm = extractHidden(devApps);
+    r = await call(aj, `/admin/groups/${devGroup.id}/apps`, {
+      method: 'POST', form: { client_id: contractorZone.client_id, action: 'grant', _csrf: devAppsForm._csrf },
+    });
+    ok('组详情:授权本组后 allowed_groups 生效', r.status === 302 && location(r).startsWith(`/admin/groups/${devGroup.id}?msg=`)
+      && clients.allowedGroupNames(clients.byId(contractorZone.client_id)).includes('dev'));
+    const czVerifier = crypto.randomBytes(48).toString('base64url');
+    const czAuthUrl = '/authorize?' + new URLSearchParams({
+      client_id: contractorZone.client_id, redirect_uri: 'http://127.0.0.1:8080/cz',
+      response_type: 'code', scope: 'openid profile', state: 'cz-st',
+      code_challenge: b64urlSha256(czVerifier), code_challenge_method: 'S256',
+    }).toString();
+    r = await call(fj, czAuthUrl);
+    ok('组详情:授权后组内用户可进入同意页', r.status === 200 && (await r.text()).includes('请求访问你的账号'));
+
+    // 移除授权:Detail Locked(dev+ops)移除 dev → 剩 ops,bob(∉ops)被拒
+    r = await call(aj, `/admin/groups/${devGroup.id}/apps`, {
+      method: 'POST', form: { client_id: detailLocked.client_id, action: 'revoke', _csrf: devAppsForm._csrf },
+    });
+    ok('组详情:移除授权后 allowed_groups 不再含本组', r.status === 302 && location(r).startsWith(`/admin/groups/${devGroup.id}?msg=`)
+      && JSON.stringify(clients.allowedGroupNames(clients.byId(detailLocked.client_id))) === JSON.stringify(['ops']));
+    const dlVerifier = crypto.randomBytes(48).toString('base64url');
+    const dlAuthUrl = '/authorize?' + new URLSearchParams({
+      client_id: detailLocked.client_id, redirect_uri: 'http://127.0.0.1:8080/dl',
+      response_type: 'code', scope: 'openid profile', state: 'dl-st',
+      code_challenge: b64urlSha256(dlVerifier), code_challenge_method: 'S256',
+    }).toString();
+    r = await call(fj, dlAuthUrl);
+    ok('组详情:移除授权后组内用户被拒(无权访问页)', r.status === 403 && (await r.text()).includes('无权访问该应用'));
+
     /* ---------- 我的授权:查看/撤销已记住的应用授权 ---------- */
     r = await call(fj, '/account/apps');
     const myAuthHtml = await r.text();

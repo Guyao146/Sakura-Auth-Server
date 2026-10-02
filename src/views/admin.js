@@ -21,7 +21,7 @@ const groupCheckboxList = (allGroups, checkedSet, name) => {
 /* ---------------- 权限组管理 ---------------- */
 export function groupsPage({ theme, siteName, user, cur, list, csrf, msg, err }) {
   const rows = list.map((g) => `<tr>
-      <td class="wrap"><b style="color:var(--text)">${esc(g.name)}</b></td>
+      <td class="wrap"><a href="/admin/groups/${esc(g.id)}"><b style="color:var(--text)">${esc(g.name)}</b></a></td>
       <td class="wrap">${esc(g.description || '-')}</td>
       <td class="muted">${g.member_count}</td>
       <td class="rowline">
@@ -55,6 +55,88 @@ export function groupsPage({ theme, siteName, user, cur, list, csrf, msg, err })
         <tbody>${rows || '<tr><td colspan="4" class="muted">还没有权限组。</td></tr>'}</tbody>
       </table></div>
       <p class="muted small">用户的组成员关系在用户编辑页勾选维护;删除组会一并解除其成员关系,引用该组的应用访问限制需另行调整。</p>`,
+  });
+}
+
+/* ---------------- 权限组详情:成员管理 + 组维度应用授权 ---------------- */
+export function groupDetailPage({ theme, siteName, user, cur, group, members = [], candidates = [], apps = [], csrf, msg, err }) {
+  const g = group;
+  const base = `/admin/groups/${esc(g.id)}`;
+  const memberRows = members.map((m) => `<tr>
+      <td class="wrap"><b style="color:var(--text)">${esc(m.username)}</b> ${m.is_admin ? badge('管理员') : ''}${m.disabled ? badge('已禁用', '') : ''}</td>
+      <td>${esc(m.name || '-')}</td>
+      <td class="rowline">
+        <form method="post" action="${base}/members/remove" style="margin:0">
+          ${hiddenInputs({ _csrf: csrf, user_id: m.id })}
+          <button class="btn btn-sm btn-danger" type="submit">移除</button>
+        </form>
+      </td>
+    </tr>`).join('\n');
+  const candidateItems = candidates.map((c) => `
+      <label class="checkline"><input type="checkbox" name="users" value="${esc(c.id)}">
+        <span>${esc(c.username)}${c.name ? `<span class="muted">${esc(c.name)}</span>` : ''}</span></label>`).join('\n');
+  const appRows = apps.map((a) => {
+    const stateBadge = a.state === 'open'
+      ? badge('不受限(所有用户可访问)')
+      : a.state === 'granted'
+        ? badge('已授权')
+        : '<span class="badge" style="color:var(--danger);background:color-mix(in srgb,var(--danger) 12%,transparent)">未授权</span>';
+    const action = a.state === 'open' ? '<span class="muted">-</span>' : `
+        <form method="post" action="${base}/apps" style="margin:0">
+          ${hiddenInputs({ _csrf: csrf, client_id: a.client_id, action: a.state === 'granted' ? 'revoke' : 'grant' })}
+          <button class="btn btn-sm ${a.state === 'granted' ? 'btn-danger' : 'btn-primary'}" type="submit">${a.state === 'granted' ? '移除授权' : '授权本组'}</button>
+        </form>`;
+    return `<tr>
+      <td class="wrap"><b style="color:var(--text)">${esc(a.name)}</b><br><code>${esc(a.client_id)}</code></td>
+      <td>${stateBadge}</td>
+      <td class="rowline">${action}</td>
+    </tr>`;
+  }).join('\n');
+  return adminPage({
+    theme, siteName, user, cur, active: 'groups', title: `${g.name} · ${siteName}`,
+    headTitle: `<h3>${esc(g.name)}</h3>
+    <p class="muted small">${esc(g.description || '暂无描述')} · ${members.length} 名成员</p>`,
+    actions: `<a class="btn" href="/admin/groups">返回权限组列表</a>`,
+    content: `
+      ${banner(msg ? esc(msg) : '', 'ok')}
+      ${banner(err ? esc(err) : '', 'err')}
+      <div class="card">
+        <h3 style="margin-top:0">成员(${members.length})</h3>
+        <div class="tblwrap"><table class="tbl">
+          <thead><tr><th>用户名</th><th>姓名</th><th>操作</th></tr></thead>
+          <tbody>${memberRows || '<tr><td colspan="3" class="muted">该组还没有成员。</td></tr>'}</tbody>
+        </table></div>
+        <h3>添加成员</h3>
+        ${candidates.length ? `
+        <p class="muted small" style="margin:0 0 var(--s2)">勾选要加入本组的用户,可多选;已加入的用户不会重复列出。</p>
+        <form method="post" action="${base}/members">
+          ${hiddenInputs({ _csrf: csrf })}
+          ${candidateItems}
+          <div class="actions"><button class="btn btn-primary" type="submit">添加成员</button></div>
+        </form>` : '<p class="muted" style="margin:var(--s2) 0 0">所有用户均已加入该组。</p>'}
+      </div>
+      <div class="card">
+        <h3 style="margin-top:0">可访问的应用</h3>
+        <div class="tblwrap"><table class="tbl">
+          <thead><tr><th>应用</th><th>状态</th><th>操作</th></tr></thead>
+          <tbody>${appRows || '<tr><td colspan="3" class="muted">还没有应用,先在「应用」页创建。</td></tr>'}</tbody>
+        </table></div>
+        <p class="muted small">「不受限」应用对所有用户开放,需先在应用侧配置可访问的权限组后,才能在此授权;「移除授权」后若应用不再引用任何组,将回到不受限状态。</p>
+      </div>
+      <div class="card">
+        <h3 style="margin-top:0">编辑组信息</h3>
+        <form method="post" action="${base}/update">
+          ${hiddenInputs({ _csrf: csrf })}
+          <div class="grid2">
+            <div><label>组名(必填且唯一,不含空格)</label>
+              <input type="text" name="name" value="${esc(g.name)}" required maxlength="40"></div>
+            <div><label>描述(可选)</label>
+              <input type="text" name="description" value="${esc(g.description || '')}" maxlength="120" placeholder="用途说明"></div>
+          </div>
+          <div class="actions"><button class="btn btn-primary" type="submit">保存修改</button></div>
+        </form>
+        <p class="muted small">重命名会同步更新引用该组的应用访问限制;删除组请回到权限组列表操作。</p>
+      </div>`,
   });
 }
 

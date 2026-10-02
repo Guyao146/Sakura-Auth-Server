@@ -34,6 +34,25 @@ export function rename(id, name) {
   return byId(id);
 }
 
+/** 更新组名与描述;重命名时同步 user_groups 镜像文本,避免重启播种时复活旧组名 */
+export function update(id, { name, description }) {
+  const cur = byId(id);
+  if (!cur) return;
+  const newName = String(name).trim();
+  getDb().prepare('UPDATE groups SET name = ?, description = ? WHERE id = ?')
+    .run(newName, description !== undefined ? String(description).trim() : cur.description, id);
+  if (newName !== cur.name) {
+    const db = getDb();
+    const rows = db.prepare('SELECT id, user_groups FROM users WHERE user_groups LIKE ?').all(`%${cur.name}%`);
+    const upd = db.prepare('UPDATE users SET user_groups = ? WHERE id = ?');
+    for (const u of rows) {
+      const rest = String(u.user_groups).split(/[\s,]+/).map((n) => (n === cur.name ? newName : n)).filter(Boolean).join(' ');
+      upd.run(rest, u.id);
+    }
+  }
+  return byId(id);
+}
+
 /** 删除组并级联解除成员关系;同步清理 user_groups 镜像文本,避免重启播种时复活 */
 export function remove(id) {
   const db = getDb();
@@ -55,6 +74,22 @@ export const membersOf = (userId) =>
     `SELECT g.name FROM groups g JOIN group_members m ON m.group_id = g.id
      WHERE m.user_id = ? ORDER BY g.name ASC`
   ).all(userId).map((r) => r.name);
+
+/** 组成员用户列表(JOIN users,仅取展示字段;按用户名字典序稳定输出) */
+export const listMembers = (groupId) =>
+  getDb().prepare(
+    `SELECT u.id, u.username, u.name, u.email, u.is_admin, u.disabled
+     FROM group_members m JOIN users u ON u.id = m.user_id
+     WHERE m.group_id = ? ORDER BY u.username ASC`
+  ).all(groupId);
+
+/** 加入单个成员(幂等:已存在不重复写入) */
+export const addMember = (groupId, userId) =>
+  getDb().prepare('INSERT OR IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)').run(groupId, userId);
+
+/** 移除单个成员(幂等:不存在时无操作) */
+export const removeMember = (groupId, userId) =>
+  getDb().prepare('DELETE FROM group_members WHERE group_id = ? AND user_id = ?').run(groupId, userId);
 
 /** 规整输入:数组或字符串均可,按空白/逗号再拆分并去重 */
 const cleanNames = (names) =>

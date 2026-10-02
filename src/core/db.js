@@ -142,6 +142,7 @@ function migrate() {
     db.exec('ALTER TABLE auth_codes ADD COLUMN launch_verifier TEXT');
   }
   seedGroupsFromUserGroups();
+  seedDefaultAdminGroup();
 }
 
 /**
@@ -173,6 +174,28 @@ export function seedGroupsFromUserGroups() {
   }
   if (seeded) logger.info('已从 user_groups 文本播种权限组成员关系', { relations: seeded });
   return seeded;
+}
+
+/**
+ * 默认组播种:确保名为 admin 的组存在,且所有 is_admin=1 的用户默认是 admin 组成员。
+ * 仅在种子阶段(初始化/迁移)保证;之后成员关系以用户编辑页的勾选为准,编辑不回填此默认。
+ * 幂等可重复运行;返回本次新增的成员关系条数。
+ */
+export function seedDefaultAdminGroup() {
+  const getGroup = db.prepare('SELECT id FROM groups WHERE name = ?');
+  let g = getGroup.get('admin');
+  if (!g) {
+    db.prepare("INSERT OR IGNORE INTO groups (id, name, description, created_at) VALUES (?, 'admin', ?, ?)")
+      .run(randomToken(12), '管理员默认组(管理员用户自动加入)', nowSec());
+    g = getGroup.get('admin');
+  }
+  if (!g) return 0;
+  const admins = db.prepare('SELECT id FROM users WHERE is_admin = 1').all();
+  const ins = db.prepare('INSERT OR IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)');
+  let added = 0;
+  for (const u of admins) added += ins.run(g.id, u.id).changes;
+  if (added) logger.info('已为管理员播种默认 admin 组成员关系', { relations: added });
+  return added;
 }
 
 export function initDb() {
