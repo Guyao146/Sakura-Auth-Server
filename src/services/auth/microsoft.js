@@ -8,7 +8,7 @@ import { getRuntime } from '../../core/runtime.js';
 import { logger } from '../../core/logger.js';
 import { msLinkPage } from '../../views/auth.js';
 import { errorPage } from '../../views/error.js';
-import { startSession } from './login.js';
+import { startSession, sessionMeta } from './login.js';
 import { record } from '../audit.js';
 
 /**
@@ -114,7 +114,7 @@ function finishCallback(ctx, entry, identity) {
   const local = users.byMicrosoftSub(identity.sub);
   if (local) {
     if (local.disabled) return msFail(ctx, '该账号已被禁用,请联系管理员。');
-    startSession(ctx.res, local);
+    startSession(ctx.res, local, undefined, sessionMeta(ctx));
     return redirect(ctx.res, '/apps');
   }
   // 未绑定:签发一次性关联令牌,渲染「关联本地账号」页
@@ -163,7 +163,7 @@ export function link(ctx) {
   if (holder && holder.id !== user.id) return rerender('该 Microsoft 账号已绑定其他用户。');
   linkTokens.delete(stateVal);
   users.bindMicrosoft(user.id, entry.sub, entry.email);
-  startSession(ctx.res, user);
+  startSession(ctx.res, user, undefined, sessionMeta(ctx));
   record(ctx, 'auth.ms_linked', entry.email || '', { actor: user.username });
   logger.info('Microsoft 账号已关联本地账号并登录', { username: user.username });
   return redirect(ctx.res, '/apps');
@@ -203,7 +203,7 @@ export function registerNew(ctx) {
     isAdmin: false,
   });
   users.bindMicrosoft(user.id, entry.sub, entry.email);
-  startSession(ctx.res, user);
+  startSession(ctx.res, user, undefined, sessionMeta(ctx));
   record(ctx, 'auth.ms_registered', entry.email || '', { actor: user.username });
   logger.info('Microsoft 关联注册新用户', { username: user.username });
   return redirect(ctx.res, '/apps');

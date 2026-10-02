@@ -43,7 +43,9 @@ CREATE TABLE IF NOT EXISTS sessions (
   user_id    TEXT NOT NULL,
   csrf       TEXT NOT NULL,
   created_at INTEGER NOT NULL,
-  expires_at INTEGER NOT NULL
+  expires_at INTEGER NOT NULL,
+  ip         TEXT NOT NULL DEFAULT '',
+  user_agent TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS auth_codes (
   code_hash             TEXT PRIMARY KEY,
@@ -144,6 +146,14 @@ function migrate() {
   const acols = db.prepare('PRAGMA table_info(auth_codes)').all().map((c) => c.name);
   if (!acols.includes('launch_verifier')) {
     db.exec('ALTER TABLE auth_codes ADD COLUMN launch_verifier TEXT');
+  }
+  // 会话表补设备信息列(登录 IP / User-Agent),老库平滑迁移
+  const scols = db.prepare('PRAGMA table_info(sessions)').all().map((c) => c.name);
+  if (!scols.includes('ip')) {
+    db.exec("ALTER TABLE sessions ADD COLUMN ip TEXT NOT NULL DEFAULT ''");
+  }
+  if (!scols.includes('user_agent')) {
+    db.exec("ALTER TABLE sessions ADD COLUMN user_agent TEXT NOT NULL DEFAULT ''");
   }
   seedGroupsFromUserGroups();
   seedDefaultAdminGroup();

@@ -1584,6 +1584,122 @@ async function main() {
       await new Promise((resolve) => healthMock.close(resolve));
     }
 
+    /* ---------- 会话管理:用户自助查看/撤销登录设备(放在向导重跑段之前) ---------- */
+    const sessionsM = await import('../src/models/sessions.js');
+    const sessUser = users.create({ username: 'sessman', passwordHash: hashPassword('Sess#12345'), name: '会话管理' });
+    const UA_A = 'smoke-agent-A/1.0', UA_B = 'smoke-agent-B/2.0';
+    const apiLoginAs = (jar, ua) => call(jar, '/api/login', {
+      method: 'POST',
+      json: { username: 'sessman', password: 'Sess#12345' },
+      headers: ua ? { 'User-Agent': ua } : {},
+    });
+
+    const anonSessList = await call(new Jar(), '/api/sessions');
+    ok('会话:未登录请求 /api/sessions 返回 401', anonSessList.status === 401
+      && (await anonSessList.json()).error === 'unauthenticated');
+
+    // 同一用户两次 API 登录:产生两条会话(UA 各异,便于在列表中定位行)
+    const sj1 = new Jar(), sj2 = new Jar();
+    const sessLogin1 = await apiLoginAs(sj1, UA_A);
+    const sessLogin2 = await apiLoginAs(sj2, UA_B);
+    ok('会话:同一用户两次 API 登录成功', sessLogin1.status === 200 && (await sessLogin1.json()).ok === true
+      && sessLogin2.status === 200 && (await sessLogin2.json()).ok === true);
+
+    const sessList1 = await (await call(sj1, '/api/sessions')).json();
+    const curRowApi = sessList1.sessions?.find((s) => s.is_current);
+    ok('会话:/api/sessions 返回两条且其中一条标记当前会话', sessList1.authenticated === true
+      && Array.isArray(sessList1.sessions) && sessList1.sessions.length === 2
+      && sessList1.sessions.filter((s) => s.is_current).length === 1
+      && curRowApi?.id_hash === sessList1.current);
+    ok('会话:/api/sessions 仅返回截断 id_hash 并携带 IP/UA/时间', sessList1.sessions.every((s) => typeof s.id_hash === 'string' && s.id_hash.length === 8)
+      && sessList1.sessions.some((s) => s.ua === UA_A) && sessList1.sessions.some((s) => s.ua === UA_B)
+      && sessList1.sessions.every((s) => !!s.ip && s.created_at > 0 && s.expires_at > s.created_at));
+
+    const sessDbRows = sessionsM.listForUser(sessUser.id);
+    ok('会话:UA 与 IP 落库非空', sessDbRows.length === 2
+      && sessDbRows.every((s) => s.ip !== '' && s.ua !== '')
+      && sessDbRows.every((s) => s.ua === UA_A || s.ua === UA_B));
+
+    // 会话列表页:两条会话都展示,当前行带「当前」徽章
+    const sessPageRes = await call(sj1, '/account/sessions');
+    const sessPageHtml = await sessPageRes.text();
+    const pageRows = sessPageHtml.split('<tr');
+    const rowA = pageRows.find((t) => t.includes(UA_A));
+    const rowB = pageRows.find((t) => t.includes(UA_B));
+    ok('会话:列表页展示两条会话且当前行有「当前」徽章', sessPageRes.status === 200
+      && !!rowA && !!rowB && rowA !== rowB
+      && rowA.includes('>当前</span>') && !rowB.includes('>当前</span>')
+      && rowA.includes(curRowApi.id_hash));
+    ok('会话:列表页含撤销操作、撤销其它按钮与重新登录说明', sessPageHtml.includes('重新登录')
+      && sessPageHtml.includes('action="/account/sessions/revoke"')
+      && sessPageHtml.includes('action="/account/sessions/revoke-others"')
+      && sessPageHtml.includes('撤销其它全部会话'));
+
+    // 撤销其它会话(当前会话保留):列表只剩一条,被撤销的 cookie 失效
+    const sessOthersRes = await call(sj1, '/api/sessions/revoke-others', { method: 'POST', json: {} });
+    const sessAfterOthers = await (await call(sj1, '/api/sessions')).json();
+    ok('会话:撤销其它会话后 /api/sessions 只剩当前一条', sessOthersRes.status === 200
+      && (await sessOthersRes.json()).ok === true
+      && sessAfterOthers.sessions.length === 1 && sessAfterOthers.sessions[0].is_current);
+    const sj2State = await (await call(sj2, '/api/session')).json();
+    ok('会话:被撤销会话的 cookie 再访问 /api/session 变为未登录', sj2State.authenticated === false);
+
+    // 撤销指定会话:用列表返回的截断 id_hash 定位
+    const sj3 = new Jar();
+    const sessLogin3 = await apiLoginAs(sj3, UA_B);
+    ok('会话:再次 API 登录产生新会话', sessLogin3.status === 200);
+    const beforeRevoke = await (await call(sj1, '/api/sessions')).json();
+    const otherRow = beforeRevoke.sessions.find((s) => !s.is_current);
+    const sessRevokeRes = await call(sj1, '/api/sessions/revoke', { method: 'POST', json: { id_hash: otherRow.id_hash } });
+    const afterSessRevoke = await (await call(sj1, '/api/sessions')).json();
+    ok('会话:撤销指定会话生效(截断 id_hash 定位)', sessRevokeRes.status === 200
+      && (await sessRevokeRes.json()).ok === true && afterSessRevoke.sessions.length === 1);
+    const sj3State = await (await call(sj3, '/api/session')).json();
+    ok('会话:被撤销指定会话的 cookie 变为未登录', sj3State.authenticated === false);
+
+    // web 表单:撤销当前会话 → 等同登出
+    const curPageForm = extractHidden(await (await call(sj1, '/account/sessions')).text());
+    const webRevokeRes = await call(sj1, '/account/sessions/revoke', {
+      method: 'POST', form: { id_hash: curPageForm.id_hash, _csrf: curPageForm._csrf },
+    });
+    ok('会话:web 撤销当前会话等同登出并重定向登录页', webRevokeRes.status === 302
+      && location(webRevokeRes).startsWith('/login?msg='));
+    const sj1State = await (await call(sj1, '/api/session')).json();
+    ok('会话:web 撤销当前会话后原 cookie 失效', sj1State.authenticated === false);
+
+    // web 表单:撤销其它全部会话(两个浏览器会话,保留当前)
+    const swj = new Jar(), swj2 = new Jar();
+    let swForm = extractHidden(await (await call(swj, '/login')).text());
+    await call(swj, '/login', { method: 'POST', form: { username: 'sessman', password: 'Sess#12345', _csrf: swForm._csrf } });
+    swForm = extractHidden(await (await call(swj2, '/login')).text());
+    await call(swj2, '/login', { method: 'POST', form: { username: 'sessman', password: 'Sess#12345', _csrf: swForm._csrf } });
+    const webOthersRes = await call(swj, '/account/sessions/revoke-others', {
+      method: 'POST', form: { _csrf: extractHidden(await (await call(swj, '/account/sessions')).text())._csrf },
+    });
+    ok('会话:web 撤销其它全部会话后回列表页带提示', webOthersRes.status === 302
+      && location(webOthersRes).startsWith('/account/sessions?msg='));
+    const swj2State = await (await call(swj2, '/api/session')).json();
+    ok('会话:web 撤销其它会话后其它设备 cookie 失效', swj2State.authenticated === false);
+    const remainRes = await call(swj, '/account/sessions');
+    const remainHtml = await remainRes.text();
+    ok('会话:web 撤销其它会话后列表仅剩当前会话', remainRes.status === 200
+      && (remainHtml.match(/action="\/account\/sessions\/revoke"/g) || []).length === 1);
+
+    // 越权防护:不能撤销其它用户的会话(模型层 user_id 双条件)
+    const sessAdminUser = users.byUsername('admin');
+    const adminHash = sessionsM.listForUser(sessAdminUser.id)[0].id_hash;
+    const crossRes = await call(swj, '/account/sessions/revoke', {
+      method: 'POST',
+      form: { id_hash: adminHash, _csrf: extractHidden(await (await call(swj, '/account/sessions')).text())._csrf },
+    });
+    ok('会话:不能撤销其它用户的会话(防越权)', crossRes.status === 302
+      && location(crossRes).startsWith('/account/sessions?err=')
+      && sessionsM.listForUser(sessAdminUser.id).some((s) => s.id_hash === adminHash)
+      && (await (await call(aj, '/api/session')).json()).authenticated === true);
+
+    const notFoundRes = await call(swj, '/api/sessions/revoke', { method: 'POST', json: { id_hash: 'ffffffff' } });
+    ok('会话:撤销不存在的会话返回 404', notFoundRes.status === 404);
+
     /* ---------- 配置向导增强:管理员重新运行向导(放在最后,尾部恢复 setup_done=1) ---------- */
     r = await call(aj, '/admin');
     const rerunDash = await r.text();

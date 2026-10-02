@@ -16,7 +16,7 @@ import { sendJson, clearCookie } from '../core/http.js';
 import { verifyJwt } from '../core/jwt.js';
 import { verifyTotp } from '../core/totp.js';
 import { verifyPassword } from '../core/password.js';
-import { isLocked, recordFail, clearFails, startSession } from './auth/login.js';
+import { isLocked, recordFail, clearFails, startSession, sessionMeta } from './auth/login.js';
 
 const NO_STORE = { 'Cache-Control': 'no-store' };
 
@@ -82,7 +82,7 @@ export function login(ctx) {
   }
 
   clearFails(ctx, username);
-  startSession(ctx.res, user);
+  startSession(ctx.res, user, undefined, sessionMeta(ctx));
   return sendJson(ctx.res, 200, { ok: true, user: userPayload(user) }, NO_STORE);
 }
 
@@ -91,6 +91,57 @@ export function logout(ctx) {
   if (ctx.session) sessions.remove(ctx.session.id_hash);
   clearCookie(ctx.res, 'sid', getRuntime().secureCookies);
   sendJson(ctx.res, 200, { ok: true }, NO_STORE);
+}
+
+/* ---- 登录会话自助管理(JSON API):列表 / 撤销指定 / 撤销其它 ---- */
+
+/** GET /api/sessions —— 当前用户的登录会话列表。
+ *  id_hash 仅返回前 8 位(sha256 摘要前缀,供撤销定位,不暴露完整摘要)。 */
+export function listSessions(ctx) {
+  if (!ctx.user) return sendJson(ctx.res, 401, { error: 'unauthenticated' }, NO_STORE);
+  const list = sessions.listForUser(ctx.user.id).map((s) => ({
+    id_hash: s.id_hash.slice(0, 8),
+    created_at: s.created_at,
+    expires_at: s.expires_at,
+    ip: s.ip || '',
+    ua: s.ua || '',
+    is_current: s.id_hash === ctx.session.id_hash,
+  }));
+  sendJson(ctx.res, 200, {
+    authenticated: true,
+    current: ctx.session.id_hash.slice(0, 8),
+    sessions: list,
+  }, NO_STORE);
+}
+
+/** 在用户存活会话中解析撤销目标:完整 id_hash 或唯一前缀(≥8 位)均可 */
+function resolveSessionTarget(userId, target) {
+  const rows = sessions.listForUser(userId);
+  const exact = rows.find((s) => s.id_hash === target);
+  if (exact) return exact;
+  if (target.length < 8) return null; // 过短前缀不做匹配,避免歧义
+  const prefixed = rows.filter((s) => s.id_hash.startsWith(target));
+  return prefixed.length === 1 ? prefixed[0] : null;
+}
+
+/** POST /api/sessions/revoke {id_hash} —— 撤销自己的指定会话(全值或列表返回的前缀均可)。
+ *  撤销当前会话时 cookie 一并失效,返回 {ok:true, current_revoked:true}。 */
+export function revokeSession(ctx) {
+  if (!ctx.user) return sendJson(ctx.res, 401, { error: 'unauthenticated' }, NO_STORE);
+  const target = typeof ctx.body?.id_hash === 'string' ? ctx.body.id_hash.trim() : '';
+  const row = target ? resolveSessionTarget(ctx.user.id, target) : null;
+  if (!row) return sendJson(ctx.res, 404, { error: 'not_found' }, NO_STORE);
+  sessions.removeByIdHash(row.id_hash, ctx.user.id);
+  const currentRevoked = row.id_hash === ctx.session.id_hash;
+  if (currentRevoked) clearCookie(ctx.res, 'sid', getRuntime().secureCookies);
+  sendJson(ctx.res, 200, { ok: true, current_revoked: currentRevoked }, NO_STORE);
+}
+
+/** POST /api/sessions/revoke-others —— 撤销当前会话以外的全部会话 */
+export function revokeOtherSessions(ctx) {
+  if (!ctx.user) return sendJson(ctx.res, 401, { error: 'unauthenticated' }, NO_STORE);
+  const revoked = sessions.removeAllOther(ctx.user.id, ctx.session.id_hash);
+  sendJson(ctx.res, 200, { ok: true, revoked }, NO_STORE);
 }
 
 /** GET /api/apps —— 当前用户可见的应用列表(复用门户的可见性过滤) */

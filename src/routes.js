@@ -38,6 +38,9 @@ export function registerRoutes() {
   r('POST', '/api/login', api.login);
   r('POST', '/api/logout', api.logout);
   r('GET', '/api/apps', api.apps);
+  r('GET', '/api/sessions', api.listSessions);
+  r('POST', '/api/sessions/revoke', api.revokeSession);
+  r('POST', '/api/sessions/revoke-others', api.revokeOtherSessions);
   r('GET', '/api/registry', api.registry, { cors: true });
 
   r('GET', '/login', login.showLogin);
@@ -53,6 +56,9 @@ export function registerRoutes() {
   r('POST', '/account', account.handleChangePassword, { auth: 'user' });
   r('GET', '/account/apps', account.showAuthorizations, { auth: 'user' });
   r('POST', '/account/apps/revoke', account.revokeAuthorization, { auth: 'user' });
+  r('GET', '/account/sessions', account.showSessions, { auth: 'user' });
+  r('POST', '/account/sessions/revoke', account.revokeSession, { auth: 'user' });
+  r('POST', '/account/sessions/revoke-others', account.revokeOtherSessions, { auth: 'user' });
   r('POST', '/account/2fa/start', account.startTwoFa, { auth: 'user' });
   r('POST', '/account/2fa/confirm', account.confirmTwoFa, { auth: 'user' });
   r('POST', '/account/2fa/disable', account.disableTwoFa, { auth: 'user' });

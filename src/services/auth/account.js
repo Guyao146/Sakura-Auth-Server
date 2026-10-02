@@ -2,12 +2,13 @@ import * as users from '../../models/users.js';
 import * as recovery from '../../models/recovery.js';
 import * as consents from '../../models/consents.js';
 import * as tokens from '../../models/tokens.js';
+import * as sessions from '../../models/sessions.js';
 import { hashPassword, verifyPassword } from '../../core/password.js';
 import { generateSecret, otpauthUri, verifyTotp } from '../../core/totp.js';
 import { qrSvg } from '../../core/qr.js';
 import { getRuntime } from '../../core/runtime.js';
-import { sendHtml, redirect } from '../../core/http.js';
-import { accountPage, recoveryCodesPage, authorizationsPage } from '../../views/auth.js';
+import { sendHtml, redirect, clearCookie } from '../../core/http.js';
+import { accountPage, recoveryCodesPage, authorizationsPage, sessionsPage } from '../../views/auth.js';
 import { scopeItems } from '../../views/components.js';
 import { logger } from '../../core/logger.js';
 import { record } from '../audit.js';
@@ -142,4 +143,53 @@ export function revokeAuthorization(ctx) {
   record(ctx, 'oauth.consent_revoked', row.client_id);
   logger.info('用户撤销了应用授权', { username: ctx.user.username, client_id: row.client_id });
   redirect(ctx.res, '/account/apps?msg=' + encodeURIComponent('已撤销该应用的授权,其现有访问令牌一并失效。'));
+}
+
+/* ---- 登录会话管理(查看/撤销已登录设备) ---- */
+
+/** GET /account/sessions —— 登录会话列表,当前会话行带 is_current 标记 */
+export function showSessions(ctx, { msg, err } = {}) {
+  const list = sessions.listForUser(ctx.user.id).map((row) => ({
+    ...row,
+    is_current: row.id_hash === ctx.session.id_hash,
+  }));
+  sendHtml(ctx.res, 200, sessionsPage({
+    theme: ctx.theme, siteName: ctx.runtime.siteName, user: ctx.user,
+    csrf: ctx.session.csrf, list, msg, err,
+    cur: ctx.url.pathname + ctx.url.search,
+  }));
+}
+
+/** POST /account/sessions/revoke {id_hash, _csrf} —— 撤销指定会话(仅限自己的)。
+ *  撤销当前会话等同登出:清 cookie 并回登录页;其它会话回列表页带提示。 */
+export function revokeSession(ctx) {
+  const b = ctx.body || {};
+  if (typeof b._csrf !== 'string' || b._csrf !== ctx.session.csrf) {
+    return redirect(ctx.res, '/account/sessions?err=' + encodeURIComponent('页面已过期,请重试。'));
+  }
+  const target = typeof b.id_hash === 'string' ? b.id_hash : '';
+  const removed = target ? sessions.removeByIdHash(target, ctx.user.id) : false;
+  if (!removed) {
+    return redirect(ctx.res, '/account/sessions?err=' + encodeURIComponent('该会话不存在或已被撤销。'));
+  }
+  record(ctx, 'account.session_revoked', target);
+  logger.info('用户撤销了登录会话', { username: ctx.user.username });
+  if (target === ctx.session.id_hash) {
+    clearCookie(ctx.res, 'sid', getRuntime().secureCookies);
+    return redirect(ctx.res, '/login?msg=' + encodeURIComponent('已撤销当前会话,请重新登录。'));
+  }
+  return redirect(ctx.res, '/account/sessions?msg=' + encodeURIComponent('已撤销该会话,对应设备下次访问需重新登录。'));
+}
+
+/** POST /account/sessions/revoke-others {_csrf} —— 撤销当前会话以外的全部会话 */
+export function revokeOtherSessions(ctx) {
+  const b = ctx.body || {};
+  if (typeof b._csrf !== 'string' || b._csrf !== ctx.session.csrf) {
+    return redirect(ctx.res, '/account/sessions?err=' + encodeURIComponent('页面已过期,请重试。'));
+  }
+  const removed = sessions.removeAllOther(ctx.user.id, ctx.session.id_hash);
+  record(ctx, 'account.session_revoked_others', String(removed));
+  logger.info('用户撤销了其它全部登录会话', { username: ctx.user.username, count: removed });
+  return redirect(ctx.res, '/account/sessions?msg='
+    + encodeURIComponent(`已撤销其它 ${removed} 个会话,对应设备下次访问需重新登录。`));
 }

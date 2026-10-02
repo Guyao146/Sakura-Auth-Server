@@ -169,10 +169,19 @@ export function handleTwoFa(ctx) {
   return finishLogin(ctx, user, next, cookieCsrf);
 }
 
-/** 建立会话并写入 sid cookie(清除 csrf cookie);供 web 登录与 JSON API 共用,返回明文 sid */
-export function startSession(res, user, secureCookies) {
+/** 从请求提取会话设备信息(IP / User-Agent),各登录入口统一传给 startSession 落库 */
+export function sessionMeta(ctx) {
+  return {
+    ip: ctx.req.socket.remoteAddress || '',
+    ua: String(ctx.req.headers['user-agent'] || ''),
+  };
+}
+
+/** 建立会话并写入 sid cookie(清除 csrf cookie);供 web 登录与 JSON API 共用,返回明文 sid。
+ *  meta 可选 {ip, ua},用于会话管理页展示登录设备信息。 */
+export function startSession(res, user, secureCookies, meta = {}) {
   const rt = getRuntime();
-  const sid = sessions.create(user.id, randomToken(24), rt.sessionTtl);
+  const sid = sessions.create(user.id, randomToken(24), rt.sessionTtl, meta);
   const secure = secureCookies ?? rt.secureCookies;
   setCookie(res, 'sid', sid, { maxAge: rt.sessionTtl, secure });
   clearCookie(res, 'csrf', secure);
@@ -183,7 +192,7 @@ export function startSession(res, user, secureCookies) {
 }
 
 function finishLogin(ctx, user, next, cookieCsrf) {
-  startSession(ctx.res, user);
+  startSession(ctx.res, user, undefined, sessionMeta(ctx));
   redirect(ctx.res, next || '/apps');
 }
 

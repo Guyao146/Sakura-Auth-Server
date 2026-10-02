@@ -1,6 +1,6 @@
-import { escapeHtml as esc } from '../core/util.js';
+import { escapeHtml as esc, fmtTime } from '../core/util.js';
 import { authPage, adminPage, brandPage } from './layout.js';
-import { banner, hiddenInputs, kvRow, scopeItems, scopeIcon, SCOPE_NAMES } from './components.js';
+import { banner, badge, hiddenInputs, kvRow, scopeItems, scopeIcon, SCOPE_NAMES } from './components.js';
 import { getRuntime } from '../core/runtime.js';
 
 /* 登录页品牌面板的特性条目:线性小图标随 currentColor,零外部资源 */
@@ -372,6 +372,7 @@ export function accountPage({ theme, siteName, user, csrf, msg, err, twoFa, cur 
       <div class="kv"><b>姓名</b><span>${esc(user.name || '-')}</span></div>
       <div class="kv"><b>邮箱</b><span>${esc(user.email || '-')}</span></div>
       <div class="kv"><b>我的授权</b><span><a href="/account/apps">查看与管理已授权的应用 →</a></span></div>
+      <div class="kv"><b>登录会话</b><span><a href="/account/sessions">查看与管理已登录的设备 →</a></span></div>
       <h3>修改密码</h3>
       <form method="post" action="/account">
         ${hiddenInputs({ _csrf: csrf })}
@@ -432,5 +433,42 @@ export function authorizationsPage({ theme, siteName, user, csrf, list, msg, err
       ${list.length
         ? `<div class="card tight">${rows}</div>`
         : '<div class="card tight"><p class="muted" style="margin:0">还没有授权过任何应用。登录业务系统并同意授权后,会出现在这里。</p></div>'}`,
+  });
+}
+
+/** 登录会话页:查看/撤销已登录设备(并入控制台侧栏布局,挂在账号设置入口下)。
+ *  list 会话行含 is_current 标记;UA 超 40 字截断,完整值放 title 悬停可见。 */
+export function sessionsPage({ theme, siteName, user, csrf, list, msg, err, cur = '/' }) {
+  const clip = (s) => {
+    const v = String(s || '');
+    return v.length > 40 ? `${v.slice(0, 40)}…` : v;
+  };
+  const rows = list.map((row) => `<tr>
+      <td class="wrap"><code>${esc(row.id_hash.slice(0, 8))}</code>${row.is_current ? ` ${badge('当前')}` : ''}</td>
+      <td>${fmtTime(row.created_at)}</td>
+      <td>${fmtTime(row.expires_at)}</td>
+      <td class="wrap">${esc(row.ip || '-')}</td>
+      <td class="wrap"${row.user_agent ? ` title="${esc(row.user_agent)}"` : ''}>${esc(clip(row.user_agent) || '-')}</td>
+      <td><form method="post" action="/account/sessions/revoke" style="margin:0">
+        ${hiddenInputs({ _csrf: csrf, id_hash: row.id_hash })}
+        <button class="btn btn-danger btn-sm" type="submit">撤销</button>
+      </form></td>
+    </tr>`).join('\n');
+  return adminPage({
+    theme, siteName, user, active: 'account', cur,
+    title: `登录会话 · ${siteName}`,
+    content: `
+      ${banner(msg ? esc(msg) : '', 'ok')}
+      ${banner(err ? esc(err) : '', 'err')}
+      <h3 style="margin-top:0">登录会话</h3>
+      <p class="muted small" style="margin-top:0">这里列出你当前所有已登录的设备。撤销后,对应设备下次访问需要重新登录;带「当前」徽章的是你正在使用的这个会话,撤销它等同于退出登录。</p>
+      <div class="tblwrap"><table class="tbl">
+        <thead><tr><th>会话</th><th>创建时间</th><th>过期时间</th><th>IP</th><th>User-Agent</th><th>操作</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+      <form method="post" action="/account/sessions/revoke-others">
+        ${hiddenInputs({ _csrf: csrf })}
+        <div class="actions"><button class="btn btn-danger" type="submit">撤销其它全部会话</button></div>
+      </form>`,
   });
 }
