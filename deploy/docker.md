@@ -22,7 +22,7 @@ docker compose pull && docker compose up -d
 
 | 项 | 说明 |
 | --- | --- |
-| 官方镜像 | `ghcr.io/sakura-eco/sakuraid:latest` |
+| 官方镜像 | `ghcr.io/guyao146/sakura-auth-server:latest` |
 | 自托管 registry / 锁定版本 | `.env` 里设 `SAKURAID_IMAGE=registry.example.com/sakuraid:v0.8.0` |
 | 拉取策略 | `pull_policy: missing`:本地已有该标签就不再拉取;要每次检查远端改为 `always` |
 
