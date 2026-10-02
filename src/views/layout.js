@@ -155,13 +155,13 @@ pre.block{background:var(--code-bg);color:var(--code-text);border-radius:var(--r
 .login-brand{position:relative;overflow:hidden;display:flex;flex-direction:column;justify-content:space-between;gap:var(--s7);
   padding:var(--s8) var(--s7) var(--s6);color:var(--login-on);background:linear-gradient(150deg,var(--login-grad-a),var(--login-grad-b))}
 .login-brand-deco{position:absolute;right:-72px;bottom:-72px;opacity:.12;pointer-events:none}
-.login-brand-body{position:relative;flex:1;display:flex;flex-direction:column;justify-content:center;align-items:center;
-  text-align:center;padding-left:var(--s6);padding-right:var(--s6)}
+.login-brand-body{position:relative;flex:1;display:flex;flex-direction:column;justify-content:center;align-items:flex-start;
+  text-align:left;padding-left:var(--s7);padding-right:var(--s6)}
 .login-brand-mark{display:inline-flex;align-items:center;justify-content:center;width:72px;height:72px;border-radius:20px;background:var(--login-chip)}
 .login-brand-name{color:var(--login-on);font-size:2.1rem;font-weight:700;margin:var(--s5) 0 0}
 .login-brand-slogan{margin:var(--s2) 0 0;font-size:17px;color:var(--login-on-soft)}
-.login-brand-feats{list-style:none;margin:var(--s6) 0 0;padding:0;display:flex;flex-direction:column;gap:var(--s4);align-items:center}
-.login-brand-feats li{display:flex;align-items:center;gap:var(--s3)}
+.login-brand-feats{list-style:none;margin:var(--s6) 0 0;padding:0;display:flex;flex-direction:column;gap:var(--s4);align-items:flex-start}
+.login-brand-feats li{display:flex;align-items:flex-start;gap:var(--s3)}
 .login-brand-feats .feat-ico{width:34px;height:34px;border-radius:10px;background:var(--login-chip);color:var(--login-on);display:inline-flex;align-items:center;justify-content:center;flex:none}
 .login-brand-feats b{display:block;color:var(--login-on);font-size:14px;font-weight:600;line-height:1.5}
 .login-brand-feats small{display:block;color:var(--login-on-soft);font-size:13px;line-height:1.55}

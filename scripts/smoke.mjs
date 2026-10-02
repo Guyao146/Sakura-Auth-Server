@@ -232,9 +232,10 @@ async function main() {
       && loginHtml.includes('name="next"') && loginHtml.includes('autocomplete="current-password"'));
     ok('登录页使用分栏品牌样式与窄屏断点', loginHtml.includes('.login-split')
       && loginHtml.includes('@media(max-width:899px)'));
-    ok('顶栏:登录品牌面板内容改为居中布局', /login-brand-body\{[^}]*justify-content:center/.test(loginHtml)
-      && /login-brand-body\{[^}]*text-align:center/.test(loginHtml)
-      && /login-brand-feats li\{[^}]*align-items:center/.test(loginHtml));
+    ok('顶栏:登录品牌面板垂直居中且内容左对齐', /login-brand-body\{[^}]*justify-content:center/.test(loginHtml)
+      && /login-brand-body\{[^}]*align-items:flex-start/.test(loginHtml)
+      && /login-brand-body\{[^}]*text-align:left/.test(loginHtml)
+      && /login-brand-feats li\{[^}]*align-items:flex-start/.test(loginHtml));
 
     r = await call(uj, '/login', {
       method: 'POST',
