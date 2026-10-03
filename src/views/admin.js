@@ -253,7 +253,7 @@ export function usersPage({ theme, siteName, user, cur, list, msg, err }) {
   });
 }
 
-export function userFormPage({ theme, siteName, user, cur, target, values, allGroups = [], err, isNew }) {
+export function userFormPage({ theme, siteName, user, cur, target, values, allGroups = [], err, isNew, csrf = '' }) {
   const v = values;
   return adminPage({
     theme, siteName, user, cur, active: 'users', title: `${isNew ? '新建用户' : '编辑用户'} · ${siteName}`,
@@ -262,7 +262,7 @@ export function userFormPage({ theme, siteName, user, cur, target, values, allGr
       ${banner(err ? esc(err) : '', 'err')}
       <div class="card">
         <form method="post" action="${isNew ? '/admin/users/create' : `/admin/users/${target}/update`}">
-          ${hiddenInputs(isNew ? {} : { _csrf: v._csrf })}
+          ${hiddenInputs(isNew ? { _csrf: csrf } : { _csrf: v._csrf })}
           <div class="grid2">
             <div><label>用户名</label>
               <input type="text" name="username" value="${esc(v.username)}" ${isNew ? 'required' : 'disabled'}
@@ -326,7 +326,7 @@ export function appsPage({ theme, siteName, user, cur, list, msg, err, issuer })
   });
 }
 
-export function appFormPage({ theme, siteName, user, cur, err, values, allGroups = [] }) {
+export function appFormPage({ theme, siteName, user, cur, err, values, allGroups = [], csrf = '' }) {
   const v = values;
   const urisText = Array.isArray(v.redirect_uris) ? v.redirect_uris.join('\n') : v.redirect_uris;
   return adminPage({
@@ -336,6 +336,7 @@ export function appFormPage({ theme, siteName, user, cur, err, values, allGroups
       ${banner(err ? esc(err) : '', 'err')}
       <div class="card">
         <form method="post" action="/admin/apps/create">
+          ${hiddenInputs({ _csrf: csrf })}
           <label>应用名称</label>
           <input type="text" name="name" value="${esc(v.name)}" required maxlength="40" placeholder="例如:运维门户">
           <label>客户端类型</label>

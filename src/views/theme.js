@@ -12,7 +12,8 @@ export function setTheme(ctx) {
     clearCookie(ctx.res, 'theme', ctx.runtime.secureCookies);
   }
   const safeBack = (raw) => {
-    if (typeof raw === 'string' && raw.startsWith('/') && !raw.startsWith('//')) return raw;
+    // 反斜杠也要拒:部分浏览器把 /\ 规范化为 //,使 /\evil.com 成为协议相对地址(开放重定向)
+    if (typeof raw === 'string' && raw.startsWith('/') && !raw.startsWith('//') && !raw.includes('\\')) return raw;
     return '/';
   };
   // 优先 back 参数,其次 referer

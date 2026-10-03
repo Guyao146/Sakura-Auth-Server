@@ -101,6 +101,10 @@ export async function callback(ctx) {
 function finishCallback(ctx, entry, identity) {
   // 绑定模式:发起时已登录,且回调时会话仍是同一位用户
   if (entry.bindUserId && ctx.session && ctx.user && ctx.user.id === entry.bindUserId) {
+    // 已绑定过则拒绝重复绑定:换绑必须先在账号页显式解绑,防止直接访问 ?bind=1 静默覆盖
+    if (ctx.user.ms_sub) {
+      return redirect(ctx.res, '/account?err=' + encodeURIComponent('当前账号已绑定 Microsoft 账号,请先解绑后再重新绑定。'));
+    }
     const holder = users.byMicrosoftSub(identity.sub);
     if (holder && holder.id !== ctx.user.id) {
       return redirect(ctx.res, '/account?err=' + encodeURIComponent('该 Microsoft 账号已绑定其他用户。'));

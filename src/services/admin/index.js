@@ -235,13 +235,17 @@ export function newUserForm(ctx) {
   sendHtml(ctx.res, 200, userFormPage({
     theme: ctx.theme, siteName: getRuntime().siteName, user: ctx.user,
     cur: ctx.url.pathname, target: null, isNew: true, err: ctx.query.get('err'),
-    allGroups: groups.list(),
+    allGroups: groups.list(), csrf: CSRF(ctx),
     values: { username: '', name: '', email: '', groupSet: new Set(), is_admin: false, disabled: false },
   }));
 }
 
 export function createUser(ctx) {
   const b = ctx.body || {};
+  // 与 updateUser/deleteUser 一致的会话 CSRF 校验(表单隐藏字段由 userFormPage 下发)
+  if (b._csrf !== CSRF(ctx)) {
+    return redirect(ctx.res, '/admin/users/new?err=' + encodeURIComponent('页面已过期,请重试。'));
+  }
   const username = String(b.username || '').trim();
   if (!/^[a-zA-Z0-9_.@-]{2,64}$/.test(username)) {
     return redirect(ctx.res, '/admin/users/new?err=' + encodeURIComponent('用户名需为 2-64 位字母数字与 _.@-。'));
@@ -400,7 +404,7 @@ export function listApps(ctx) {
 export function newAppForm(ctx, { err, values } = {}) {
   sendHtml(ctx.res, 200, appFormPage({
     theme: ctx.theme, siteName: getRuntime().siteName, user: ctx.user,
-    cur: ctx.url.pathname, err, allGroups: groups.list(),
+    cur: ctx.url.pathname, err, allGroups: groups.list(), csrf: CSRF(ctx),
     values: values || {
       name: '', client_type: 'confidential', redirect_uris: '',
       description: '', logo_url: '',
@@ -413,6 +417,10 @@ export function newAppForm(ctx, { err, values } = {}) {
 
 export function createApp(ctx) {
   const b = ctx.body || {};
+  // 会话 CSRF 校验(表单隐藏字段由 appFormPage 下发),与 update/delete 等写操作保持一致
+  if (b._csrf !== CSRF(ctx)) {
+    return redirect(ctx.res, '/admin/apps/new?err=' + encodeURIComponent('页面已过期,请重试。'));
+  }
   const v = validateAppInput(b);
   const allowedGroups = collectAllowedGroups(b);
   if (v.error) {
@@ -466,6 +474,8 @@ export function updateApp(ctx) {
   if (b._csrf !== CSRF(ctx)) return redirect(ctx.res, `/admin/apps/${app.client_id}?err=` + encodeURIComponent('页面已过期,请重试。'));
   const v = validateAppInput(b);
   if (v.error) return redirect(ctx.res, `/admin/apps/${app.client_id}?err=` + encodeURIComponent(v.error));
+  // Logo 字段被清空且此前用的是本站上传文件时,同步清理磁盘文件,避免孤儿文件残留
+  if (!v.logoUrl && String(app.logo_url || '').startsWith('/uploads/')) removeLogoFile(app);
   clients.update(app.client_id, {
     name: v.name, redirectUris: JSON.stringify(v.uris), scopes: v.scopes.join(' '),
     pkceRequired: app.token_auth === 'none' ? true : b.pkce_required === '1',

@@ -42,12 +42,14 @@ export function showSetup(ctx, { err, values } = {}) {
   const rt = getRuntime();
   if (rt.setupDone) return redirect(ctx.res, '/');
   const step = rt.setupStep;
+  // 重跑场景下第 2/3 步表单需要携带会话 CSRF(首次部署无会话则不下发)
+  const csrf = ctx.session?.csrf || '';
   if (step <= 1) {
     sendHtml(ctx.res, 200, setupStep1({ theme: ctx.theme, siteName: rt.siteName, checks: runChecks(), err }));
   } else if (step === 2) {
     const smtp = rt.smtp || {};
     sendHtml(ctx.res, 200, setupStep2({
-      theme: ctx.theme, siteName: rt.siteName, err,
+      theme: ctx.theme, siteName: rt.siteName, err, csrf,
       values: {
         site_name: values?.site_name ?? rt.siteName,
         issuer: values?.issuer ?? rt.issuer,
@@ -62,11 +64,21 @@ export function showSetup(ctx, { err, values } = {}) {
     }));
   } else {
     sendHtml(ctx.res, 200, setupStep3({
-      theme: ctx.theme, siteName: rt.siteName, err,
+      theme: ctx.theme, siteName: rt.siteName, err, csrf,
       hasUsers: users.count() > 0,
       values: { username: values?.username ?? '', name: values?.name ?? '' },
     }));
   }
+}
+
+/**
+ * 重跑守卫:仅在「管理员重跑」窗口生效(rerunWizard 会打上 setup_rerun 标记,完成时清除)。
+ * 窗口期内,站点设置与管理员创建必须由携带会话 CSRF 的已登录管理员提交,
+ * 防止重跑期间被匿名请求篡改 Issuer/SMTP 或抢注管理员;首次部署(无标记)保持匿名向导可用。
+ */
+function rerunGuardOk(ctx, b) {
+  if (settingsApi.getSetting('setup_rerun') !== '1') return true;
+  return !!(ctx.session && ctx.user?.is_admin && b?._csrf === ctx.session.csrf);
 }
 
 /** POST /setup/step1 —— 检测通过进入第二步 */
@@ -81,6 +93,8 @@ export function step1(ctx) {
 /** POST /setup/step2 —— 站点设置(含自助注册开关与 SMTP 邮件服务) */
 export function step2(ctx) {
   const b = ctx.body || {};
+  // 重跑窗口期守卫:匿名请求不得改写站点配置(Issuer/SMTP 等可被用于劫持重置邮件)
+  if (!rerunGuardOk(ctx, b)) return redirect(ctx.res, '/setup');
   const issuer = httpUrl(b.issuer || '');
   const accessTtl = Number(b.access_ttl), refreshTtl = Number(b.refresh_ttl);
   const smtpHost = String(b.smtp_host || '').trim();
@@ -129,12 +143,15 @@ export function step3(ctx) {
   const b = ctx.body || {};
   if (String(b.skip || '') === '1' && users.count() > 0) {
     updateRuntime({ setup_done: 1 }, settingsApi.setSetting);
+    settingsApi.setSetting('setup_rerun', ''); // 向导完成,解除重跑守卫
     logger.info('向导:检测到已有账号,跳过创建直接完成');
     const rt = getRuntime();
     return sendHtml(ctx.res, 200, setupStep4({
       theme: ctx.theme, siteName: rt.siteName, issuer: rt.issuer, adminUsername: null,
     }));
   }
+  // 重跑窗口期守卫(跳过分支除外):匿名请求不得借重跑抢注管理员账号
+  if (!rerunGuardOk(ctx, b)) return redirect(ctx.res, '/setup');
   const username = String(b.username || '').trim();
   const values = { username, name: String(b.name || '') };
   if (!USERNAME_RE.test(username)) return showSetup(ctx, { err: '用户名需为 2-64 位字母数字与 _.@-。', values });
@@ -144,6 +161,7 @@ export function step3(ctx) {
 
   users.create({ username, passwordHash: hashPassword(b.password), name: values.name, isAdmin: true });
   updateRuntime({ setup_done: 1 }, settingsApi.setSetting);
+  settingsApi.setSetting('setup_rerun', ''); // 向导完成,解除重跑守卫
   logger.info('向导:初始化完成,管理员已创建', { username });
   const rt = getRuntime();
   sendHtml(ctx.res, 200, setupStep4({ theme: ctx.theme, siteName: rt.siteName, issuer: rt.issuer, adminUsername: username }));
@@ -155,6 +173,8 @@ export function rerunWizard(ctx) {
     return redirect(ctx.res, '/admin?err=' + encodeURIComponent('页面已过期,请重试。'));
   }
   updateRuntime({ setup_step: 1, setup_done: 0 }, settingsApi.setSetting);
+  // 打上重跑标记:窗口期内 step2/step3(创建)要求管理员会话 + CSRF,完成后由 step3 清除
+  settingsApi.setSetting('setup_rerun', '1');
   record(ctx, 'admin.wizard_rerun');
   logger.info('向导:管理员触发重新运行配置向导');
   redirect(ctx.res, '/setup');

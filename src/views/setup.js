@@ -1,6 +1,9 @@
 import { escapeHtml as esc } from '../core/util.js';
 import { authPage } from './layout.js';
-import { banner, stepIndicator } from './components.js';
+import { banner, hiddenInputs, stepIndicator } from './components.js';
+
+/** 重跑向导时表单需携带会话 CSRF(首次部署无会话则不下发) */
+const csrfField = (csrf) => (csrf ? hiddenInputs({ _csrf: csrf }) : '');
 
 /** 向导外框 */
 function shell({ theme, siteName, step, title, content, err, msg }) {
@@ -36,12 +39,13 @@ export function setupStep1({ theme, siteName, checks, err }) {
 }
 
 /** 第 2 步:站点设置(含自助注册开关与 SMTP 邮件服务) */
-export function setupStep2({ theme, siteName, values, err }) {
+export function setupStep2({ theme, siteName, values, err, csrf = '' }) {
   const v = values;
   return shell({
     theme, siteName, step: 2, title: '站点设置', err,
     content: `
       <form method="post" action="/setup/step2">
+        ${csrfField(csrf)}
         <label for="site_name">站点名称</label>
         <input type="text" id="site_name" name="site_name" value="${esc(v.site_name)}" required maxlength="40">
         <label for="issuer">对外地址(Issuer)</label>
@@ -75,7 +79,7 @@ export function setupStep2({ theme, siteName, values, err }) {
 }
 
 /** 第 3 步:创建管理员(已有账号时提供跳过入口) */
-export function setupStep3({ theme, siteName, values, err, hasUsers }) {
+export function setupStep3({ theme, siteName, values, err, hasUsers, csrf = '' }) {
   const v = values;
   return shell({
     theme, siteName, step: 3, title: '管理员账号', err,
@@ -91,6 +95,7 @@ export function setupStep3({ theme, siteName, values, err, hasUsers }) {
       <h3>或新建一个管理员账号</h3>` : ''}
       <p class="muted small">该账号将拥有管理控制台的全部权限,请妥善保管密码。</p>
       <form method="post" action="/setup/step3">
+        ${csrfField(csrf)}
         <label for="username">管理员用户名</label>
         <input type="text" id="username" name="username" value="${esc(v.username)}" required autofocus
           pattern="[a-zA-Z0-9_.@-]{2,64}" title="2-64 位字母数字与 _.@-">
