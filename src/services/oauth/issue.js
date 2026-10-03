@@ -33,8 +33,8 @@ export function claimsFor(user, scopeList) {
   return claims;
 }
 
-/** 签发 access token(JWT)并落库;返回响应所需字段 */
-export function issueAccessToken({ client, user, scope, authTime }) {
+/** 签发 access token(JWT)并落库;返回响应所需字段。chainId:所属轮换链(链式吊销用,可为 null) */
+export function issueAccessToken({ client, user, scope, authTime, chainId }) {
   const rt = getRuntime();
   const jti = tokens.newJti();
   const exp = nowSec() + rt.accessTokenTtl;
@@ -50,19 +50,19 @@ export function issueAccessToken({ client, user, scope, authTime }) {
   const access_token = signJwt(payload, rt.accessTokenTtl);
   tokens.insert({
     id: jti, kind: 'access', clientId: client.client_id, userId: user ? user.id : null,
-    scope: scope.join(' '), authTime, expiresAt: exp,
+    scope: scope.join(' '), authTime, expiresAt: exp, chainId,
   });
   return { access_token, expiresIn: rt.accessTokenTtl };
 }
 
-/** 签发 opaque refresh token(落库存哈希) */
-export function issueRefreshToken({ client, user, scope }) {
+/** 签发 opaque refresh token(落库存哈希);chainId 与同链 access 保持一致 */
+export function issueRefreshToken({ client, user, scope, chainId }) {
   const rt = getRuntime();
   const token = tokens.newRefreshToken();
   tokens.insert({
     id: tokens.refreshKey(token), kind: 'refresh', clientId: client.client_id,
     userId: user ? user.id : null, scope: scope.join(' '),
-    expiresAt: nowSec() + rt.refreshTokenTtl,
+    expiresAt: nowSec() + rt.refreshTokenTtl, chainId,
   });
   return token;
 }
@@ -88,16 +88,17 @@ export function mintIdToken({ client, user, scope, authTime, nonce, accessToken 
   return signJwt(payload, rt.accessTokenTtl);
 }
 
-/** 组装 RFC 6749 token 响应体 */
-export function issueFull({ client, user, scope, authTime, nonce, withRefresh, withIdToken }) {
-  const { access_token, expiresIn } = issueAccessToken({ client, user, scope, authTime });
+/** 组装 RFC 6749 token 响应体。签发 refresh 时生成新链 ID(授权码换首对令牌的入口),access 与 refresh 同链 */
+export function issueFull({ client, user, scope, authTime, nonce, withRefresh, withIdToken, chainId }) {
+  const chain = chainId || (withRefresh ? tokens.newChainId() : null);
+  const { access_token, expiresIn } = issueAccessToken({ client, user, scope, authTime, chainId: chain });
   const res = {
     access_token,
     token_type: 'Bearer',
     expires_in: expiresIn,
     scope: scope.join(' '),
   };
-  if (withRefresh) res.refresh_token = issueRefreshToken({ client, user, scope });
+  if (withRefresh) res.refresh_token = issueRefreshToken({ client, user, scope, chainId: chain });
   if (withIdToken) res.id_token = mintIdToken({ client, user, scope, authTime, nonce, accessToken: access_token });
   return res;
 }

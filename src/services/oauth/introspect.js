@@ -35,7 +35,15 @@ export function revokePost(ctx) {
   if (!client) return;
   const token = ctx.body?.token || '';
   const row = lookup(token);
-  if (row && row.client_id === client.client_id) tokens.revokeById(row.id);
+  if (row && row.client_id === client.client_id) {
+    if (row.kind === 'refresh' && row.chain_id) {
+      // RFC 7009 §2.1:吊销 refresh token 应级联撤销同一授权链上的全部令牌(access 与历史 refresh)
+      tokens.revokeByChain(row.chain_id);
+    } else {
+      // access token 吊销不级联;无 chain_id 的旧令牌保持单独撤销语义(向后兼容)
+      tokens.revokeById(row.id);
+    }
+  }
   sendJson(ctx.res, 200, {});
 }
 

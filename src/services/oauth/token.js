@@ -24,6 +24,12 @@ export function authenticateClient(ctx) {
   let secret = body.client_secret || null;
   const header = ctx.req.headers['authorization'];
   const viaBasic = !!(header && header.startsWith('Basic '));
+  // RFC 6749 §2.3.1:客户端每次请求只可使用一种认证方式;
+  // 同时携带 Authorization Basic 头与表单 client_secret 属于重复认证,直接拒绝
+  if (viaBasic && secret) {
+    bad(ctx, 'invalid_request', '不得同时使用 Basic 认证头与表单 client_secret(RFC 6749 §2.3.1)');
+    return null;
+  }
   // RFC 6749 §5.2:客户端经 Authorization 头认证失败时,401 必须携带对应方案的 WWW-Authenticate
   const challenge = viaBasic ? { 'WWW-Authenticate': 'Basic realm="oauth2"' } : {};
   if (viaBasic) {
@@ -134,17 +140,19 @@ function grantRefreshToken(ctx, client, body) {
   const scope = requested.length ? requested : original;
   const authTime = row.auth_time;
 
-  // 轮换:新 refresh 立即签发,旧的标记作废并记录 replaced_by 轮换链
+  // 轮换:新 refresh 立即签发,旧的标记作废并记录 replaced_by 轮换链;
+  // 新令牌沿用旧令牌的 chain_id(旧令牌无链则保持 NULL,向后兼容仅可单独撤销)
+  const chainId = row.chain_id || null;
   const newRefresh = tokens.newRefreshToken();
   const newHash = tokens.refreshKey(newRefresh);
   tokens.insert({
     id: newHash, kind: 'refresh', clientId: client.client_id,
     userId: row.user_id, scope: scope.join(' '), authTime,
-    expiresAt: nowSec() + ctx.runtime.refreshTokenTtl,
+    expiresAt: nowSec() + ctx.runtime.refreshTokenTtl, chainId,
   });
   getDb().prepare('UPDATE tokens SET revoked = 1, replaced_by = ? WHERE id = ?').run(newHash, row.id);
 
-  const { access_token, expiresIn } = issueAccessToken({ client, user, scope, authTime });
+  const { access_token, expiresIn } = issueAccessToken({ client, user, scope, authTime, chainId });
   const res = {
     access_token, token_type: 'Bearer', expires_in: expiresIn,
     scope: scope.join(' '), refresh_token: newRefresh,

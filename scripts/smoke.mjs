@@ -224,6 +224,12 @@ async function main() {
     r = await call(uj, authUrl);
     ok('未登录访问 /authorize 跳登录页', r.status === 302 && location(r).startsWith('/login?next='));
 
+    // 加固(OIDC Core §3.1.2.1):prompt=none 未登录不跳登录页,直接回跳 login_required 并透传 state
+    const pnAnon = await call(new Jar(), authUrl + '&prompt=none');
+    ok('加固:prompt=none 未登录回跳 login_required 并透传 state', pnAnon.status === 302
+      && new URL(location(pnAnon), BASE).searchParams.get('error') === 'login_required'
+      && new URL(location(pnAnon), BASE).searchParams.get('state') === state, location(pnAnon));
+
     r = await call(uj, location(r));
     const loginHtml = await r.text();
     const loginForm = extractHidden(loginHtml);
@@ -348,6 +354,66 @@ async function main() {
     });
     ok('PKCE:verifier 含 RFC 7636 之外的字符被拒绝', r.status === 400 && (await r.json()).error === 'invalid_grant');
 
+    /* ---------- 加固:code_challenge 前置格式校验 / prompt=none / verifier 回退边界 ---------- */
+    // RFC 7636 §4.1:challenge 须为 43-128 位 base64url;长度不足在 authorize 层直接 invalid_request 回跳
+    r = await call(uj, '/authorize?' + new URLSearchParams({
+      client_id: web.client_id, redirect_uri: 'http://127.0.0.1:8080/cb',
+      response_type: 'code', scope: 'openid profile', state: 'cc-short',
+      code_challenge: 'a'.repeat(42), code_challenge_method: 'S256',
+    }).toString());
+    ok('加固:code_challenge 长度不足 43 回跳 invalid_request 并透传 state', r.status === 302
+      && new URL(location(r), BASE).searchParams.get('error') === 'invalid_request'
+      && new URL(location(r), BASE).searchParams.get('state') === 'cc-short', location(r));
+    // base64url 字符集之外的 challenge 同样被前置拒绝(不再发码)
+    r = await call(uj, '/authorize?' + new URLSearchParams({
+      client_id: web.client_id, redirect_uri: 'http://127.0.0.1:8080/cb',
+      response_type: 'code', scope: 'openid profile', state: 'cc-charset',
+      code_challenge: 'a'.repeat(42) + '+', code_challenge_method: 'plain',
+    }).toString());
+    ok('加固:code_challenge 含 base64url 之外字符回跳 invalid_request(不发码)', r.status === 302
+      && new URL(location(r), BASE).searchParams.get('error') === 'invalid_request'
+      && !new URL(location(r), BASE).searchParams.get('code'), location(r));
+
+    // OIDC Core §3.1.2.1:已记住授权时 prompt=none 无需任何交互,直接发码
+    r = await call(uj, authUrl + '&prompt=none');
+    ok('加固:prompt=none 已记住授权正常发码(无交互)', r.status === 302
+      && !!new URL(location(r), BASE).searchParams.get('code') && !location(r).includes('error'), location(r));
+
+    // 未记住授权的新应用:prompt=none 需要同意确认 → consent_required 回跳
+    const hardApp = clients.create({
+      name: '加固 Consent', redirectUris: ['http://127.0.0.1:8080/hard'],
+      scopes: 'openid profile', isPublic: true, pkceRequired: true,
+    });
+    const hardVerifier = crypto.randomBytes(48).toString('base64url');
+    const hardUrl = '/authorize?' + new URLSearchParams({
+      client_id: hardApp.client_id, redirect_uri: 'http://127.0.0.1:8080/hard',
+      response_type: 'code', scope: 'openid profile', state: 'pn-consent',
+      code_challenge: b64urlSha256(hardVerifier), code_challenge_method: 'S256',
+    }).toString();
+    r = await call(uj, hardUrl + '&prompt=none');
+    ok('加固:prompt=none 需要同意(无记住授权)回跳 consent_required 并透传 state', r.status === 302
+      && new URL(location(r), BASE).searchParams.get('error') === 'consent_required'
+      && new URL(location(r), BASE).searchParams.get('state') === 'pn-consent', location(r));
+    // 正常走一次同意并记住授权,prompt=none 随即可静默发码
+    r = await call(uj, hardUrl);
+    const hardForm = extractHidden(await r.text());
+    r = await call(uj, '/authorize', { method: 'POST', form: { ...hardForm, decision: 'approve', remember: 'on' } });
+    ok('加固:记住授权后 prompt=none 可静默发码', r.status === 302
+      && !!new URL(location(r), BASE).searchParams.get('code') && !location(r).includes('error'), location(r));
+
+    // 门户代发 verifier 回退仅对门户启动生效(回归):直连授权码换令牌缺 verifier 必须被拒
+    r = await call(uj, authUrl);
+    const noVfCode = new URL(location(r), BASE).searchParams.get('code');
+    r = await fetch(BASE + '/token', {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code', code: noVfCode, redirect_uri: 'http://127.0.0.1:8080/cb',
+        client_id: web.client_id,
+      }).toString(),
+    });
+    ok('加固:launch_verifier 回退仅限门户代发,直连授权码缺 verifier 被拒', r.status === 400
+      && (await r.json()).error === 'invalid_grant');
+
     /* ---------- 刷新令牌轮换 ---------- */
     r = await fetch(BASE + '/token', {
       method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -373,6 +439,20 @@ async function main() {
     const intro = await r.json();
     ok('内省 access_token 活跃', r.status === 200 && intro.active === true && intro.username === 'bob');
 
+    // 加固(RFC 6750 §2.3):userinfo 收紧为只认 Bearer 头,查询参数/表单主体的 access_token 一律 401
+    r = await fetch(BASE + '/userinfo?access_token=' + encodeURIComponent(tok4.access_token));
+    ok('加固:userinfo 查询参数 access_token 被拒(401)', r.status === 401, `status=${r.status}`);
+    r = await fetch(BASE + '/userinfo', {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ access_token: tok4.access_token }).toString(),
+    });
+    ok('加固:userinfo 表单主体 access_token 被拒(401)', r.status === 401, `status=${r.status}`);
+    r = await fetch(BASE + '/userinfo', {
+      method: 'POST', headers: { Authorization: `Bearer ${tok4.access_token}` },
+    });
+    ok('加固:userinfo Bearer 头 POST 访问不受影响(回归)', r.status === 200
+      && (await r.json()).preferred_username === 'bob');
+
     r = await fetch(BASE + '/revoke', {
       method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       // RFC 7009:令牌只能由所属客户端吊销;公开客户端以 client_id 表明身份
@@ -385,6 +465,52 @@ async function main() {
       body: new URLSearchParams({ token: tok4.refresh_token }).toString(),
     });
     ok('吊销后内省 active=false', (await r.json()).active === false);
+
+    /* ---------- 加固:refresh 吊销级联撤销同链令牌(RFC 7009) ---------- */
+    // 造链:记住授权直接发码 → 换首对令牌(生成 chain_id)→ 刷新(沿用链)→ 吊销新 refresh → 链上旧 access 一并失效
+    r = await call(uj, authUrl);
+    const chainCode = new URL(location(r), BASE).searchParams.get('code');
+    r = await fetch(BASE + '/token', {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code', code: chainCode, redirect_uri: 'http://127.0.0.1:8080/cb',
+        client_id: web.client_id, code_verifier: verifier,
+      }).toString(),
+    });
+    const chainTok1 = await r.json();
+    r = await fetch(BASE + '/token', {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token', refresh_token: chainTok1.refresh_token, client_id: web.client_id,
+      }).toString(),
+    });
+    const chainTok2 = await r.json();
+    ok('加固:刷新成功取得同链新令牌对', r.status === 200 && !!chainTok2.access_token && !!chainTok2.refresh_token);
+    r = await fetch(BASE + '/introspect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Authorization: basic(svc.client_id, 'svc-secret-123') },
+      body: new URLSearchParams({ token: chainTok1.access_token }).toString(),
+    });
+    ok('加固:链上首对 access token 初始为活跃', r.status === 200 && (await r.json()).active === true);
+    r = await fetch(BASE + '/revoke', {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ token: chainTok2.refresh_token, client_id: web.client_id }).toString(),
+    });
+    ok('加固:所属客户端吊销刷新后的 refresh token 返回 200', r.status === 200);
+    r = await fetch(BASE + '/introspect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Authorization: basic(svc.client_id, 'svc-secret-123') },
+      body: new URLSearchParams({ token: chainTok1.access_token }).toString(),
+    });
+    ok('加固:吊销 refresh 后链上旧 access token 内省 active=false', r.status === 200
+      && (await r.json()).active === false);
+    r = await fetch(BASE + '/introspect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Authorization: basic(svc.client_id, 'svc-secret-123') },
+      body: new URLSearchParams({ token: chainTok2.access_token }).toString(),
+    });
+    ok('加固:吊销 refresh 后链上新 access token 同样级联失效', r.status === 200
+      && (await r.json()).active === false);
 
     /* ---------- client_credentials ---------- */
     r = await fetch(BASE + '/token', {
@@ -421,6 +547,15 @@ async function main() {
       body: new URLSearchParams({ grant_type: 'client_credentials' }).toString(),
     });
     ok('Basic 认证:client_secret 的表单编码(RFC 6749 §2.3.1)被正确解码', r.status === 200 && !!(await r.json()).access_token);
+
+    // 加固(RFC 6749 §2.3.1):同一请求混用 Basic 头与表单 client_secret 属于重复认证,必须拒绝
+    r = await fetch(BASE + '/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Authorization: basic(svc.client_id, 'svc-secret-123') },
+      body: new URLSearchParams({ grant_type: 'client_credentials', client_secret: 'svc-secret-123' }).toString(),
+    });
+    ok('加固:Basic 头与表单 client_secret 混用被拒(invalid_request)', r.status === 400
+      && (await r.json()).error === 'invalid_request', `status=${r.status}`);
 
     /* ---------- 登录流转:无 next 登录直达门户,登出回登录页带提示 ---------- */
     const qj = new Jar();
@@ -964,10 +1099,22 @@ async function main() {
     r = await call(fj, '/account');
     ok('我的授权:账号页出现入口链接', (await r.text()).includes('/account/apps'));
 
+    // 链式吊销(RFC 7009)已使 tok4 所在链的令牌全部失效;签发一对新令牌作为撤销授权的对照样本
+    r = await call(fj, authUrl);
+    const cnsCode = new URL(location(r), BASE).searchParams.get('code');
+    r = await fetch(BASE + '/token', {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code', code: cnsCode, redirect_uri: 'http://127.0.0.1:8080/cb',
+        client_id: web.client_id, code_verifier: verifier,
+      }).toString(),
+    });
+    const cnsTok = await r.json();
+
     r = await fetch(BASE + '/introspect', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded', Authorization: basic(svc.client_id, 'svc-secret-123') },
-      body: new URLSearchParams({ token: tok4.access_token }).toString(),
+      body: new URLSearchParams({ token: cnsTok.access_token }).toString(),
     });
     ok('我的授权:撤销前应用令牌仍活跃', (await r.json()).active === true);
 
@@ -986,7 +1133,7 @@ async function main() {
     r = await fetch(BASE + '/introspect', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded', Authorization: basic(svc.client_id, 'svc-secret-123') },
-      body: new URLSearchParams({ token: tok4.access_token }).toString(),
+      body: new URLSearchParams({ token: cnsTok.access_token }).toString(),
     });
     ok('我的授权:撤销后该应用现有令牌级联失效', (await r.json()).active === false);
 
@@ -1659,6 +1806,17 @@ async function main() {
     r = await call(nj2, `/apps/launch/${gApp.client_id}?sim_group=dev`);
     ok('模拟:普通用户带 sim_group 启动受限应用仍被拦截(403)', r.status === 403
       && (await r.text()).includes('仅对特定权限组开放'));
+
+    // 加固:管理员直连 /authorize 携带合法 sim_group(无门户 stash)同样补审计(2 条 launch 层 → 3 条)
+    r = await call(aj, '/authorize?' + new URLSearchParams({
+      client_id: gApp.client_id, redirect_uri: 'http://127.0.0.1:8080/gcb',
+      response_type: 'code', scope: 'openid profile groups', state: 'sim-direct',
+      code_challenge: b64urlSha256(crypto.randomBytes(48).toString('base64url')),
+      code_challenge_method: 'S256', sim_group: 'dev',
+    }).toString());
+    ok('加固:直连 /authorize 的 sim_group 旁路发码并补审计(仅一次)', r.status === 302
+      && !!new URL(location(r), BASE).searchParams.get('code') && !location(r).includes('error')
+      && auditM.list({ action: 'admin.simulate_launch', limit: 10 }).length === 3, location(r));
 
     /* ---------- 应用健康探测与注册表 API(向导重跑段之前;本地健康目标随用例启停) ---------- */
     let healthState = 200; // 探测目标的响应码,可切换 200/500

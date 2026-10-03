@@ -34,6 +34,12 @@ function buildRedirect(uri, params) {
 // 错误重定向必须传真实响应对象:传 null 会让 redirect() 内部 setHeader 抛错,错误重定向整体失效
 const errRedirect = (res, uri, obj) => redirect(res, buildRedirect(uri, obj));
 
+/** RFC 7636 §4.1:code_challenge 长度 43-128,字符集限 base64url 字母表(S256 输出天然满足) */
+const CHALLENGE_RE = /^[A-Za-z0-9\-_]{43,128}$/;
+
+/** prompt 参数是否包含 none(OIDC Core §3.1.2.1,空格分隔多值) */
+const promptNone = (prompt) => String(prompt || '').split(/\s+/).includes('none');
+
 /**
  * 应用按权限组限制访问:allowed_groups 非空且用户不属于其中任何组时,
  * 直接渲染 403 风格拒绝页(不重定向回 redirect_uri,避免向不可信方泄露)。
@@ -75,6 +81,10 @@ export function authorizeGet(ctx) {
   const challengeMethod = q.get('code_challenge_method') || '';
 
   if (challenge) {
+    // 携带即校验格式(先于 pkce_required 判定),非法格式不允许进入后续流程
+    if (!CHALLENGE_RE.test(challenge)) {
+      return bad('invalid_request', 'code_challenge 格式非法(须为 43-128 位 base64url 字符)');
+    }
     if (!['S256', 'plain'].includes(challengeMethod)) {
       return bad('invalid_request', 'code_challenge_method 仅支持 S256 或 plain');
     }
@@ -82,7 +92,12 @@ export function authorizeGet(ctx) {
     return bad('invalid_request', '该应用已强制要求 PKCE,请携带 code_challenge');
   }
 
+  const prompt = q.get('prompt') || '';
   if (!ctx.session) {
+    // OIDC Core §3.1.2.1:prompt=none 要求不得出现任何交互,未登录回跳 login_required
+    if (promptNone(prompt)) {
+      return bad('login_required', 'prompt=none 要求已有登录会话');
+    }
     const next = ctx.url.pathname + ctx.url.search;
     return redirect(ctx.res, '/login?next=' + encodeURIComponent(next));
   }
@@ -90,9 +105,12 @@ export function authorizeGet(ctx) {
   // 登录后、同意页之前:按应用可访问权限组拦截
   if (denyIfNotAllowed(ctx, client)) return;
 
-  const prompt = q.get('prompt') || '';
   const remembered = consents.covers(ctx.user.id, client.client_id, scopeList);
   if (client.require_consent && (!remembered || prompt.includes('consent'))) {
+    // prompt=none:需要用户确认授权但无记住授权时回跳 consent_required
+    if (promptNone(prompt)) {
+      return bad('consent_required', 'prompt=none 要求已完成授权确认');
+    }
     return sendHtml(ctx.res, 200, consentPage({
       theme: ctx.theme, siteName: ctx.runtime.siteName, user: ctx.user, client: clients.withUris(client),
       scopeList, csrf: ctx.session.csrf, replay: replayFromQuery(q), remember: true,
@@ -127,12 +145,17 @@ export function authorizePost(ctx) {
   const client = resolved.client;
   const scopeList = filterScopes(body.scope, client.scopes);
 
-  // 与 GET 一致的 PKCE 约束:防止绕过授权页直接 POST 发码跳过强制 PKCE / 伪造 method
+  // 与 GET 一致的 PKCE 约束:防止绕过授权页直接 POST 发码跳过强制 PKCE / 伪造 method 或格式
   if (!body.code_challenge && client.pkce_required) {
     return bad('invalid_request', '该应用已强制要求 PKCE,请携带 code_challenge');
   }
-  if (body.code_challenge && !['S256', 'plain'].includes(body.code_challenge_method || '')) {
-    return bad('invalid_request', 'code_challenge_method 仅支持 S256 或 plain');
+  if (body.code_challenge) {
+    if (!CHALLENGE_RE.test(body.code_challenge)) {
+      return bad('invalid_request', 'code_challenge 格式非法(须为 43-128 位 base64url 字符)');
+    }
+    if (!['S256', 'plain'].includes(body.code_challenge_method || '')) {
+      return bad('invalid_request', 'code_challenge_method 仅支持 S256 或 plain');
+    }
   }
 
   if (body.decision !== 'approve') {
@@ -154,6 +177,13 @@ function issueCode(ctx, { client, redirectUri, scopeList, challenge, challengeMe
   try {
     launchVerifier = consumeLaunch(ctx.session.id_hash, client.client_id);
   } catch { /* 非门户启动,忽略 */ }
+  // 管理员 sim 旁路直连审计:launch 层发起的模拟启动已在 portal.launch 留痕且必有 stash 命中,
+  // 此处仅当无 stash(即直连 /authorize 携带合法 sim_group)时补一条,避免与 launch 层重复;
+  // 简单判定的已知边界:非 PKCE 应用的门户代发不产生 stash,会与 launch 层各记一条(去重交由读者)。
+  const simGroup = ctx.query.get('sim_group') || (ctx.body && ctx.body.sim_group) || '';
+  if (simGroup && ctx.user.is_admin && groups.byName(simGroup) && !launchVerifier) {
+    record(ctx, 'admin.simulate_launch', `应用「${client.name}」· 模拟组「${simGroup}」`);
+  }
   const code = codes.create({
     clientId: client.client_id,
     userId: ctx.user.id,
