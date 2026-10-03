@@ -16,10 +16,17 @@ export function httpUrl(s) {
   }
 }
 
-/** 校验重定向地址:允许 http(s) 与自定义 scheme(如移动端 app 回调) */
+/** 可执行伪协议黑名单:此类地址在浏览器中会以脚本/文档形式执行,绝不允许作为重定向目标 */
+const DANGEROUS_SCHEMES = new Set(['javascript', 'data', 'vbscript']);
+
+/** 校验重定向地址:允许 http(s) 与自定义 scheme(如移动端 app 回调 com.example.app://cb),
+ *  拒绝 javascript:/data:/vbscript: 等可执行伪协议与无 scheme 的相对路径 */
 export function redirectUri(s) {
   const v = String(s || '').trim();
-  return /^[a-zA-Z][a-zA-Z0-9+.-]*:[^\s]+$/.test(v) ? v : null;
+  if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:[^\s]+$/.test(v)) return null;
+  const scheme = v.slice(0, v.indexOf(':')).toLowerCase();
+  if (DANGEROUS_SCHEMES.has(scheme)) return null;
+  return v;
 }
 
 /** 多行文本 → 去空去重的数组(重定向 URI 列表用) */

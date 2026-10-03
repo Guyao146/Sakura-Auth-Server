@@ -58,19 +58,19 @@ export function loginPage({ theme, siteName, csrf, next, err, username = '', all
         <a class="btn" href="/auth/microsoft" style="flex:1;justify-content:center;padding:var(--s3) var(--s4);font-size:15px">${MS_LOGO}使用 Microsoft 账号登录</a>
       </div>` : ''}
       <p class="muted small" style="margin:var(--s3) 0 0"><a href="/forgot-password">忘记密码?</a></p>
-      ${allowRegister ? `<p class="muted small" style="text-align:center;margin:var(--s4) 0 0">还没有账号?<a href="/register">注册新账号</a></p>` : ''}`,
+      ${allowRegister ? `<p class="muted small" style="text-align:center;margin:var(--s4) 0 0">还没有账号?<a href="/register${next ? `?next=${encodeURIComponent(next)}` : ''}">注册新账号</a></p>` : ''}`,
   });
 }
 
-/** 注册页(自助注册开启时可用) */
-export function registerPage({ theme, siteName, csrf, err, values = {} }) {
+/** 注册页(自助注册开启时可用);next 为续流目标(如 /authorize 授权链路),经隐藏字段回传 */
+export function registerPage({ theme, siteName, csrf, err, values = {}, next = '' }) {
   const v = values;
   return authPage({
     theme, siteName, title: `注册新账号 · ${siteName}`,
     content: `
       ${banner(err ? esc(err) : '', 'err')}
       <form method="post" action="/register">
-        ${hiddenInputs({ _csrf: csrf })}
+        ${hiddenInputs({ _csrf: csrf, next: next || '' })}
         <label for="username">用户名</label>
         <input type="text" id="username" name="username" value="${esc(v.username || '')}" required autofocus
           autocomplete="username" pattern="[a-zA-Z0-9_.@-]{2,64}" title="2-64 位字母数字与 _.@-">

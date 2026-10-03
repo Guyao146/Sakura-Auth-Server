@@ -1021,6 +1021,14 @@ async function main() {
     });
     ok('组详情:组重命名重名被拒', r.status === 302 && location(r).includes('err=') && !!groupsM.byName('dev'));
 
+    // 加固:组名大小写不敏感唯一('DEV' vs 'dev' 视为重名;重命名同理,自身大小写变更允许)
+    r = await call(aj, '/admin/groups/create', { method: 'POST', form: { name: 'DEV', description: '', _csrf: gf._csrf } });
+    ok('加固:新建组大小写变体重名被拒(DEV vs dev)', r.status === 302 && location(r).includes('err=')
+      && groupsM.list().filter((g) => g.name.toLowerCase() === 'dev').length === 1);
+    r = await call(aj, `/admin/groups/${devGroup.id}/update`, { method: 'POST', form: { name: 'OPS', description: '', _csrf: devForm._csrf } });
+    ok('加固:组重命名大小写变体被拒(OPS vs ops)', r.status === 302 && location(r).includes('err=')
+      && !!groupsM.byName('dev') && !groupsM.byName('OPS'));
+
     // 成员管理:ops 组为空组,先验证空状态,再批量添加与移除
     r = await call(aj, `/admin/groups/${opsGroup.id}`);
     const opsEmpty = await r.text();
@@ -1486,6 +1494,34 @@ async function main() {
       && msSaved.ms_client_id === 'smoke-ms-client' && msSaved.ms_client_secret === 'smoke-ms-secret'
       && msSaved.ms_authority === msMock.authority);
 
+    // 加固:ms_tenant 格式校验(拼进 authority URL 路径,非法值保存被拒并回显)
+    r = await call(aj, '/admin/ms-oauth', {
+      method: 'POST',
+      form: {
+        ms_enabled: '1', ms_client_id: 'smoke-ms-client', ms_client_secret: 'smoke-ms-secret',
+        ms_tenant: '../evil?x=1', ms_authority: msMock.authority, _csrf: msDashForm._csrf,
+      },
+    });
+    ok('加固:ms_tenant 非法值保存被拒并回显错误', r.status === 302 && location(r).startsWith('/admin?err=')
+      && settings.getMap().ms_tenant !== '../evil?x=1');
+    r = await call(aj, '/admin/ms-oauth', {
+      method: 'POST',
+      form: {
+        ms_enabled: '1', ms_client_id: 'smoke-ms-client', ms_client_secret: 'smoke-ms-secret',
+        ms_tenant: 'Tenant_01.example', ms_authority: msMock.authority, _csrf: msDashForm._csrf,
+      },
+    });
+    ok('加固:ms_tenant 合法值(含 . _ 与大小写)保存成功', r.status === 302 && location(r).startsWith('/admin?msg=')
+      && settings.getMap().ms_tenant === 'Tenant_01.example');
+    await call(aj, '/admin/ms-oauth', { // 还原 common,不影响后续 MS 链路用例
+      method: 'POST',
+      form: {
+        ms_enabled: '1', ms_client_id: 'smoke-ms-client', ms_client_secret: 'smoke-ms-secret',
+        ms_tenant: 'common', ms_authority: msMock.authority, _csrf: msDashForm._csrf,
+      },
+    });
+    ok('加固:ms_tenant 还原 common 成功', settings.getMap().ms_tenant === 'common');
+
     r = await call(new Jar(), '/login');
     ok('MS:启用后登录页出现 Microsoft 登录按钮', r.status === 200
       && (await r.text()).includes('使用 Microsoft 账号登录'));
@@ -1733,6 +1769,21 @@ async function main() {
     ok('审计导出:按 action 筛选导出生效', csvFLines.length === 61 && !csvFBody.includes('csv测试员')
       && csvFLines[0] === '时间,操作者,动作,详情,IP');
     ok('审计导出:普通用户访问导出被拒(403)', (await call(rj, '/admin/audit/export.csv')).status === 403);
+
+    // 加固:CSV 公式注入中和(CWE-1236)—— = + - @ \t \r 开头的自由文本前置单引号
+    const auditSvc = await import('../src/services/audit.js');
+    ok('加固:csvCell 危险前缀全中和(= + - @ 制表符 回车)且普通值不受影响',
+      ['=1+1', '+2', '-3', '@x', '\tT'].every((p) => auditSvc.csvCell(p) === `'${p}`)
+      && auditSvc.csvCell('\rR') === '"\'\rR"'
+      && auditSvc.csvCell('普通值') === '普通值');
+    auditM.log({ actor: '=EvilActor', action: 'csvtest', detail: '=cmd|calc!A0', ip: '10.0.0.9' });
+    auditM.log({ actor: '@spoofed', action: 'csvtest', detail: '-2+3,危险前缀', ip: '10.0.0.9' });
+    r = await call(aj, '/admin/audit/export.csv');
+    const csvHard = await r.text();
+    ok('加固:CSV 导出 = 开头的 detail/actor 被中和(前置单引号)', csvHard.includes("'=cmd|calc!A0")
+      && csvHard.includes("'=EvilActor"));
+    ok('加固:CSV 导出 @/- 前缀被中和且既有引号转义不受影响', csvHard.includes("'@spoofed")
+      && csvHard.includes("'-2+3,危险前缀") && csvHard.includes('"导出,含""引号""与,逗号"'));
 
     // 清理本段测试数据(只删 pagetest/csvtest,不影响后续用例)
     getAuditDb().prepare("DELETE FROM audit_logs WHERE action IN ('pagetest','csvtest')").run();
@@ -2268,6 +2319,91 @@ async function main() {
     const regAfter = await call(new Jar(), '/register');
     ok('向导:完成后首页未登录重定向登录页', homeAfter.status === 302 && location(homeAfter) === '/login');
     ok('向导:完成后注册开关生效且注册页可用', regAfter.status === 200 && (await regAfter.text()).includes('确认密码'));
+
+    /* ---------- 加固包:redirectUri 伪协议 / email 上限 / 限流 Map 清理 / 注册 next 续流 ---------- */
+    const utilM = await import('../src/core/util.js');
+    ok('加固:redirectUri 拒绝 javascript:/data:/vbscript: 伪协议', utilM.redirectUri('javascript:alert(1)') === null
+      && utilM.redirectUri('DATA:text/html;base64,PHNjcmlwdD4=') === null
+      && utilM.redirectUri('vbscript:MsgBox(1)') === null);
+    ok('加固:redirectUri 仍接受 http(s) 与自定义 app scheme', utilM.redirectUri('https://example.com/cb') === 'https://example.com/cb'
+      && utilM.redirectUri('http://127.0.0.1:8080/cb') !== null
+      && utilM.redirectUri('com.example.app://oauth/callback') === 'com.example.app://oauth/callback');
+    r = await call(aj, '/admin/apps/create', {
+      method: 'POST',
+      form: { name: 'Evil Scheme App', client_type: 'public', redirect_uris: 'javascript:alert(1)',
+        scopes: 'openid', _csrf: adminCsrf },
+    });
+    ok('加固:管理端创建应用 javascript: 回调被拒', r.status === 200 && (await r.text()).includes('重定向地址不合法'));
+
+    r = await call(aj, '/admin/users/create', {
+      method: 'POST',
+      form: { username: 'longmail', password: 'Long#12345', email: 'a'.repeat(250) + '@example.com', _csrf: adminCsrf },
+    });
+    ok('加固:email 超过 254 字被拒', r.status === 302 && location(r).startsWith('/admin/users/new?err=')
+      && !users.byUsername('longmail'));
+
+    // 限流 Map 清理:单元级驱动惰性过期清理与硬上限(测试进程内操作模块内部 Map)
+    const regSvc = await import('../src/services/auth/register.js');
+    const resetSvc = await import('../src/services/auth/reset.js');
+    const regRL = regSvc._rateLimitInternal, rstRL = resetSvc._rateLimitInternal;
+    regRL.map.clear();
+    for (let i = 0; i < 3000; i++) regRL.map.set(`reg-exp-${i}`, { count: 1, first: 0 });
+    for (let i = 0; i < 3000; i++) regRL.map.set(`reg-live-${i}`, { count: 1, first: Date.now() });
+    regRL.prune();
+    ok('加固:注册限流 Map 惰性清理过期项', regRL.map.size === 3000 && !regRL.map.has('reg-exp-0'));
+    for (let i = 0; i < 2500; i++) regRL.map.set(`reg-x-${i}`, { count: 1, first: Date.now() });
+    regRL.prune();
+    ok('加固:注册限流 Map 硬上限 5000(淘汰最旧)', regRL.map.size === 5000);
+    regRL.map.clear();
+    rstRL.map.clear();
+    for (let i = 0; i < 6000; i++) rstRL.map.set(`rst-${i}`, { count: 1, first: Date.now() });
+    rstRL.prune();
+    ok('加固:reset 限流 Map 硬上限 5000', rstRL.map.size === 5000);
+    for (let i = 0; i < 100; i++) rstRL.map.set(`rst-exp-${i}`, { count: 1, first: 0 });
+    rstRL.prune();
+    ok('加固:reset 限流 Map 惰性清理过期项', rstRL.map.size === 5000 && !rstRL.map.has('rst-exp-0'));
+    rstRL.map.clear();
+
+    // 注册 next 续流:授权链路未登录 → 登录页注册链接带 next → 注册页透传 → 注册成功跳回 /authorize
+    const chainVerifier = b64urlSha256('chain-verifier-0123456789abcdef');
+    const chainAuthUrl = '/authorize?' + new URLSearchParams({
+      client_id: web.client_id, redirect_uri: 'http://127.0.0.1:8080/cb',
+      response_type: 'code', scope: 'openid profile', state: 'chain-st',
+      code_challenge: chainVerifier, code_challenge_method: 'S256',
+    }).toString();
+    r = await call(new Jar(), '/login');
+    ok('加固:登录页无 next 时注册链接保持原样', (await r.text()).includes('href="/register"'));
+    const chainAnon = new Jar();
+    r = await call(chainAnon, chainAuthUrl);
+    const chainLoginLoc = location(r);
+    ok('加固:未登录授权链路 302 到登录页并带 next', r.status === 302 && chainLoginLoc.startsWith('/login?next=')
+      && new URL(chainLoginLoc, BASE).searchParams.get('next') === chainAuthUrl);
+    r = await call(chainAnon, chainLoginLoc);
+    const chainLoginHtml = await r.text();
+    ok('加固:登录页注册链接携带完整 next', chainLoginHtml.includes(`href="/register?next=${encodeURIComponent(chainAuthUrl)}"`));
+    r = await call(chainAnon, `/register?next=${encodeURIComponent(chainAuthUrl)}`);
+    const chainRegForm = extractHidden(await r.text());
+    ok('加固:注册页隐藏字段透传完整 next', chainRegForm.next.replaceAll('&amp;', '&') === chainAuthUrl);
+    r = await call(chainAnon, '/register?next=//evil.com');
+    ok('加固:注册页对协议相对 next 消毒为空', extractHidden(await r.text()).next === '');
+    r = await call(chainAnon, '/register', {
+      method: 'POST',
+      form: { username: 'chainuser', password: 'Chain#12345', password2: 'Chain#12345', _csrf: chainRegForm._csrf, next: chainAuthUrl },
+    });
+    ok('加固:注册成功后按 next 续流回 /authorize', r.status === 302 && location(r) === chainAuthUrl);
+    r = await call(chainAnon, location(r));
+    ok('加固:注册续流后直达同意授权页(链路闭环)', r.status === 200 && (await r.text()).includes('请求访问你的账号'));
+
+    // 行为验证:注册限流生效(计数先于 CSRF 校验;同 IP 窗口内超额提交被拒)
+    let sawLimit = false;
+    for (let i = 0; i < 6 && !sawLimit; i++) {
+      const rr = await call(new Jar(), '/register', {
+        method: 'POST',
+        form: { username: `rl${i}`, password: 'Rl#123456', password2: 'Rl#123456', _csrf: 'bad' },
+      });
+      if (rr.status === 400 && (await rr.text()).includes('注册尝试过于频繁')) sawLimit = true;
+    }
+    ok('加固:注册限流行为验证(同 IP 窗口内超额提交被拒)', sawLimit);
 
     /* ---------- 模型层补充:consents 合并语义(重复授权按并集合并) ---------- */
     const consentsM = await import('../src/models/consents.js');

@@ -48,9 +48,15 @@ export function clearAudit(ctx) {
   redirect(ctx.res, '/admin/audit?msg=' + encodeURIComponent('审计日志已清空。'));
 }
 
-/** CSV 单元格转义:含逗号/引号/换行的字段用双引号包裹,内部引号翻倍 */
-const csvCell = (v) => {
-  const s = String(v ?? '');
+/**
+ * CSV 单元格转义:
+ * 1) 公式注入中和(CWE-1236):以 = + - @ \t \r 开头的值前置单引号,
+ *    防止导出文件被 Excel/WPS 当作公式执行(detail/username 等自由文本均生效);
+ * 2) 含逗号/引号/换行的字段用双引号包裹,内部引号翻倍。
+ */
+export const csvCell = (v) => {
+  let s = String(v ?? '');
+  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
   return /[",\r\n]/.test(s) ? `"${s.replaceAll('"', '""')}"` : s;
 };
 
