@@ -89,8 +89,12 @@ export function loginPage({ theme, siteName, csrf, next, err, username = '', all
 /** 注册页(自助注册开启时可用);next 为续流目标(如 /authorize 授权链路),经隐藏字段回传 */
 export function registerPage({ theme, siteName, csrf, err, values = {}, next = '' }) {
   const v = values;
-  return authPage({
-    theme, siteName, title: `注册新账号 · ${siteName}`,
+  const rt = getRuntime();
+  const L = normalizeLang(currentLang());
+  return brandPage({
+    theme, siteName, lang: L, title: `注册新账号 · ${siteName}`,
+    tagline: (rt && rt.brandTagline) || t(L, 'login.tagline'),
+    features: loginFeatures(L),
     content: `
       ${banner(err ? esc(err) : '', 'err')}
       <form method="post" action="/register">
@@ -114,14 +118,17 @@ export function registerPage({ theme, siteName, csrf, err, values = {}, next = '
   });
 }
 
-/** 二步验证页(第二因子) */
+/** 二步验证页(第二因子;与登录页同款分栏布局) */
 export function twofaPage({ theme, siteName, csrf, pending, next, username, err, lang }) {
   const L = normalizeLang(lang || currentLang());
+  const rt = getRuntime();
   const intro = L === 'en'
     ? `Account <b style="color:var(--text)">${esc(username)}</b> has two-factor authentication enabled. Enter the 6-digit code from your authenticator app, or a recovery code.`
     : `账号 <b style="color:var(--text)">${esc(username)}</b> 已开启两步验证。请输入验证器 App 中的 6 位验证码;没有 App 时可填写恢复代码。`;
-  return authPage({
+  return brandPage({
     theme, siteName, lang: L, title: `两步验证 · ${siteName}`,
+    tagline: (rt && rt.brandTagline) || t(L, 'login.tagline'),
+    features: loginFeatures(L),
     content: `
       ${banner(err ? esc(trPassed(err, L)) : '', 'err')}
       <h3 style="margin-top:0">${esc(t(L, 'twofa.title'))}</h3>
@@ -141,8 +148,12 @@ export function twofaPage({ theme, siteName, csrf, pending, next, username, err,
 
 /** 找回密码页(输入邮箱;无论邮箱是否存在,提交后的提示都一致,防枚举) */
 export function forgotPasswordPage({ theme, siteName, csrf, err, msg, email = '' }) {
-  return authPage({
-    theme, siteName, title: `找回密码 · ${siteName}`,
+  const rt = getRuntime();
+  const L = normalizeLang(currentLang());
+  return brandPage({
+    theme, siteName, lang: L, title: `找回密码 · ${siteName}`,
+    tagline: (rt && rt.brandTagline) || t(L, 'login.tagline'),
+    features: loginFeatures(L),
     content: `
       ${banner(err ? esc(err) : '', 'err')}
       ${banner(msg ? esc(msg) : '', 'ok')}
@@ -162,8 +173,12 @@ export function forgotPasswordPage({ theme, siteName, csrf, err, msg, email = ''
 
 /** 设置新密码页(GET /reset-password?token=...,token 走 hidden 回传) */
 export function resetPasswordPage({ theme, siteName, csrf, token, err }) {
-  return authPage({
-    theme, siteName, title: `设置新密码 · ${siteName}`,
+  const rt = getRuntime();
+  const L = normalizeLang(currentLang());
+  return brandPage({
+    theme, siteName, lang: L, title: `设置新密码 · ${siteName}`,
+    tagline: (rt && rt.brandTagline) || t(L, 'login.tagline'),
+    features: loginFeatures(L),
     content: `
       ${banner(err ? esc(err) : '', 'err')}
       <h3 style="margin-top:0">设置新密码</h3>
@@ -183,8 +198,12 @@ export function resetPasswordPage({ theme, siteName, csrf, token, err }) {
 
 /** 密码重置成功页(提示用新密码重新登录) */
 export function resetDonePage({ theme, siteName }) {
-  return authPage({
-    theme, siteName, title: `密码已重置 · ${siteName}`, footer: false,
+  const rt = getRuntime();
+  const L = normalizeLang(currentLang());
+  return brandPage({
+    theme, siteName, lang: L, title: `密码已重置 · ${siteName}`, footer: false,
+    tagline: (rt && rt.brandTagline) || t(L, 'login.tagline'),
+    features: loginFeatures(L),
     content: `
       <h3 style="margin-top:0">密码已重置</h3>
       <p class="small">你的密码已更新,所有已登录的会话均已退出。请使用新密码重新登录。</p>
