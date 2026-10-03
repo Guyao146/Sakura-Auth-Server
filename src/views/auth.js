@@ -1,4 +1,4 @@
-import { escapeHtml as esc, fmtTime } from '../core/util.js';
+import { escapeHtml as esc, fmtTime, truncateCodePoints } from '../core/util.js';
 import { authPage, adminPage, brandPage } from './layout.js';
 import { banner, badge, hiddenInputs, kvRow, scopeItems, scopeIcon, SCOPE_NAMES } from './components.js';
 import { getRuntime } from '../core/runtime.js';
@@ -474,12 +474,9 @@ export function authorizationsPage({ theme, siteName, user, csrf, list, msg, err
 }
 
 /** 登录会话页:查看/撤销已登录设备(并入控制台侧栏布局,挂在账号设置入口下)。
- *  list 会话行含 is_current 标记;UA 超 40 字截断,完整值放 title 悬停可见。 */
+ *  list 会话行含 is_current 标记;UA 超 40 码点截断(码点安全,emoji 不被截半),完整值放 title 悬停可见。 */
 export function sessionsPage({ theme, siteName, user, csrf, list, msg, err, cur = '/' }) {
-  const clip = (s) => {
-    const v = String(s || '');
-    return v.length > 40 ? `${v.slice(0, 40)}…` : v;
-  };
+  const clip = (s) => truncateCodePoints(s, 40);
   const rows = list.map((row) => `<tr>
       <td class="wrap"><code>${esc(row.id_hash.slice(0, 8))}</code>${row.is_current ? ` ${badge('当前')}` : ''}</td>
       <td>${fmtTime(row.created_at)}</td>

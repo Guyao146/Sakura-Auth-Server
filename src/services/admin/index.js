@@ -619,9 +619,19 @@ export async function uploadAppLogo(ctx) {
     }));
   }
   ensureUploadsDir();
-  removeLogoFile(app); // 扩展名变化时清掉旧文件,避免残留
   const name = `${app.client_id}.${ext}`;
-  fs.writeFileSync(path.join(uploadsDir(), name), file.data);
+  // 原子化落盘:先写同盘临时文件再 rename 覆盖目标,并发读不会看到写了一半的文件
+  const target = path.join(uploadsDir(), name);
+  const tmp = `${target}.tmp-${randomToken(6)}`;
+  try {
+    await fs.promises.writeFile(tmp, file.data);
+    await fs.promises.rename(tmp, target);
+  } finally {
+    // rename 成功后临时文件已不存在,失败时清理残渣,不留 .tmp- 文件
+    await fs.promises.unlink(tmp).catch(() => {});
+  }
+  // rename 已原子覆盖同名旧文件;仅扩展名变化(或首次上传)时清理旧文件,避免残留
+  if (app.logo_url !== `/uploads/${name}`) removeLogoFile(app);
   clients.update(app.client_id, { logoUrl: `/uploads/${name}` });
   record(ctx, 'admin.app_logo_uploaded', app.name);
   logger.info('管理员上传应用 Logo', { client: app.client_id, file: name, size: file.data.length });
