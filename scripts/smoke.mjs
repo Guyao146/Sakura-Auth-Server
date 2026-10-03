@@ -398,6 +398,16 @@ async function main() {
     r = await call(qj, location(r));
     ok('流转:登录页渲染「已退出登录」提示横幅', r.status === 200 && (await r.text()).includes('已退出登录'));
 
+    /* ---------- 主题切换:back 参数防开放重定向 ---------- */
+    r = await call(new Jar(), '/-/theme/night?back=' + encodeURIComponent('/apps'));
+    ok('主题:正常 back 参数回到站内页面并写入主题 cookie', r.status === 302 && location(r) === '/apps'
+      && (r.headers.getSetCookie?.() || []).some((c) => c.startsWith('theme=night')));
+    // 反斜杠会被部分浏览器规范化为 /,使 /\evil.com 成为协议相对地址 → 必须落到首页
+    r = await call(new Jar(), '/-/theme/day?back=' + encodeURIComponent('/\\evil.com'));
+    ok('主题:反斜杠 back 参数被拒(防协议相对开放重定向)', r.status === 302 && location(r) === '/');
+    r = await call(new Jar(), '/-/theme/day?back=' + encodeURIComponent('//evil.com'));
+    ok('主题:协议相对 back 参数被拒', r.status === 302 && location(r) === '/');
+
     /* ---------- 两步验证(TOTP + 恢复代码) ---------- */
     const totp = await import('../src/core/totp.js');
     const recovery = await import('../src/models/recovery.js');
@@ -458,9 +468,19 @@ async function main() {
     await call(aj, '/login', { method: 'POST', form: { username: 'admin', password: 'Wizard#12345', _csrf: f3._csrf } });
     r = await call(aj, '/admin');
     ok('管理员登录后可访问控制台', r.status === 200 && (await r.text()).includes('控制台'));
+    let adminCsrf = extractHidden(await (await call(aj, '/admin')).text())._csrf; // 管理员会话 CSRF(新建用户/应用等写表单共用;重登后需刷新)
+
+    // 缺少会话 CSRF 的新建请求一律拒绝(与其它管理端写操作同标准)
+    r = await call(aj, '/admin/users/create', { method: 'POST', form: { username: 'csrfless', password: 'Csrf#12345' } });
+    ok('管理端:新建用户缺 CSRF 被拒', r.status === 302 && location(r).startsWith('/admin/users/new?err=') && !users.byUsername('csrfless'));
+    r = await call(aj, '/admin/apps/create', { method: 'POST', form: { name: 'Csrfless App', redirect_uris: 'http://127.0.0.1:8080/x', scopes: 'openid' } });
+    ok('管理端:新建应用缺 CSRF 被拒', r.status === 302 && location(r).startsWith('/admin/apps/new?err='));
+    r = await call(aj, '/admin/users/new');
+    ok('管理端:新建用户表单携带 CSRF 隐藏字段', r.status === 200 && !!extractHidden(await r.text())._csrf);
+
     r = await call(aj, '/admin/users/create', {
       method: 'POST',
-      form: { username: 'alice', password: 'Alice#12345', name: '爱丽丝', email: 'alice@example.com', user_groups: 'dev', is_admin: '' },
+      form: { username: 'alice', password: 'Alice#12345', name: '爱丽丝', email: 'alice@example.com', user_groups: 'dev', is_admin: '', _csrf: adminCsrf },
     });
     r = await call(aj, '/admin/users');
     ok('管理员可在控制台创建用户', r.status === 200 && (await r.text()).includes('alice'));
@@ -475,6 +495,7 @@ async function main() {
     r = await call(aj, '/login');
     const f5 = extractHidden(await r.text());
     await call(aj, '/login', { method: 'POST', form: { username: 'admin', password: 'Wizard#12345', _csrf: f5._csrf } });
+    adminCsrf = extractHidden(await (await call(aj, '/admin')).text())._csrf; // 重登产生新会话,刷新会话 CSRF
     r = await call(aj, `/admin/users/${bob.id}`);
     const editHtml = await r.text();
     ok('编辑页提供两步验证重置项', editHtml.includes('重置两步验证'));
@@ -607,6 +628,15 @@ async function main() {
       form: { username: 'carol', password: 'Carol#12345', password2: 'Carol#12345', _csrf: dupForm._csrf },
     });
     ok('自助注册:重复用户名注册被拒', r.status === 400 && (await r.text()).includes('用户名已存在'));
+
+    // 大小写变体同样视为重复(username 列 UNIQUE COLLATE NOCASE,查重走 COLLATE NOCASE)
+    r = await call(dj, '/register', {
+      method: 'POST',
+      form: { username: 'CAROL', password: 'Carol#12345', password2: 'Carol#12345', _csrf: dupForm._csrf },
+    });
+    ok('自助注册:大小写变体用户名同样被拒(COLLATE NOCASE)', r.status === 400
+      && (await r.text()).includes('用户名已存在')
+      && users.list().filter((u) => u.username === 'CAROL').length === 0);
 
     // 两次密码不一致被拒
     const mj = new Jar();
@@ -972,6 +1002,7 @@ async function main() {
         ['description', '统一运维入口,一站聚合所有工具'],
         ['logo_url', 'https://cdn.example.com/logo.png'],
         ['require_consent', '1'],
+        ['_csrf', adminCsrf],
       ],
     });
     ok('应用信息:创建带描述与 Logo 的应用成功', r.status === 302
@@ -990,7 +1021,7 @@ async function main() {
       form: {
         name: 'Bad Logo App', client_type: 'public',
         redirect_uris: 'http://127.0.0.1:8080/bad', scopes: 'openid',
-        logo_url: 'http://cdn.example.com/x.png',
+        logo_url: 'http://cdn.example.com/x.png', _csrf: adminCsrf,
       },
     });
     ok('应用信息:非 https Logo 地址被拒绝', r.status === 200 && (await r.text()).includes('Logo 图片地址不合法'));
@@ -1310,6 +1341,14 @@ async function main() {
       `loc=${location(r)}`);
     const boundAlice = users.byMicrosoftSub('ms-sub-123');
     ok('MS:bind=1 后 byMicrosoftSub 命中 alice', !!boundAlice && boundAlice.id === users.byUsername('alice').id);
+
+    // 已绑定账号再次发起 bind=1:拒绝静默换绑,提示先解绑(绑定仍保留)
+    r = await call(aj2, '/auth/microsoft?bind=1');
+    r = await call(aj2, location(r));
+    r = await call(aj2, location(r));
+    ok('MS:已绑定账号重复 bind=1 被拒(需先解绑,绑定不被覆盖)', r.status === 302
+      && location(r).startsWith('/account?err=') && users.byMicrosoftSub('ms-sub-123')?.id === users.byUsername('alice').id);
+
     if (boundAlice) users.unbindMicrosoft(boundAlice.id); // 清理绑定,供后续注册链路复用同一 mock 身份
 
     // 表单 B:自助注册开启时注册新号并绑定
@@ -1373,7 +1412,7 @@ async function main() {
       method: 'POST',
       // scopes 以重复键提交,服务端按数组收集(与表单复选框行为一致)
       form: [['name', '审计探针'], ['redirect_uris', 'http://127.0.0.1:8080/audit-cb'],
-        ['scopes', 'openid'], ['scopes', 'profile'], ['client_type', 'public']],
+        ['scopes', 'openid'], ['scopes', 'profile'], ['client_type', 'public'], ['_csrf', adminCsrf]],
     });
     const appCreatedRows = auditM.list({ action: 'admin.app_created', limit: 10 });
     ok('审计:新建应用产生 admin.app_created 记录', appCreatedRows.length > 0
@@ -1430,6 +1469,9 @@ async function main() {
       && pgF.includes('href="/admin/audit/export.csv?action=pagetest"'));
     r = await call(aj, '/admin/audit?page=999');
     ok('审计分页:页码越界自动收敛到末页', r.status === 200 && (await r.text()).includes('第 2 / 2 页 · 共 60 条'));
+    r = await call(aj, '/admin/audit?page=-3');
+    ok('审计分页:负数/非法页码收敛到第 1 页', r.status === 200
+      && (await r.text()).includes('第 1 / 2 页 · 共 60 条'));
 
     // CSV 导出:造一条中文操作者 + 逗号引号明细的记录,验证转义与计数
     auditM.log({ actor: 'csv测试员', action: 'csvtest', detail: '导出,含"引号"与,逗号', ip: '10.0.0.2' });
@@ -1568,7 +1610,7 @@ async function main() {
         method: 'POST',
         form: [['name', '健康探针'], ['client_type', 'public'],
           ['redirect_uris', 'http://127.0.0.1:8080/health-cb'],
-          ['scopes', 'openid'], ['health_url', healthUrl]],
+          ['scopes', 'openid'], ['health_url', healthUrl], ['_csrf', adminCsrf]],
       });
       ok('健康探测:创建带健康检查地址的应用成功', r.status === 302 && location(r).startsWith('/admin/apps/'));
       const healthAppId = new URL(location(r), BASE).pathname.split('/').pop();
@@ -1578,7 +1620,7 @@ async function main() {
       r = await call(aj, '/admin/apps/create', {
         method: 'POST',
         form: { name: 'Bad Health App', client_type: 'public', redirect_uris: 'http://127.0.0.1:8080/bh',
-          scopes: 'openid', health_url: 'ftp://example.com/x' },
+          scopes: 'openid', health_url: 'ftp://example.com/x', _csrf: adminCsrf },
       });
       ok('健康探测:非 http(s) 健康地址被拒绝', r.status === 200 && (await r.text()).includes('健康检查地址不合法'));
 
@@ -1802,7 +1844,7 @@ async function main() {
     r = await call(aj, '/admin/apps/create', {
       method: 'POST',
       form: [['name', 'Logo 演示'], ['client_type', 'public'],
-        ['redirect_uris', 'http://127.0.0.1:8080/logo-cb'], ['scopes', 'openid']],
+        ['redirect_uris', 'http://127.0.0.1:8080/logo-cb'], ['scopes', 'openid'], ['_csrf', adminCsrf]],
     });
     ok('Logo:创建测试应用成功', r.status === 302 && location(r).startsWith('/admin/apps/'));
     const logoAppId = new URL(location(r), BASE).pathname.split('/').pop();
@@ -1909,6 +1951,21 @@ async function main() {
     ok('Logo:上传与删除计入审计', auditM.list({ action: 'admin.app_logo_uploaded', limit: 100 }).length === 2
       && auditM.list({ action: 'admin.app_logo_deleted', limit: 100 }).length === 1);
 
+    // 清空 Logo 字段(应用设置保存):此前上传的文件同步清理,不再残留孤儿文件
+    r = await postMultipart(aj, `/admin/apps/${logoAppId}/logo`, {
+      fields: { _csrf: logoCsrf },
+      file: { name: 'logo', filename: 'logo.png', contentType: 'image/png', data: PNG_1PX },
+    });
+    ok('Logo:重新上传 PNG 成功(供清理用例)', r.status === 302
+      && fs.existsSync(path.join(uploadsDirSmoke, `${logoAppId}.png`)));
+    r = await call(aj, `/admin/apps/${logoAppId}/update`, {
+      method: 'POST',
+      form: [['name', 'Logo 演示'], ['redirect_uris', 'http://127.0.0.1:8080/logo-cb'],
+        ['scopes', 'openid'], ['logo_url', ''], ['_csrf', logoCsrf]],
+    });
+    ok('Logo:清空 Logo 字段后上传文件同步清理(无孤儿文件)', r.status === 302 && location(r).includes('msg=')
+      && clients.byId(logoAppId).logo_url === '' && !fs.existsSync(path.join(uploadsDirSmoke, `${logoAppId}.png`)));
+
 
     /* ---------- 配置向导增强:管理员重新运行向导(放在最后,尾部恢复 setup_done=1) ---------- */
     r = await call(aj, '/admin');
@@ -1919,32 +1976,51 @@ async function main() {
     ok('向导:管理员触发重跑后跳到 /setup', r.status === 302 && location(r) === '/setup');
     const gated = await call(new Jar(), '/');
     ok('向导:重跑期间普通页面重定向 /setup', gated.status === 302 && location(gated) === '/setup');
-    r = await call(wj, '/setup');
+    r = await call(aj, '/setup');
     ok('向导:重跑后 /setup 显示第 1 步环境检测', r.status === 200 && (await r.text()).includes('环境检测'));
 
-    await call(wj, '/setup/step1', { method: 'POST', form: {} });
-    r = await call(wj, '/setup');
+    await call(aj, '/setup/step1', { method: 'POST', form: {} });
+    r = await call(aj, '/setup');
     const wz2 = await r.text();
-    ok('向导:第 2 步页面含自助注册与 SMTP 主机', wz2.includes('自助注册') && wz2.includes('SMTP 主机'));
+    ok('向导:第 2 步页面含自助注册与 SMTP 主机(重跑时携带会话 CSRF)',
+      wz2.includes('自助注册') && wz2.includes('SMTP 主机') && !!extractHidden(wz2)._csrf);
+
+    // 重跑守卫:库中已有用户后,匿名请求不得在窗口期改写站点设置或抢注管理员
     r = await call(wj, '/setup/step2', {
+      method: 'POST',
+      form: { site_name: '匿名篡改站', issuer: BASE, access_ttl: '900', refresh_ttl: '2592000', allow_register: '1' },
+    });
+    ok('向导:重跑期间匿名提交第 2 步被拒且设置不被改写', r.status === 302 && location(r) === '/setup'
+      && settings.getMap().site_name === '樱落统一认证');
+    r = await call(wj, '/setup/step3', {
+      method: 'POST',
+      form: { username: 'hijacker', password: 'Hijack#12345', password2: 'Hijack#12345' },
+    });
+    ok('向导:重跑期间匿名创建管理员被拒', r.status === 302 && location(r) === '/setup'
+      && !users.list().some((u) => u.username === 'hijacker'));
+
+    // 管理员本人(会话 + CSRF)提交第 2 步正常生效
+    r = await call(aj, '/setup/step2', {
       method: 'POST',
       form: {
         site_name: '樱落统一认证', issuer: BASE, access_ttl: '900', refresh_ttl: '2592000',
         allow_register: '1', smtp_host: 'smtp.example.com', smtp_port: '587', smtp_from: 'noreply@example.com',
+        _csrf: adminCsrf,
       },
     });
     const wzSettings = settings.getMap();
-    ok('向导:第 2 步提交后注册开关与 SMTP 设置生效', r.status === 302
+    ok('向导:管理员提交第 2 步后注册开关与 SMTP 设置生效', r.status === 302
       && wzSettings.allow_register === '1'
       && wzSettings.smtp_host === 'smtp.example.com'
       && wzSettings.smtp_from === 'noreply@example.com');
 
-    r = await call(wj, '/setup');
+    r = await call(aj, '/setup');
     const wz3 = await r.text();
     ok('向导:已有账号时第 3 步显示跳过文案', wz3.includes('检测到已有账号'));
-    r = await call(wj, '/setup/step3', { method: 'POST', form: { skip: '1' } });
+    r = await call(aj, '/setup/step3', { method: 'POST', form: { skip: '1' } });
     const wz4 = await r.text();
-    ok('向导:跳过创建直接完成配置', r.status === 200 && wz4.includes('配置完成'));
+    ok('向导:跳过创建直接完成配置并解除重跑守卫', r.status === 200 && wz4.includes('配置完成')
+      && settings.getMap().setup_rerun === '');
     const homeAfter = await call(new Jar(), '/');
     const regAfter = await call(new Jar(), '/register');
     ok('向导:完成后首页未登录重定向登录页', homeAfter.status === 302 && location(homeAfter) === '/login');
