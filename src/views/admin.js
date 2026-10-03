@@ -475,7 +475,11 @@ export function appDetailPage({ theme, siteName, user, cur, app, allGroups = [],
         <h3 style="margin-top:0">已授权用户</h3>
         <p class="muted small" style="margin:0 0 var(--s2)">撤销后,该用户对此应用的记住授权与现有令牌立即失效,下次访问需重新确认。</p>
         ${consentRows
-          ? `<div class="tblwrap"><table class="tbl">
+          ? `<div class="spread" style="margin-bottom:var(--s3)">
+              <span class="muted small">共 ${consentedUsers.length} 位用户授权</span>
+              <a class="btn btn-sm" href="/admin/apps/${esc(a.client_id)}/consents.csv">导出 CSV</a>
+            </div>
+            <div class="tblwrap"><table class="tbl">
               <thead><tr><th>用户名</th><th>姓名</th><th>授权范围</th><th>授权时间</th><th>操作</th></tr></thead>
               <tbody>${consentRows}</tbody>
             </table></div>`
