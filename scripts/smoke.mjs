@@ -3,7 +3,7 @@
  * 配置向导 → 登录 → 授权码+PKCE → 令牌签发/刷新/内省/吊销 → 管理控制台权限 → 邮件找回密码。
  * 运行:npm run smoke
  */
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -2340,6 +2340,7 @@ async function main() {
       && clients.byId(logoAppId).logo_url === '' && !fs.existsSync(path.join(uploadsDirSmoke, `${logoAppId}.png`)));
 
 
+
     /* ---------- Passkey/WebAuthn:模拟真认证器(零依赖 CBOR + ES256 手造凭据) ---------- */
     const webauthnModel = await import('../src/models/webauthn.js');
     const pkUser = users.create({ username: 'passy', passwordHash: hashPassword('Passy#12345'), name: '帕斯基' });
@@ -2542,6 +2543,178 @@ async function main() {
     ok('Passkey:删除计入审计(account.passkey_deleted)', auditM.list({ action: 'account.passkey_deleted', limit: 10 }).length === 1);
     ok('Passkey:登录计入审计(auth.passkey_login)', auditM.list({ action: 'auth.passkey_login', limit: 10 }).length === 2);
     webauthnModel.remove('bob-pk-cred', bob.id); // 清理越权测试夹具
+
+    /* ---------- 运维:一键备份/恢复、新设备登录提醒、授权用户 CSV 导出(放在向导重跑段之前) ---------- */
+    const consentsOps = await import('../src/models/consents.js');
+    const { DatabaseSync } = await import('node:sqlite');
+
+    /* ---------- 备份与恢复(独立子进程跑脚本;restore 在临时 DATA_DIR 演练,不动 .smoke-data) ---------- */
+    const backupsDir = path.join(DATA, 'backups');
+    const BACKUP_DIR_RE = /^sakuraid-backup-\d{8}-\d{6}(-\d+)?$/;
+    const listBackupDirs = () => (fs.existsSync(backupsDir) ? fs.readdirSync(backupsDir).filter((n) => BACKUP_DIR_RE.test(n)).sort() : []);
+    const listBackupTars = () => (fs.existsSync(backupsDir) ? fs.readdirSync(backupsDir).filter((n) => /^sakuraid-backup-\d{8}-\d{6}(-\d+)?\.tar\.gz$/.test(n)).sort() : []);
+    const tarAvailable = spawnSync('tar', ['--version'], { encoding: 'utf8' }).status === 0;
+    const runBackup = () => spawnSync(process.execPath, ['scripts/backup.mjs'], {
+      cwd: ROOT, env: { ...process.env, DATA_DIR: DATA, BACKUP_KEEP: '2' }, encoding: 'utf8',
+    });
+    fs.mkdirSync(path.join(DATA, 'uploads'), { recursive: true });
+    fs.writeFileSync(path.join(DATA, 'uploads', 'backup-probe.txt'), 'backup-probe');
+
+    const b1 = runBackup();
+    let snapInfo = null;
+    if (b1.status === 0 && listBackupDirs().length === 1) {
+      const dir = path.join(backupsDir, listBackupDirs()[0]);
+      if (fs.existsSync(path.join(dir, 'idp.sqlite')) && fs.existsSync(path.join(dir, 'meta.txt'))) {
+        let snap = new DatabaseSync(path.join(dir, 'idp.sqlite'));
+        const userCount = snap.prepare('SELECT COUNT(*) AS n FROM users').get().n;
+        snap.close();
+        snapInfo = { userCount, meta: fs.readFileSync(path.join(dir, 'meta.txt'), 'utf8') };
+      }
+    }
+    ok('备份:backup 脚本退出 0 并生成备份目录(含 idp.sqlite 与 meta.txt)', b1.status === 0 && !!snapInfo,
+      `status=${b1.status} out=${(b1.stderr || b1.stdout || '').slice(-200)}`);
+    ok('备份:快照可被 DatabaseSync 打开查询(users>0)且 meta.txt 含版本/issuer/备份时间', !!snapInfo && snapInfo.userCount > 0
+      && snapInfo.meta.includes(pkgVersion) && snapInfo.meta.includes(BASE) && snapInfo.meta.includes('备份时间'),
+      `users=${snapInfo?.userCount}`);
+    ok('备份:生成同名 .tar.gz(系统 tar 可用时)', !tarAvailable || listBackupTars().length === 1,
+      `tars=${listBackupTars().length} tar=${tarAvailable}`);
+
+    const b2 = runBackup();
+    ok('备份:连跑两次生成两份备份', b2.status === 0 && listBackupDirs().length === 2, `dirs=${listBackupDirs().length}`);
+    const firstBackup = listBackupDirs()[0];
+    const b3 = runBackup();
+    ok('备份:BACKUP_KEEP=2 保留规则生效(仅留最近两份,目录与 tar 均删)', b3.status === 0
+      && listBackupDirs().length === 2 && !listBackupDirs().includes(firstBackup)
+      && (!tarAvailable || listBackupTars().length === 2), `dirs=${listBackupDirs().length} tars=${listBackupTars().length}`);
+
+    const restoreTarget = path.join(ROOT, '.smoke-restore-target');
+    const beforeDirs = () => fs.readdirSync(ROOT).filter((n) => n.startsWith('.smoke-restore-target-before-restore-'));
+    const runRestore = (...args) => spawnSync(process.execPath, ['scripts/restore.mjs', ...args], {
+      cwd: ROOT, env: { ...process.env, DATA_DIR: restoreTarget }, encoding: 'utf8',
+    });
+    fs.rmSync(restoreTarget, { recursive: true, force: true });
+    fs.mkdirSync(path.join(restoreTarget, 'uploads'), { recursive: true });
+    fs.writeFileSync(path.join(restoreTarget, 'idp.sqlite'), 'not-a-real-database');
+    fs.writeFileSync(path.join(restoreTarget, 'uploads', 'old-file.txt'), 'old');
+
+    const rRefuse = runRestore(path.join(backupsDir, listBackupDirs()[0]));
+    ok('备份:restore 未加 --force 时拒绝执行并提示先停止服务', rRefuse.status !== 0
+      && `${rRefuse.stdout}${rRefuse.stderr}`.includes('请先停止服务再恢复')
+      && fs.readFileSync(path.join(restoreTarget, 'idp.sqlite'), 'utf8') === 'not-a-real-database', `status=${rRefuse.status}`);
+
+    const rDir = runRestore(path.join(backupsDir, listBackupDirs()[0]), '--force');
+    let restoredUsers = -1;
+    try {
+      const rdb = new DatabaseSync(path.join(restoreTarget, 'idp.sqlite'));
+      restoredUsers = rdb.prepare('SELECT COUNT(*) AS n FROM users').get().n;
+      rdb.close();
+    } catch { /* 恢复失败时保持 -1 */ }
+    ok('备份:restore --force 对备份目录执行后 idp.sqlite 可查询(users>0)', rDir.status === 0 && restoredUsers > 0,
+      `status=${rDir.status} users=${restoredUsers} ${(rDir.stderr || '').slice(-200)}`);
+    ok('备份:恢复时 uploads 随备份恢复且旧数据整体改名为 data-before-restore-<ts>', rDir.status === 0
+      && fs.existsSync(path.join(restoreTarget, 'uploads', 'backup-probe.txt'))
+      && beforeDirs().length === 1 && fs.existsSync(path.join(ROOT, beforeDirs()[0] || '', 'idp.sqlite'))
+      && fs.existsSync(path.join(ROOT, beforeDirs()[0] || '', 'uploads', 'old-file.txt')),
+      `before=${beforeDirs().length}`);
+
+    let tarRestoreOk = true, tarUsers = 0;
+    if (tarAvailable) {
+      fs.rmSync(restoreTarget, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+      const rTar = runRestore(path.join(backupsDir, `${listBackupDirs()[0]}.tar.gz`), '--force');
+      try {
+        const tdb = new DatabaseSync(path.join(restoreTarget, 'idp.sqlite'));
+        tarUsers = tdb.prepare('SELECT COUNT(*) AS n FROM users').get().n;
+        tdb.close();
+      } catch { tarUsers = -1; }
+      tarRestoreOk = rTar.status === 0 && tarUsers > 0;
+    }
+    ok('备份:restore 支持直接恢复 .tar.gz(解包后 idp.sqlite 可查询)', !tarAvailable || tarRestoreOk, `users=${tarUsers}`);
+
+    // 清理恢复演练产物(临时目录 + 改名前的旧数据目录)
+    fs.rmSync(restoreTarget, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
+    for (const bd of beforeDirs()) fs.rmSync(path.join(ROOT, bd), { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
+
+    /* ---------- 新设备登录邮件提醒 ---------- */
+    const countInLog = (needle) => serverLog.split(needle).length - 1;
+    const ND_UA = 'smoke-new-device-agent/1.0', NOEMAIL_UA = 'smoke-noemail-agent/1.0';
+
+    // carol 有邮箱;该 IP+UA 组合从未出现过 → 新设备提醒(未配置 SMTP,dev 模式邮件全文进 serverLog)
+    const ndj = new Jar();
+    r = await call(ndj, '/login', { headers: { 'User-Agent': ND_UA } });
+    const ndForm = extractHidden(await r.text());
+    const ndBefore = countInLog('新设备登录提醒');
+    r = await call(ndj, '/login', { method: 'POST', form: { username: 'carol', password: 'Carol#12345', _csrf: ndForm._csrf }, headers: { 'User-Agent': ND_UA } });
+    ok('新设备:带新 UA 登录成功', r.status === 302, `status=${r.status} loc=${location(r)}`);
+    let ndSeen = 0;
+    for (let i = 0; i < 40 && !ndSeen; i++) { await sleep(150); ndSeen = countInLog('新设备登录提醒') - ndBefore; }
+    await sleep(300); // 邮件打日志后审计写入紧随其后,留出落库时间
+    ok('新设备:dev 模式提醒邮件进入 serverLog(主题「新设备登录提醒」)', ndSeen >= 1, `mails=${ndSeen}`);
+    ok('新设备:邮件正文含用户名与 IP/设备信息', serverLog.includes('用户名:carol') && serverLog.includes('IP:') && serverLog.includes(ND_UA));
+    ok('新设备:审计产生 auth.new_device(detail 含 ip 与 ua)', auditM.list({ action: 'auth.new_device', limit: 100 })
+      .some((row) => row.actor === 'carol' && row.detail.includes('ip=') && row.detail.includes('ua=smoke-new-device-agent/1.0')));
+
+    // 同 IP + 同 UA 二次登录:历史会话已出现过该组合 → 不再提醒
+    const ndj2 = new Jar();
+    r = await call(ndj2, '/login', { headers: { 'User-Agent': ND_UA } });
+    const ndForm2 = extractHidden(await r.text());
+    const nd2Before = countInLog('新设备登录提醒');
+    r = await call(ndj2, '/login', { method: 'POST', form: { username: 'carol', password: 'Carol#12345', _csrf: ndForm2._csrf }, headers: { 'User-Agent': ND_UA } });
+    await sleep(600);
+    ok('新设备:同 IP+UA 二次登录不再提醒', r.status === 302 && countInLog('新设备登录提醒') === nd2Before,
+      `count=${countInLog('新设备登录提醒')} before=${nd2Before}`);
+
+    // email 为空的用户(bob):直接跳过发送,登录不受影响
+    const bej = new Jar();
+    r = await call(bej, '/login', { headers: { 'User-Agent': NOEMAIL_UA } });
+    const beForm = extractHidden(await r.text());
+    const beBefore = countInLog('新设备登录提醒');
+    r = await call(bej, '/login', { method: 'POST', form: { username: 'bob', password: 'BobPassw0rd!', _csrf: beForm._csrf }, headers: { 'User-Agent': NOEMAIL_UA } });
+    await sleep(500);
+    const beSess = await (await call(bej, '/api/session')).json();
+    ok('新设备:email 为空用户不发送提醒且登录正常(无崩溃)', r.status === 302 && beSess.authenticated === true
+      && beSess.user?.username === 'bob' && countInLog('新设备登录提醒') === beBefore,
+      `mails=${countInLog('新设备登录提醒') - beBefore}`);
+
+    /* ---------- 应用授权用户 CSV 导出 ---------- */
+    const csvApp = clients.create({
+      name: 'CSV 导出演示', redirectUris: ['http://127.0.0.1:8080/csv-cb'],
+      scopes: 'openid profile', isPublic: true, pkceRequired: true,
+    });
+    consentsOps.grant(bob.id, csvApp.client_id, 'openid profile');
+    r = await call(aj, `/admin/apps/${csvApp.client_id}/consents.csv`);
+    ok('授权导出:响应头正确(text/csv + attachment 文件名 + no-store)', r.status === 200
+      && (r.headers.get('content-type') || '') === 'text/csv; charset=utf-8'
+      && /^attachment; filename="consents-\d{8}-\d{6}\.csv"$/.test(r.headers.get('content-disposition') || '')
+      && (r.headers.get('cache-control') || '') === 'no-store', `status=${r.status}`);
+    // fetch 的 text() 会剥除开头 BOM,用原始字节验证 BOM 真实存在
+    const consCsvRaw = Buffer.from(await (await fetch(BASE + `/admin/apps/${csvApp.client_id}/consents.csv`,
+      { headers: { Cookie: aj.header() } })).arrayBuffer());
+    ok('授权导出:BOM 开头且首行为中文表头', consCsvRaw[0] === 0xEF && consCsvRaw[1] === 0xBB && consCsvRaw[2] === 0xBF
+      && consCsvRaw.slice(3).toString('utf8').split('\n')[0] === '用户名,姓名,授权范围,授权时间');
+    const consCsvBody = await (await call(aj, `/admin/apps/${csvApp.client_id}/consents.csv`)).text();
+    ok('授权导出:数据行含用户名/姓名/授权范围与可读授权时间', consCsvBody.includes('bob,小明,openid profile,'), consCsvBody.slice(0, 200));
+
+    // csvCell 转义:公式前缀中和 + 逗号/引号字段包裹(CWE-1236)
+    const csvUser = users.create({ username: '+csvuser', passwordHash: hashPassword('Csv#12345'), name: '姓名,含"引号"' });
+    consentsOps.grant(csvUser.id, csvApp.client_id, 'openid');
+    const csvEsc = await (await call(aj, `/admin/apps/${csvApp.client_id}/consents.csv`)).text();
+    ok('授权导出:csvCell 转义生效(公式前缀中和、逗号/引号字段包裹)', csvEsc.includes("'") && csvEsc.includes("'+csvuser")
+      && csvEsc.includes('"姓名,含""引号"""'), csvEsc.slice(0, 300));
+
+    consentsOps.revoke(bob.id, csvApp.client_id);
+    consentsOps.revoke(csvUser.id, csvApp.client_id);
+    const csvEmpty = await (await call(aj, `/admin/apps/${csvApp.client_id}/consents.csv`)).text();
+    ok('授权导出:无授权时仅导出表头', csvEmpty.replace(/^\uFEFF/, '').trim() === '用户名,姓名,授权范围,授权时间');
+
+    r = await call(aj, '/admin/apps/nonexistent-app/consents.csv');
+    ok('授权导出:应用不存在重定向回应用列表', r.status === 302 && location(r).startsWith('/admin/apps?err='));
+    ok('授权导出:普通用户访问被拒(403)', (await call(fj, `/admin/apps/${csvApp.client_id}/consents.csv`)).status === 403);
+
+    // 清理导出演示夹具(应用删除级联清理授权行)
+    users.remove(csvUser.id);
+    clients.remove(csvApp.client_id);
+
+
 
     /* ---------- 配置向导增强:管理员重新运行向导(放在最后,尾部恢复 setup_done=1) ---------- */
     r = await call(aj, '/admin');

@@ -27,6 +27,10 @@ node server.js
 
 宝塔面板(PM2)部署见 `deploy/baotao.md`;环境变量完整清单见 `.env.example`。
 
+数据备份:`npm run backup` —— 一键备份到 `data/backups/sakuraid-backup-<时间戳>/`(idp.sqlite 用 VACUUM INTO 产生一致性快照 + uploads/ 整目录 + meta.txt,可选打包 .tar.gz),默认保留最近 14 份(`BACKUP_KEEP` 环境变量可调);可在服务运行中执行。
+
+数据恢复:`npm run restore -- <备份目录或 .tar.gz> --force` —— 恢复前请先停止服务;不加 `--force` 仅打印提示,恢复前脚本会自动把现有 data 目录改名为 `data-before-restore-<时间戳>/` 防误操作。
+
 ## 当前状态
 
 | 项 | 状态 |

@@ -126,6 +126,8 @@ export function registerRoutes() {
   r('GET', '/admin/apps/new', admin.newAppForm, { auth: 'admin' });
   r('POST', '/admin/apps/create', admin.createApp, { auth: 'admin' });
   r('GET', '/admin/apps/:id', admin.appDetail, { auth: 'admin' });
+  // 应用已授权用户 CSV 导出(BOM + csvCell 转义;与审计导出同模式)
+  r('GET', '/admin/apps/:id/consents.csv', admin.exportAppConsentsCsv, { auth: 'admin' });
   r('POST', '/admin/apps/:id/update', admin.updateApp, { auth: 'admin' });
   r('POST', '/admin/apps/:id/logo', admin.uploadAppLogo, { auth: 'admin' });
   r('POST', '/admin/apps/:id/logo/delete', admin.deleteAppLogo, { auth: 'admin' });

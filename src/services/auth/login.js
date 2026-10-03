@@ -3,7 +3,7 @@ import * as users from '../../models/users.js';
 import * as sessions from '../../models/sessions.js';
 import * as recovery from '../../models/recovery.js';
 import { hashPassword, verifyPassword } from '../../core/password.js';
-import { randomToken, timingSafeEqStr, nowSec } from '../../core/crypto.js';
+import { randomToken, sha256hex, timingSafeEqStr, nowSec } from '../../core/crypto.js';
 import { verifyTotp } from '../../core/totp.js';
 import { getSigningKey } from '../../core/keys.js';
 import { setCookie, clearCookie, redirect, sendHtml } from '../../core/http.js';
@@ -15,6 +15,8 @@ import { safeNext } from '../../core/util.js';
 import { loginPage, twofaPage } from '../../views/auth.js';
 import { errorPage } from '../../views/error.js';
 import { record } from '../audit.js';
+import { sendMail } from '../../core/smtp.js';
+import { fmtTime } from '../../core/util.js';
 
 /* 登录失败限流:同 IP+用户名 5 次失败锁定 60 秒;另设 IP 级总失败上限(防同 IP 换用户名绕过) */
 const MAX_FAILS = 5, LOCK_SEC = 60, MAX_ATTEMPT_KEYS = 5000;
@@ -195,6 +197,41 @@ export function sessionMeta(ctx) {
   };
 }
 
+/**
+ * 新设备登录提醒:历史会话中未出现过相同 IP + User-Agent 时视为新设备,
+ * 向用户邮箱 fire-and-forget 发送提醒(未配置邮箱则跳过;发信失败只记日志,不影响登录)。
+ * 独立函数 + startSession 末尾单行调用,便于并行改动共存;sid 用于排除本次刚建的会话。
+ */
+async function checkNewDevice(res, user, meta, sid) {
+  try {
+    const ip = String(meta.ip || '');
+    const ua = String(meta.ua || '');
+    if (!user.email) return; // 无邮箱无法通知,直接跳过
+    const idHash = sha256hex(sid); // 本次登录刚建的会话不算历史
+    const known = sessions.listForUser(user.id)
+      .some((s) => s.id_hash !== idHash && s.ip === ip && s.user_agent === ua);
+    if (known) return;
+    await sendMail({
+      to: user.email,
+      subject: '新设备登录提醒',
+      text: [
+        `您的账号 ${user.username} 刚刚在一台新设备上登录。`,
+        '',
+        `站点:${getRuntime().siteName}`,
+        `用户名:${user.username}`,
+        `时间:${fmtTime(nowSec())}`,
+        `IP:${ip || '(未知)'}`,
+        `设备:${ua || '(未知)'}`,
+        '',
+        '如非本人操作,请立即登录并修改密码,必要时联系管理员。',
+      ].join('\n'),
+    });
+    record({ req: res.req, user }, 'auth.new_device', `ip=${ip} ua=${ua.slice(0, 120)}`, { actor: user.username });
+  } catch (err) {
+    logger.warn('新设备登录提醒发送失败(不影响登录)', { username: user.username, error: err?.message });
+  }
+}
+
 /** 建立会话并写入 sid cookie(清除 csrf cookie);供 web 登录与 JSON API 共用,返回明文 sid。
  *  meta 可选 {ip, ua},用于会话管理页展示登录设备信息。 */
 export function startSession(res, user, secureCookies, meta = {}) {
@@ -206,6 +243,7 @@ export function startSession(res, user, secureCookies, meta = {}) {
   // 登录成功审计:web 表单、/api 登录与 Microsoft 登录都经此处,统一留痕一次
   record({ req: res.req, user }, 'auth.login', user.username, { actor: user.username });
   logger.info('登录成功', { username: user.username });
+  checkNewDevice(res, user, meta, sid).catch(() => {}); // 新设备登录提醒(fire-and-forget,失败不影响登录)
   return sid;
 }
 

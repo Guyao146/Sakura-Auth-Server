@@ -11,6 +11,8 @@
     "start": "node server.js",
     "smoke": "node scripts/smoke.mjs",
     "seed-demo": "node scripts/seed-demo.mjs",
-    "reset-admin": "node scripts/reset-admin-password.mjs"
+    "reset-admin": "node scripts/reset-admin-password.mjs",
+    "backup": "node scripts/backup.mjs",
+    "restore": "node scripts/restore.mjs"
   }
 }
