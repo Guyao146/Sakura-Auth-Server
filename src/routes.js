@@ -18,7 +18,7 @@ import * as portal from './services/portal.js';
 import * as api from './services/api.js';
 import * as webauthn from './services/webauthn.js';
 import { showLanding } from './services/home.js';
-import { setTheme } from './views/theme.js';
+import { setTheme, setLang } from './views/theme.js';
 import { showHealth } from './views/health.js';
 
 /** 路由表:URL → 服务函数;opts.cors 开放跨域,opts.auth 做会话/管理员校验 */
@@ -32,6 +32,8 @@ export function registerRoutes() {
   r('GET', '/favicon.ico', (ctx) => { ctx.res.writeHead(204); ctx.res.end(); });
   r('GET', '/', showLanding);
   r('GET', '/-/theme/:mode', setTheme);
+  // 界面语言切换(zh / en):写 lang cookie + 重定向回来源页,与主题切换同模式
+  r('GET', '/-/lang/:code', setLang);
 
   // JSON API 套件:处理器内部自行判定登录态(未登录返回 JSON 错误,不重定向)
   r('GET', '/api/heartbeat', api.heartbeat, { cors: true });

@@ -18,8 +18,9 @@ import { sha256hex, nowSec } from './src/core/crypto.js';
 import { registerRoutes } from './src/routes.js';
 import { setupGate } from './src/services/setup/wizard.js';
 import { forbidden } from './src/services/auth/login.js';
-import { themeFromCookies } from './src/views/theme.js';
+import { themeFromCookies, langFromCookies } from './src/views/theme.js';
 import { errorPage } from './src/views/error.js';
+import { runWithLang, t } from './src/core/i18n.js';
 import { ensureUploadsDir } from './src/core/upload.js';
 
 initDb();
@@ -63,7 +64,7 @@ const useTls = !!(config.tls.cert && config.tls.key);
 const serverOptions = useTls
   ? { cert: fs.readFileSync(config.tls.cert), key: fs.readFileSync(config.tls.key) }
   : {};
-const server = (useTls ? https : http).createServer(serverOptions, async (req, res) => {
+const handleRequest = async (req, res) => {
   const started = Date.now();
   if (useTls) res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   let method = req.method.toUpperCase();
@@ -93,7 +94,11 @@ const server = (useTls ? https : http).createServer(serverOptions, async (req, r
     const m = matchRoute(router, method, url.pathname);
     if (!m) {
       if (wantsJson(url)) return sendJson(res, 404, { error: 'not_found' });
-      return sendHtml(res, 404, errorPage({ theme, siteName: rt.siteName, title: '页面不存在', message: '请求的地址不存在或已被移动。' }));
+      const lang = langFromCookies(cookies);
+      return sendHtml(res, 404, errorPage({
+        theme, siteName: rt.siteName, lang,
+        title: t(lang, 'err.notFoundTitle'), message: t(lang, 'err.notFoundMsg'),
+      }));
     }
 
     if (m.route.opts.cors) applyCors(res);
@@ -128,13 +133,14 @@ const server = (useTls ? https : http).createServer(serverOptions, async (req, r
     if (!res.headersSent) {
       const status = err.status || 500;
       const theme = themeFromCookies(parseCookies(req.headers.cookie));
+      const lang = langFromCookies(parseCookies(req.headers.cookie));
       if (wantsJson(url || new URL(req.url, 'http://internal'))) {
         sendJson(res, status, { error: 'server_error' });
       } else {
         sendHtml(res, status, errorPage({
-          theme, siteName: getRuntime().siteName,
-          title: status === 413 ? '请求体过大' : '服务错误',
-          message: status === 413 ? '提交的内容超过大小限制。' : '处理请求时出现异常,请稍后重试。',
+          theme, siteName: getRuntime().siteName, lang,
+          title: t(lang, status === 413 ? 'err.tooLargeTitle' : 'err.serverTitle'),
+          message: t(lang, status === 413 ? 'err.tooLargeMsg' : 'err.serverMsg'),
         }));
       }
     } else {
@@ -143,7 +149,12 @@ const server = (useTls ? https : http).createServer(serverOptions, async (req, r
   } finally {
     logger.request(method, url ? url.pathname : req.url, res.statusCode, Date.now() - started);
   }
-});
+};
+
+// 语言上下文:请求入口按 lang cookie 固定到整个请求生命周期(AsyncLocalStorage,zh 默认),
+// 视图函数经 currentLang() 读取,服务层无需逐层透传;保证默认语言下既有文案零回归。
+const server = (useTls ? https : http).createServer(serverOptions, (req, res) =>
+  runWithLang(langFromCookies(parseCookies(req.headers.cookie)), () => handleRequest(req, res)));
 
 setInterval(() => {
   try { purgeExpired(); } catch (e) { logger.error('过期数据清理失败', { err: String(e) }); }

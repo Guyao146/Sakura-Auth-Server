@@ -1,4 +1,5 @@
 import { escapeHtml as esc, fmtTime } from '../core/util.js';
+import { t, fmt, normalizeLang, currentLang } from '../core/i18n.js';
 import { authPage, adminPage, brandPage } from './layout.js';
 import { banner, badge, hiddenInputs, kvRow, scopeItems, scopeIcon, SCOPE_NAMES } from './components.js';
 import { getRuntime } from '../core/runtime.js';
@@ -7,70 +8,80 @@ import * as webauthnModel from '../models/webauthn.js';
 /* 登录页品牌面板的特性条目:线性小图标随 currentColor,零外部资源 */
 const featIcon = (paths) =>
   `<svg viewBox="0 0 16 16" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
-const LOGIN_FEATURES = [
+const loginFeatures = (lang) => [
   {
     icon: featIcon('<path d="M6.6 2.6h5.2c.7 0 1.2.5 1.2 1.2v8.4c0 .7-.5 1.2-1.2 1.2H6.6"/><path d="M2 8h7.2M6.8 5.6 9.2 8l-2.4 2.4"/>'),
-    title: '统一登录', desc: '一套账号通行所有接入的业务系统',
+    title: t(lang, 'login.featSsoTitle'), desc: t(lang, 'login.featSsoDesc'),
   },
   {
     icon: featIcon('<path d="M8 1.9 13.3 3.7v3.5c0 3.3-2.2 5.8-5.3 6.9-3.1-1.1-5.3-3.6-5.3-6.9V3.7z"/><path d="M5.8 7.9l1.6 1.6 2.9-3.1"/>'),
-    title: '两步验证', desc: '验证器动态码为密码再加一道锁',
+    title: t(lang, 'login.feat2faTitle'), desc: t(lang, 'login.feat2faDesc'),
   },
   {
     icon: featIcon('<circle cx="5.6" cy="5.8" r="2.4"/><circle cx="11.3" cy="6.5" r="1.9"/><path d="M2.2 13.4c.5-2.4 2.3-3.6 4.4-3.6M9.3 13.4c.3-1.8 1.7-2.8 3.3-2.8"/>'),
-    title: '权限组管控', desc: '按权限组精细分配应用访问范围',
+    title: t(lang, 'login.featGroupTitle'), desc: t(lang, 'login.featGroupDesc'),
   },
 ];
+
+/**
+ * 服务层透传的提示文案(中文)→ 词典键映射:仅覆盖高流量登录链路提示,
+ * 未命中映射的原样展示(英文模式下回退中文,符合覆盖策略)。zh 词典值与源串一字不差。
+ */
+const PASS_THROUGH_KEYS = {
+  '用户名或密码不正确。': 'login.err.badCredentials',
+  '失败次数过多,请 1 分钟后再试。': 'login.err.tooMany',
+  '页面已过期,请重新提交。': 'err.staleForm',
+  '已退出登录': 'login.msg.loggedOut',
+  '验证码不正确,请重试。': 'twofa.err.badCode',
+};
+const trPassed = (s, lang) => (s && PASS_THROUGH_KEYS[s] ? t(lang, PASS_THROUGH_KEYS[s]) : s);
 
 /** 微软四色方块标(16px,品牌固定色) */
 const MS_LOGO = `<svg width="16" height="16" viewBox="0 0 23 23" aria-hidden="true" style="flex:none"><rect width="11" height="11" fill="#f25022"/><rect x="12" width="11" height="11" fill="#7fba00"/><rect y="12" width="11" height="11" fill="#00a4ef"/><rect x="12" y="12" width="11" height="11" fill="#ffb900"/></svg>`;
 
 /** 登录页(品牌化分栏:左侧品牌渐变面板 + 右侧登录表单;窄屏仅表单)。
  *  msEnabled 缺省时回退读运行时配置(启用后表单下方出现 Microsoft 登录入口)。 */
-export function loginPage({ theme, siteName, csrf, next, err, username = '', allowRegister = false, msg = '', msEnabled, showPasskey = true }) {
+export function loginPage({ theme, siteName, csrf, next, err, username = '', allowRegister = false, msg = '', msEnabled, showPasskey = true, lang }) {
+  const L = normalizeLang(lang || currentLang());
   const rt = getRuntime();
   const showMs = msEnabled !== undefined ? !!msEnabled : !!(rt && rt.msOAuth && rt.msOAuth.enabled);
+  const divider = `
+      <div style="display:flex;align-items:center;gap:var(--s3);margin:var(--s4) 0 0">
+        <span style="flex:1;border-top:1px solid var(--border)"></span>
+        <span class="muted small">${esc(t(L, 'login.or'))}</span>
+        <span style="flex:1;border-top:1px solid var(--border)"></span>
+      </div>`;
   return brandPage({
-    theme, siteName, title: `登录 · ${siteName}`,
-    tagline: '这一站,管好你所有系统的登录。',
-    features: LOGIN_FEATURES,
+    theme, siteName, lang: L, title: `${t(L, 'page.login')} · ${siteName}`,
+    tagline: t(L, 'login.tagline'),
+    features: loginFeatures(L),
     scripts: showPasskey ? ['/assets/webauthn.js'] : [],
     content: `
-      ${banner(err ? esc(err) : '', 'err')}
-      ${banner(msg ? esc(msg) : '', 'ok')}
-      <h2 class="login-form-title">欢迎回来</h2>
-      <p class="login-form-sub muted small">登录 ${esc(siteName)} 账号,继续访问你的应用。</p>
+      ${banner(err ? esc(trPassed(err, L)) : '', 'err')}
+      ${banner(msg ? esc(trPassed(msg, L)) : '', 'ok')}
+      <h2 class="login-form-title">${esc(t(L, 'login.welcome'))}</h2>
+      <p class="login-form-sub muted small">${fmt(t(L, 'login.sub'), { site: esc(siteName) })}</p>
       <form method="post" action="/login">
         ${hiddenInputs({ _csrf: csrf, next: next || '' })}
-        <label for="username">用户名</label>
+        <label for="username">${esc(t(L, 'login.username'))}</label>
         <input type="text" id="username" name="username" value="${esc(username)}" required autofocus autocomplete="username">
-        <label for="password">密码</label>
+        <label for="password">${esc(t(L, 'login.password'))}</label>
         <input type="password" id="password" name="password" required autocomplete="current-password">
         <div class="actions">
-          <button class="btn btn-primary" type="submit">登 录</button>
+          <button class="btn btn-primary" type="submit">${esc(t(L, 'login.submit'))}</button>
         </div>
       </form>
-      ${showMs ? `
-      <div style="display:flex;align-items:center;gap:var(--s3);margin:var(--s4) 0 0">
-        <span style="flex:1;border-top:1px solid var(--border)"></span>
-        <span class="muted small">或</span>
-        <span style="flex:1;border-top:1px solid var(--border)"></span>
-      </div>
+      ${showMs ? `${divider}
       <div class="actions" style="margin-top:var(--s3)">
-        <a class="btn" href="/auth/microsoft" style="flex:1;justify-content:center;padding:var(--s3) var(--s4);font-size:15px">${MS_LOGO}使用 Microsoft 账号登录</a>
+        <a class="btn" href="/auth/microsoft" style="flex:1;justify-content:center;padding:var(--s3) var(--s4);font-size:15px">${MS_LOGO}${esc(t(L, 'login.ms'))}</a>
       </div>` : ''}
-      ${showPasskey ? `
-      <div style="display:flex;align-items:center;gap:var(--s3);margin:var(--s4) 0 0">
-        <span style="flex:1;border-top:1px solid var(--border)"></span>
-        <span class="muted small">或</span>
-        <span style="flex:1;border-top:1px solid var(--border)"></span>
-      </div>
+      ${showPasskey ? `${divider}
       <div class="actions" style="margin-top:var(--s3)">
-        <button class="btn" type="button" id="passkey-login-btn" style="flex:1;justify-content:center;padding:var(--s3) var(--s4);font-size:15px">使用 Passkey 登录</button>
+        <button class="btn" type="button" id="passkey-login-btn" style="flex:1;justify-content:center;padding:var(--s3) var(--s4);font-size:15px">${esc(t(L, 'login.passkey'))}</button>
       </div>
       <p class="muted small" id="passkey-status" role="status" style="margin:var(--s2) 0 0;min-height:1.4em"></p>` : ''}
-      <p class="muted small" style="margin:var(--s3) 0 0"><a href="/forgot-password">忘记密码?</a></p>
-      ${allowRegister ? `<p class="muted small" style="text-align:center;margin:var(--s4) 0 0">还没有账号?<a href="/register${next ? `?next=${encodeURIComponent(next)}` : ''}">注册新账号</a></p>` : ''}`,
+      <p class="muted small" style="margin:var(--s3) 0 0"><a href="/forgot-password">${esc(t(L, 'login.forgot'))}</a></p>
+      ${allowRegister ? `<p class="muted small" style="text-align:center;margin:var(--s4) 0 0">${esc(t(L, 'login.noAccount'))}<a href="/register${next ? `?next=${encodeURIComponent(next)}` : ''}">${esc(t(L, 'login.register'))}</a></p>` : ''}`,
   });
 }
 
@@ -103,20 +114,25 @@ export function registerPage({ theme, siteName, csrf, err, values = {}, next = '
 }
 
 /** 二步验证页(第二因子) */
-export function twofaPage({ theme, siteName, csrf, pending, next, username, err }) {  return authPage({
-    theme, siteName, title: `两步验证 · ${siteName}`,
+export function twofaPage({ theme, siteName, csrf, pending, next, username, err, lang }) {
+  const L = normalizeLang(lang || currentLang());
+  const intro = L === 'en'
+    ? `Account <b style="color:var(--text)">${esc(username)}</b> has two-factor authentication enabled. Enter the 6-digit code from your authenticator app, or a recovery code.`
+    : `账号 <b style="color:var(--text)">${esc(username)}</b> 已开启两步验证。请输入验证器 App 中的 6 位验证码;没有 App 时可填写恢复代码。`;
+  return authPage({
+    theme, siteName, lang: L, title: `两步验证 · ${siteName}`,
     content: `
-      ${banner(err ? esc(err) : '', 'err')}
-      <h3 style="margin-top:0">两步验证</h3>
-      <p class="muted small">账号 <b style="color:var(--text)">${esc(username)}</b> 已开启两步验证。请输入验证器 App 中的 6 位验证码;没有 App 时可填写恢复代码。</p>
+      ${banner(err ? esc(trPassed(err, L)) : '', 'err')}
+      <h3 style="margin-top:0">${esc(t(L, 'twofa.title'))}</h3>
+      <p class="muted small">${intro}</p>
       <form method="post" action="/login/2fa">
         ${hiddenInputs({ _csrf: csrf, pending, next: next || '' })}
-        <label for="code">验证码 / 恢复代码</label>
+        <label for="code">${esc(t(L, 'twofa.codeOrRecovery'))}</label>
         <input type="text" id="code" name="code" required autofocus autocomplete="one-time-code"
           placeholder="123456 或 abcd-1234" inputmode="numeric">
         <div class="actions">
-          <button class="btn btn-primary" type="submit">验 证</button>
-          <a class="btn" href="/login">返回重新登录</a>
+          <button class="btn btn-primary" type="submit">${esc(t(L, 'twofa.verify'))}</button>
+          <a class="btn" href="/login">${esc(t(L, 'twofa.backToLogin'))}</a>
         </div>
       </form>`,
   });
@@ -176,7 +192,8 @@ export function resetDonePage({ theme, siteName }) {
 }
 
 /** 同意授权页(品牌化分栏,与登录页同一骨架):应用徽标 + 身份标识 + 图标化权限清单 + 跳转目标提示 */
-export function consentPage({ theme, siteName, user, client, scopeList: scopes, csrf, replay, remember }) {
+export function consentPage({ theme, siteName, user, client, scopeList: scopes, csrf, replay, remember, lang }) {
+  const L = normalizeLang(lang || currentLang());
   const items = scopeItems(scopes);
   let target = String(replay.redirect_uri || '');
   try { target = new URL(replay.redirect_uri).host || target; } catch { /* 自定义 scheme 原样展示 */ }
@@ -189,10 +206,13 @@ export function consentPage({ theme, siteName, user, client, scopeList: scopes, 
   const backParams = new URLSearchParams();
   for (const [k, v] of Object.entries(replay)) if (v) backParams.set(k, String(v));
   const back = '/authorize' + (backParams.toString() ? `?${backParams}` : '');
+  const identityLine = L === 'en'
+    ? `<span>Continue as <b style="color:var(--text)">${esc(user.name || user.username)}</b> (<span>${esc(user.username)}</span>)</span>`
+    : `<span>以 <b style="color:var(--text)">${esc(user.name || user.username)}</b>(<span>${esc(user.username)}</span>)的身份继续</span>`;
   return brandPage({
-    theme, siteName, title: `授权 · ${siteName}`,
-    tagline: '确认授权,一键进入应用。',
-    features: LOGIN_FEATURES,
+    theme, siteName, lang: L, title: `${t(L, 'page.consent')} · ${siteName}`,
+    tagline: t(L, 'consent.tagline'),
+    features: loginFeatures(L),
     wide: true, cur: back,
     content: `
       <div class="app-row">
@@ -203,25 +223,25 @@ export function consentPage({ theme, siteName, user, client, scopeList: scopes, 
           <div class="muted small" style="word-break:break-all">${esc(client.client_id)}</div>
         </div>
       </div>
-      <h2 class="login-form-title">请求访问你的账号</h2>
-      <p class="login-form-sub muted small" style="margin-bottom:var(--s4)">验证你的身份后,${esc(siteName)} 才会向应用披露下面所请求的信息。</p>
+      <h2 class="login-form-title">${esc(t(L, 'consent.title'))}</h2>
+      <p class="login-form-sub muted small" style="margin-bottom:var(--s4)">${fmt(t(L, 'consent.sub'), { site: esc(siteName) })}</p>
       <div class="identity">
         <span class="avatar">${esc(userInitial)}</span>
-        <span>以 <b style="color:var(--text)">${esc(user.name || user.username)}</b>(<span>${esc(user.username)}</span>)的身份继续</span>
+        ${identityLine}
       </div>
       <div class="card tight" style="margin-bottom:var(--s4)">
         ${items.map((it) => `<div class="scope-item">
           <span class="scope-ico">${scopeIcon(it.id)}</span>
-          <span style="min-width:0"><b>${esc(SCOPE_NAMES[it.id] || it.id)}</b><span class="desc">${esc(it.desc)}</span></span>
+          <span style="min-width:0"><b>${esc(t(L, `scope.name.${it.id}`, SCOPE_NAMES[it.id] || it.id))}</b><span class="desc">${esc(t(L, `scope.desc.${it.id}`, it.desc))}</span></span>
         </div>`).join('\n')}
       </div>
       <form method="post" action="/authorize">
         ${hiddenInputs({ ...replay, _csrf: csrf, decision: 'approve' })}
-        ${remember ? `<label class="checkline"><input type="checkbox" name="remember" value="on" checked><span>记住此应用的授权,下次不再询问<span class="muted">可在管理员撤销后重新确认</span></span></label>` : ''}
-        <p class="muted small" style="margin:var(--s2) 0 0">同意后将跳转至 <code>${esc(target)}</code> 完成登录;拒绝则不产生任何授权。</p>
+        ${remember ? `<label class="checkline"><input type="checkbox" name="remember" value="on" checked><span>${esc(t(L, 'consent.remember'))}<span class="muted">${esc(t(L, 'consent.rememberHint'))}</span></span></label>` : ''}
+        <p class="muted small" style="margin:var(--s2) 0 0">${fmt(t(L, 'consent.redirectHint'), { target: `<code>${esc(target)}</code>` })}</p>
         <div class="consent-actions">
-          <button class="btn btn-ghost" type="submit" name="decision" value="deny">拒 绝</button>
-          <button class="btn btn-primary" type="submit" name="decision" value="approve">同意并继续</button>
+          <button class="btn btn-ghost" type="submit" name="decision" value="deny">${esc(t(L, 'consent.deny'))}</button>
+          <button class="btn btn-primary" type="submit" name="decision" value="approve">${esc(t(L, 'consent.approve'))}</button>
         </div>
       </form>`,
   });
@@ -244,17 +264,18 @@ export function accessDeniedPage({ theme, siteName, clientName, requiredGroups =
 }
 
 /** 退出确认页(GET /logout) */
-export function logoutPage({ theme, siteName, csrf }) {
+export function logoutPage({ theme, siteName, csrf, lang }) {
+  const L = normalizeLang(lang || currentLang());
   return authPage({
-    theme, siteName, title: `退出登录 · ${siteName}`, footer: false,
+    theme, siteName, lang: L, title: `退出登录 · ${siteName}`, footer: false,
     content: `
-      <h3 style="margin-top:0">确认退出登录?</h3>
-      <p class="muted small">退出后,需要重新输入用户名和密码才能再次登录。</p>
+      <h3 style="margin-top:0">${esc(t(L, 'logout.title'))}</h3>
+      <p class="muted small">${esc(t(L, 'logout.hint'))}</p>
       <form method="post" action="/logout">
         ${hiddenInputs({ _csrf: csrf })}
         <div class="actions">
-          <button class="btn btn-primary" type="submit">确认退出</button>
-          <a class="btn" href="/">取消</a>
+          <button class="btn btn-primary" type="submit">${esc(t(L, 'logout.confirm'))}</button>
+          <a class="btn" href="/">${esc(t(L, 'logout.cancel'))}</a>
         </div>
       </form>`,
   });
@@ -305,120 +326,121 @@ export function msLinkPage({ theme, siteName, csrf, linkToken, msEmail, allowReg
  * 账号设置页(密码 + 两步验证管理),并入控制台侧栏布局。
  * twoFa: { enabled, pendingSecret, otpauth, secret, recoveryCodes }
  */
-export function accountPage({ theme, siteName, user, csrf, msg, err, twoFa, cur = '/' }) {
+export function accountPage({ theme, siteName, user, csrf, msg, err, twoFa, cur = '/', lang }) {
+  const L = normalizeLang(lang || currentLang());
   let twofaBlock;
   if (twoFa.recoveryCodes) {
     twofaBlock = `
-      <h3>两步验证已开启</h3>
-      <div class="banner warn">请立即保存恢复代码,每个只能使用一次,且不会再显示:</div>
+      <h3>${esc(t(L, 'twofa.enabledTitle'))}</h3>
+      <div class="banner warn">${esc(t(L, 'twofa.saveCodes'))}</div>
       <pre class="block">${twoFa.recoveryCodes.join('\n')}</pre>
       <form method="post" action="/account/2fa/disable">
         ${hiddenInputs({ _csrf: csrf })}
-        <label>关闭两步验证(需输入当前密码)</label>
+        <label>${esc(t(L, 'twofa.disableLabel'))}</label>
         <input type="password" name="password" required autocomplete="current-password">
-        <div class="actions"><button class="btn btn-danger" type="submit">关闭两步验证</button></div>
+        <div class="actions"><button class="btn btn-danger" type="submit">${esc(t(L, 'twofa.disable'))}</button></div>
       </form>`;
   } else if (twoFa.enabled) {
     twofaBlock = `
-      <h3>两步验证</h3>
-      <p class="small">${banner('两步验证已开启。登录时需要输入验证器 App 的 6 位验证码。', 'ok')}</p>
-      <p class="muted small">剩余可用恢复代码:${twoFa.recoveryLeft} 枚。</p>
+      <h3>${esc(t(L, 'twofa.title'))}</h3>
+      <p class="small">${banner(esc(t(L, 'twofa.enabledBanner')), 'ok')}</p>
+      <p class="muted small">${esc(fmt(t(L, 'twofa.recoveryLeft'), { n: twoFa.recoveryLeft }))}</p>
       <form method="post" action="/account/2fa/disable">
         ${hiddenInputs({ _csrf: csrf })}
-        <label>关闭两步验证(需输入当前密码)</label>
+        <label>${esc(t(L, 'twofa.disableLabel'))}</label>
         <input type="password" name="password" required autocomplete="current-password">
-        <div class="actions"><button class="btn btn-danger" type="submit">关闭两步验证</button></div>
+        <div class="actions"><button class="btn btn-danger" type="submit">${esc(t(L, 'twofa.disable'))}</button></div>
       </form>`;
   } else if (twoFa.pendingSecret) {
     const scanStep = twoFa.qr
-      ? `<p class="small" style="margin-bottom:var(--s2)">1. 用验证器 App(Google Authenticator、1Password 等)扫描下方二维码:</p>
+      ? `<p class="small" style="margin-bottom:var(--s2)">${esc(t(L, 'twofa.scanQr'))}</p>
       <div style="margin:0 0 var(--s3)">${twoFa.qr}</div>
-      <p class="small" style="margin-bottom:var(--s1)">2. 无法扫码时手动添加以下密钥:</p>`
-      : `<p class="small" style="margin-bottom:var(--s1)">1. 在验证器 App(Google Authenticator、1Password 等)中手动添加以下密钥:</p>`;
+      <p class="small" style="margin-bottom:var(--s1)">${esc(t(L, 'twofa.manualKey'))}</p>`
+      : `<p class="small" style="margin-bottom:var(--s1)">${esc(t(L, 'twofa.scanStep1'))}</p>`;
     twofaBlock = `
-      <h3>开启两步验证</h3>
+      <h3>${esc(t(L, 'twofa.setupTitle'))}</h3>
       ${scanStep}
-      <div class="kv"><b>密钥</b><span>${esc(twoFa.pendingSecret)}</span></div>
-      <p class="muted small" style="word-break:break-all">${twoFa.qr ? 3 : 2}. 或复制此地址到 App: <code>${esc(twoFa.otpauth)}</code></p>
+      <div class="kv"><b>${esc(t(L, 'twofa.secret'))}</b><span>${esc(twoFa.pendingSecret)}</span></div>
+      <p class="muted small" style="word-break:break-all">${fmt(t(L, 'twofa.copyUrl'), { n: twoFa.qr ? 3 : 2 })}<code>${esc(twoFa.otpauth)}</code></p>
       <form method="post" action="/account/2fa/confirm">
         ${hiddenInputs({ _csrf: csrf })}
-        <label>输入 App 显示的 6 位验证码完成开启</label>
+        <label>${esc(t(L, 'twofa.codeLabel'))}</label>
         <input type="text" name="code" required inputmode="numeric" autocomplete="one-time-code" placeholder="123456">
         <div class="actions">
-          <button class="btn btn-primary" type="submit">确认开启</button>
+          <button class="btn btn-primary" type="submit">${esc(t(L, 'twofa.confirm'))}</button>
         </div>
       </form>`;
   } else {
     twofaBlock = `
-      <h3>两步验证</h3>
-      <p class="muted small">开启后,登录除了密码还需验证器 App 的动态码,可大幅降低密码泄露的影响。</p>
+      <h3>${esc(t(L, 'twofa.title'))}</h3>
+      <p class="muted small">${esc(t(L, 'twofa.intro'))}</p>
       <form method="post" action="/account/2fa/start">
         ${hiddenInputs({ _csrf: csrf })}
-        <label>输入当前密码开始设置</label>
+        <label>${esc(t(L, 'twofa.startLabel'))}</label>
         <input type="password" name="password" required autocomplete="current-password">
-        <div class="actions"><button class="btn btn-primary" type="submit">开始设置两步验证</button></div>
+        <div class="actions"><button class="btn btn-primary" type="submit">${esc(t(L, 'twofa.start'))}</button></div>
       </form>`;
   }
   // Microsoft 账号绑定区块:绑定状态直接读 users 行的 ms_sub / ms_email 列
   const msBound = !!user.ms_sub;
   const msBlock = `
     <hr>
-    <h3>Microsoft 账号</h3>
+    <h3>${esc(t(L, 'ms.title'))}</h3>
     ${msBound
-      ? `<div class="kv"><b>绑定邮箱</b><span>${esc(user.ms_email || '-')}</span></div>
+      ? `<div class="kv"><b>${esc(t(L, 'ms.boundEmail'))}</b><span>${esc(user.ms_email || '-')}</span></div>
       <form method="post" action="/auth/microsoft/unbind">
         ${hiddenInputs({ _csrf: csrf })}
-        <p class="muted small">解绑后将无法继续使用该 Microsoft 账号登录本站。</p>
-        <div class="actions"><button class="btn btn-danger" type="submit">解绑 Microsoft 账号</button></div>
+        <p class="muted small">${esc(t(L, 'ms.unbindHint'))}</p>
+        <div class="actions"><button class="btn btn-danger" type="submit">${esc(t(L, 'ms.unbind'))}</button></div>
       </form>`
-      : `<p class="muted small">绑定后,可以使用 Microsoft 账号一键登录,无需再输入本站密码。</p>
-      <div class="actions"><a class="btn" href="/auth/microsoft?bind=1">绑定 Microsoft 账号</a></div>`}`;
+      : `<p class="muted small">${esc(t(L, 'ms.bindHint'))}</p>
+      <div class="actions"><a class="btn" href="/auth/microsoft?bind=1">${esc(t(L, 'ms.bind'))}</a></div>`}`;
   // Passkey 管理区块:凭据列表服务端渲染,删除为普通表单(零 JS 也可用);注册/登录交互由 webauthn.js 承接
   const passkeyRows = webauthnModel.listForUser(user.id).map((c) => `
       <div class="app-item">
         <div style="min-width:0;flex:1">
           <b style="color:var(--text);font-size:15px">${esc(c.name)}</b>
-          <div class="muted small">注册于 ${fmtTime(c.created_at)}</div>
+          <div class="muted small">${esc(fmt(t(L, 'pk.registeredAt'), { time: fmtTime(c.created_at) }))}</div>
         </div>
         <form method="post" action="/account/webauthn/${encodeURIComponent(c.id)}/delete" style="margin:0">
           ${hiddenInputs({ _csrf: csrf })}
-          <button class="btn btn-danger btn-sm" type="submit" data-cred-id="${esc(c.id)}">删除</button>
+          <button class="btn btn-danger btn-sm" type="submit" data-cred-id="${esc(c.id)}">${esc(t(L, 'common.delete'))}</button>
         </form>
       </div>`).join('\n');
   const passkeyBlock = `
     <hr>
-    <h3>Passkey(无密码登录)</h3>
-    <p class="muted small">注册 Passkey 后,可用指纹 / 面容 / 设备 PIN 一键登录,无需输入密码。每个账号最多 ${webauthnModel.MAX_PER_USER} 个。</p>
+    <h3>${esc(t(L, 'pk.title'))}</h3>
+    <p class="muted small">${esc(fmt(t(L, 'pk.intro'), { n: webauthnModel.MAX_PER_USER }))}</p>
     <div class="card tight" id="passkey-list" style="margin-bottom:var(--s3)">
-      ${passkeyRows || '<p class="muted" style="margin:0">尚未注册任何 Passkey。</p>'}
+      ${passkeyRows || `<p class="muted" style="margin:0">${esc(t(L, 'pk.empty'))}</p>`}
     </div>
-    <label for="passkey-name">备注名称(可选)</label>
-    <input type="text" id="passkey-name" maxlength="40" placeholder="如:我的 MacBook" autocomplete="off">
-    <div class="actions"><button class="btn btn-primary" type="button" id="passkey-register-btn">注册 Passkey</button></div>
+    <label for="passkey-name">${esc(t(L, 'pk.nameLabel'))}</label>
+    <input type="text" id="passkey-name" maxlength="40" placeholder="${esc(t(L, 'pk.namePlaceholder'))}" autocomplete="off">
+    <div class="actions"><button class="btn btn-primary" type="button" id="passkey-register-btn">${esc(t(L, 'pk.register'))}</button></div>
     <p class="muted small" id="passkey-status" role="status" style="margin:var(--s2) 0 0;min-height:1.4em"></p>`;
   return adminPage({
-    theme, siteName, user, active: 'account', cur,
+    theme, siteName, user, active: 'account', cur, lang: L,
     title: `账号设置 · ${siteName}`,
     scripts: ['/assets/webauthn.js'],
     content: `
       ${banner(msg ? esc(msg) : '', 'ok')}
       ${banner(err ? esc(err) : '', 'err')}
-      <h3 style="margin-top:0">账号信息</h3>
-      <div class="kv"><b>用户名</b><span>${esc(user.username)}</span></div>
-      <div class="kv"><b>姓名</b><span>${esc(user.name || '-')}</span></div>
-      <div class="kv"><b>邮箱</b><span>${esc(user.email || '-')}</span></div>
-      <div class="kv"><b>我的授权</b><span><a href="/account/apps">查看与管理已授权的应用 →</a></span></div>
-      <div class="kv"><b>登录会话</b><span><a href="/account/sessions">查看与管理已登录的设备 →</a></span></div>
-      <h3>修改密码</h3>
+      <h3 style="margin-top:0">${esc(t(L, 'account.info'))}</h3>
+      <div class="kv"><b>${esc(t(L, 'account.username'))}</b><span>${esc(user.username)}</span></div>
+      <div class="kv"><b>${esc(t(L, 'account.name'))}</b><span>${esc(user.name || '-')}</span></div>
+      <div class="kv"><b>${esc(t(L, 'account.email'))}</b><span>${esc(user.email || '-')}</span></div>
+      <div class="kv"><b>${esc(t(L, 'nav.authz'))}</b><span><a href="/account/apps">${esc(t(L, 'account.linkAuthzMgmt'))}</a></span></div>
+      <div class="kv"><b>${esc(t(L, 'sess.title'))}</b><span><a href="/account/sessions">${esc(t(L, 'account.linkSessionsMgmt'))}</a></span></div>
+      <h3>${esc(t(L, 'account.changePassword'))}</h3>
       <form method="post" action="/account">
         ${hiddenInputs({ _csrf: csrf })}
-        <label>当前密码</label>
+        <label>${esc(t(L, 'account.currentPassword'))}</label>
         <input type="password" name="current" required autocomplete="current-password">
-        <label>新密码(至少 8 位)</label>
+        <label>${esc(t(L, 'account.newPassword'))}</label>
         <input type="password" name="password" required minlength="8" autocomplete="new-password">
-        <label>确认新密码</label>
+        <label>${esc(t(L, 'account.confirmNewPassword'))}</label>
         <input type="password" name="password2" required minlength="8" autocomplete="new-password">
-        <div class="actions"><button class="btn btn-primary" type="submit">保存修改</button></div>
+        <div class="actions"><button class="btn btn-primary" type="submit">${esc(t(L, 'common.saveChanges'))}</button></div>
       </form>
       <hr>
       ${twofaBlock}
@@ -440,8 +462,9 @@ export function recoveryCodesPage({ theme, siteName, user, codes }) {
 }
 
 /** 我的授权页:查看/撤销已记住的应用授权(并入控制台侧栏布局) */
-export function authorizationsPage({ theme, siteName, user, csrf, list, msg, err, cur = '/' }) {
-  const fmt = (sec) => new Date(sec * 1000).toLocaleString('zh-CN', { hour12: false });
+export function authorizationsPage({ theme, siteName, user, csrf, list, msg, err, cur = '/', lang }) {
+  const L = normalizeLang(lang || currentLang());
+  const fmtDate = (sec) => new Date(sec * 1000).toLocaleString(L === 'en' ? 'en-US' : 'zh-CN', { hour12: false });
   const rows = list.map((row) => {
     const initial = (String(row.name || '?').trim()[0] || '?').toUpperCase();
     return `<div class="app-item">
@@ -449,63 +472,64 @@ export function authorizationsPage({ theme, siteName, user, csrf, list, msg, err
       <div style="min-width:0;flex:1">
         <div style="display:flex;gap:var(--s2);align-items:center;flex-wrap:wrap">
           <b style="color:var(--text);font-size:15px">${esc(row.name)}</b>
-          ${row.scopeItems.map((s) => `<span class="badge">${esc(SCOPE_NAMES[s.id] || s.id)}</span>`).join(' ')}
+          ${row.scopeItems.map((s) => `<span class="badge">${esc(t(L, `scope.name.${s.id}`, SCOPE_NAMES[s.id] || s.id))}</span>`).join(' ')}
         </div>
-        <div class="muted small" style="word-break:break-all"><code>${esc(row.client_id)}</code> · 授权于 ${fmt(row.granted_at)}</div>
+        <div class="muted small" style="word-break:break-all"><code>${esc(row.client_id)}</code> · ${esc(fmt(t(L, 'authz.grantedAt'), { time: fmtDate(row.granted_at) }))}</div>
       </div>
       <form method="post" action="/account/apps/revoke" style="margin:0">
         ${hiddenInputs({ _csrf: csrf, client_id: row.client_id })}
-        <button class="btn btn-danger btn-sm" type="submit">撤销授权</button>
+        <button class="btn btn-danger btn-sm" type="submit">${esc(t(L, 'common.revokeAuthz'))}</button>
       </form>
     </div>`;
   }).join('\n');
   return adminPage({
-    theme, siteName, user, active: 'authz', cur,
+    theme, siteName, user, active: 'authz', cur, lang: L,
     title: `我的授权 · ${siteName}`,
     content: `
       ${banner(msg ? esc(msg) : '', 'ok')}
       ${banner(err ? esc(err) : '', 'err')}
-      <h3 style="margin-top:0">我的授权</h3>
-      <p class="muted small" style="margin-top:0">这里列出你确认过「记住授权」的应用。撤销后,该应用的记住授权立即删除,其现有访问令牌一并失效;下次访问时需要重新确认。</p>
+      <h3 style="margin-top:0">${esc(t(L, 'nav.authz'))}</h3>
+      <p class="muted small" style="margin-top:0">${esc(t(L, 'authz.intro'))}</p>
       ${list.length
         ? `<div class="card tight">${rows}</div>`
-        : '<div class="card tight"><p class="muted" style="margin:0">还没有授权过任何应用。登录业务系统并同意授权后,会出现在这里。</p></div>'}`,
+        : `<div class="card tight"><p class="muted" style="margin:0">${esc(t(L, 'authz.empty'))}</p></div>`}`,
   });
 }
 
 /** 登录会话页:查看/撤销已登录设备(并入控制台侧栏布局,挂在账号设置入口下)。
  *  list 会话行含 is_current 标记;UA 超 40 字截断,完整值放 title 悬停可见。 */
-export function sessionsPage({ theme, siteName, user, csrf, list, msg, err, cur = '/' }) {
+export function sessionsPage({ theme, siteName, user, csrf, list, msg, err, cur = '/', lang }) {
+  const L = normalizeLang(lang || currentLang());
   const clip = (s) => {
     const v = String(s || '');
     return v.length > 40 ? `${v.slice(0, 40)}…` : v;
   };
   const rows = list.map((row) => `<tr>
-      <td class="wrap"><code>${esc(row.id_hash.slice(0, 8))}</code>${row.is_current ? ` ${badge('当前')}` : ''}</td>
+      <td class="wrap"><code>${esc(row.id_hash.slice(0, 8))}</code>${row.is_current ? ` ${badge(t(L, 'sess.current'))}` : ''}</td>
       <td>${fmtTime(row.created_at)}</td>
       <td>${fmtTime(row.expires_at)}</td>
       <td class="wrap">${esc(row.ip || '-')}</td>
       <td class="wrap"${row.user_agent ? ` title="${esc(row.user_agent)}"` : ''}>${esc(clip(row.user_agent) || '-')}</td>
       <td><form method="post" action="/account/sessions/revoke" style="margin:0">
         ${hiddenInputs({ _csrf: csrf, id_hash: row.id_hash })}
-        <button class="btn btn-danger btn-sm" type="submit">撤销</button>
+        <button class="btn btn-danger btn-sm" type="submit">${esc(t(L, 'common.revoke'))}</button>
       </form></td>
     </tr>`).join('\n');
   return adminPage({
-    theme, siteName, user, active: 'account', cur,
+    theme, siteName, user, active: 'account', cur, lang: L,
     title: `登录会话 · ${siteName}`,
     content: `
       ${banner(msg ? esc(msg) : '', 'ok')}
       ${banner(err ? esc(err) : '', 'err')}
-      <h3 style="margin-top:0">登录会话</h3>
-      <p class="muted small" style="margin-top:0">这里列出你当前所有已登录的设备。撤销后,对应设备下次访问需要重新登录;带「当前」徽章的是你正在使用的这个会话,撤销它等同于退出登录。</p>
+      <h3 style="margin-top:0">${esc(t(L, 'sess.title'))}</h3>
+      <p class="muted small" style="margin-top:0">${esc(t(L, 'sess.intro'))}</p>
       <div class="tblwrap"><table class="tbl">
-        <thead><tr><th>会话</th><th>创建时间</th><th>过期时间</th><th>IP</th><th>User-Agent</th><th>操作</th></tr></thead>
+        <thead><tr><th>${esc(t(L, 'sess.thId'))}</th><th>${esc(t(L, 'common.createdAt'))}</th><th>${esc(t(L, 'common.expiresAt'))}</th><th>IP</th><th>User-Agent</th><th>${esc(t(L, 'common.thAction'))}</th></tr></thead>
         <tbody>${rows}</tbody>
       </table></div>
       <form method="post" action="/account/sessions/revoke-others">
         ${hiddenInputs({ _csrf: csrf })}
-        <div class="actions"><button class="btn btn-danger" type="submit">撤销其它全部会话</button></div>
+        <div class="actions"><button class="btn btn-danger" type="submit">${esc(t(L, 'sess.revokeOthers'))}</button></div>
       </form>`,
   });
 }

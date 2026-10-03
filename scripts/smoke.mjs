@@ -2716,6 +2716,55 @@ async function main() {
 
 
 
+    /* ---------- 界面语言切换:cookie + /-/lang/:code(默认中文零回归,显式 en 才出英文) ---------- */
+    r = await call(new Jar(), '/login');
+    const zhDefaultLogin = await r.text();
+    ok('语言:默认(无 cookie)登录页仍为简体中文且 lang=zh-CN', r.status === 200
+      && zhDefaultLogin.includes('<html lang="zh-CN"') && zhDefaultLogin.includes('欢迎回来')
+      && !zhDefaultLogin.includes('Welcome back'));
+
+    const langJ = new Jar();
+    r = await call(langJ, '/-/lang/en?back=' + encodeURIComponent('/login'));
+    ok('语言:GET /-/lang/en 写入 lang cookie 并回到 back 页面', r.status === 302 && location(r) === '/login'
+      && (r.headers.getSetCookie?.() || []).some((c) => c.startsWith('lang=en')));
+    r = await call(langJ, '/login');
+    const enLogin = await r.text();
+    ok('语言:英文登录页含英文口号/表单标签且 html lang=en', r.status === 200
+      && enLogin.includes('<html lang="en"') && enLogin.includes('Welcome back')
+      && enLogin.includes('>Username</label>') && enLogin.includes('One home for all your sign-ins.'));
+    ok('语言:英文登录页不再渲染中文欢迎语与中文标签', !enLogin.includes('欢迎回来')
+      && !enLogin.includes('>用户名</label>'));
+    r = await call(langJ, '/login');
+    ok('语言:lang cookie 持久化(再次访问 /login 仍为英文)', r.status === 200
+      && (await r.text()).includes('<html lang="en"'));
+    r = await call(langJ, '/-/lang/zh?back=/login');
+    r = await call(langJ, '/login');
+    const zhBack = await r.text();
+    ok('语言:切回 zh 恢复中文文案与 lang=zh-CN', r.status === 200
+      && zhBack.includes('<html lang="zh-CN"') && zhBack.includes('欢迎回来'));
+    r = await call(langJ, '/-/lang/en?back=' + encodeURIComponent('//evil.com'));
+    ok('语言:协议相对 back 参数被拒(与主题切换同防开放重定向)', r.status === 302 && location(r) === '/');
+
+    // 登录态下:侧栏切换链接 + en 导航/门户按钮 + 可逆恢复(fj 为 bob 会话)
+    r = await call(fj, '/account');
+    const sideHtml = await r.text();
+    ok('语言:侧栏底部提供语言切换链接(与主题切换并排)', sideHtml.includes('/-/lang/en?back=')
+      && sideHtml.includes('>English</a>'));
+    await call(fj, '/-/lang/en?back=/apps');
+    r = await call(fj, '/apps');
+    const enPortal = await r.text();
+    ok('语言:en 下门户页导航与按钮为英文', enPortal.includes('<html lang="en"')
+      && enPortal.includes('App portal') && enPortal.includes('Open app')
+      && enPortal.includes('Account settings'));
+    await call(fj, '/-/lang/zh?back=/apps');
+    r = await call(fj, '/apps');
+    ok('语言:切回 zh 后门户页恢复中文(切换可逆)', (await r.text()).includes('应用门户'));
+
+    // 默认中文下既有同意页关键断言回归抽查(nj2=noah,未授权过 Meta Portal,require_consent=1)
+    r = await call(nj2, metaAuthUrl);
+    ok('语言:中文同意页「请求访问你的账号」不受切换功能影响(回归抽查)', r.status === 200
+      && (await r.text()).includes('请求访问你的账号'));
+
     /* ---------- 配置向导增强:管理员重新运行向导(放在最后,尾部恢复 setup_done=1) ---------- */
     r = await call(aj, '/admin');
     const rerunDash = await r.text();

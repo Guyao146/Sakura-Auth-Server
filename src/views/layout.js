@@ -1,4 +1,5 @@
 import { escapeHtml as esc } from '../core/util.js';
+import { t, normalizeLang, currentLang } from '../core/i18n.js';
 
 /**
  * 页面骨架 + 樱落设计语言(参照 mcylyr 设计规范):
@@ -229,7 +230,18 @@ pre.block{background:var(--code-bg);color:var(--code-text);border-radius:var(--r
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 `;
 
-const THEME_HINT = '切换主题';
+const themeToggle = (theme, cur, lang = 'zh') => {
+  const next = theme === 'night' ? 'day' : 'night';
+  const label = t(lang, theme === 'night' ? 'theme.day' : 'theme.night');
+  return `<a href="/-/theme/${next}?back=${encodeURIComponent(cur || '/')}" title="${t(lang, 'theme.title')}">${label}</a>`;
+};
+
+/** 语言切换链接:与主题切换同模式(/-/lang/:code 写 cookie + 回跳),展示目标语言名 */
+const langToggle = (lang, cur) => {
+  const next = lang === 'en' ? 'zh' : 'en';
+  const label = lang === 'en' ? '中文' : 'English';
+  return `<a href="/-/lang/${next}?back=${encodeURIComponent(cur || '/')}" title="${t(lang, 'lang.title')}">${label}</a>`;
+};
 
 /** 樱落品牌标:五瓣花(纯内联 SVG,零外部资源) */
 export function mark(size = 26) {
@@ -237,15 +249,10 @@ export function mark(size = 26) {
 <g><circle cx="12" cy="6.5" r="4.1"/><circle cx="6.77" cy="10.3" r="4.1"/><circle cx="8.77" cy="16.45" r="4.1"/><circle cx="15.23" cy="16.45" r="4.1"/><circle cx="17.23" cy="10.3" r="4.1"/><circle cx="12" cy="11.8" r="2.1" style="fill:var(--page)"/></g></svg>`;
 }
 
-const themeToggle = (theme, cur) => {
-  const next = theme === 'night' ? 'day' : 'night';
-  const label = theme === 'night' ? '日间' : '夜间';
-  return `<a href="/-/theme/${next}?back=${encodeURIComponent(cur || '/')}" title="${THEME_HINT}">${label}主题</a>`;
-};
-
-function head(theme, title) {
+function head(theme, title, lang = 'zh') {
+  const htmlLang = lang === 'en' ? 'en' : 'zh-CN';
   return `<!doctype html>
-<html lang="zh-CN"${theme ? ` data-theme="${theme}"` : ''}>
+<html lang="${htmlLang}"${theme ? ` data-theme="${theme}"` : ''}>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -260,15 +267,16 @@ const scriptTags = (scripts) =>
   (scripts || []).map((src) => `<script src="${esc(src)}" defer></script>`).join('\n');
 
 /** 认证类页面骨架(登录 / 同意 / 向导):居中卡片;wide 供授权页等需要更宽的场景 */
-export function authPage({ theme, siteName, title, content, footer = true, wide = false, scripts = [] }) {
-  return `${head(theme, title)}
+export function authPage({ theme, siteName, title, content, footer = true, wide = false, scripts = [], lang }) {
+  const L = normalizeLang(lang || currentLang());
+  return `${head(theme, title, L)}
 <body>
 <div class="auth-wrap"><div class="auth-col${wide ? ' auth-col-wide' : ''}">
   <div class="auth-card">
-    <div class="auth-brand">${mark(30)}<div><h1>${esc(siteName)}</h1><div class="muted">统一身份认证服务</div></div></div>
+    <div class="auth-brand">${mark(30)}<div><h1>${esc(siteName)}</h1><div class="muted">${esc(t(L, 'brand.subtitle'))}</div></div></div>
     ${content}
   </div>
-  ${footer ? '<p class="auth-foot">SakuraID · 由樱落生态设计语言驱动</p>' : ''}
+  ${footer ? `<p class="auth-foot">SakuraID · ${esc(t(L, 'footer.powered'))}</p>` : ''}
 </div></div>
 ${scriptTags(scripts)}
 </body></html>`;
@@ -280,11 +288,12 @@ ${scriptTags(scripts)}
  * wide=true 时右栏加宽(同意页的徽标行 / 权限清单需要更多横向空间),登录页不受影响。
  */
 export function brandPage({
-  theme, siteName, title, tagline = '', features = [], content, footer = true, cur = '/login', wide = false, scripts = [],
+  theme, siteName, title, tagline = '', features = [], content, footer = true, cur = '/login', wide = false, scripts = [], lang,
 }) {
+  const L = normalizeLang(lang || currentLang());
   const feats = features.map((f) => `
       <li><span class="feat-ico">${f.icon}</span><span><b>${esc(f.title)}</b><small>${esc(f.desc)}</small></span></li>`).join('\n');
-  return `${head(theme, title)}
+  return `${head(theme, title, L)}
 <body>
 <div class="login-split">
   <aside class="login-brand">
@@ -296,12 +305,12 @@ export function brandPage({
       ${features.length ? `<ul class="login-brand-feats">${feats}
       </ul>` : ''}
     </div>
-    <p class="login-brand-foot">由樱落生态设计语言驱动</p>
+    <p class="login-brand-foot">${esc(t(L, 'footer.powered'))}</p>
   </aside>
   <main class="login-form"><div class="login-form-col${wide ? ' login-form-col-wide' : ''}">
     <div class="login-form-brand">${mark(24)}<b>${esc(siteName)}</b></div>
     ${content}
-    ${footer ? `<p class="login-form-foot">SakuraID · ${themeToggle(theme, cur)}</p>` : ''}
+    ${footer ? `<p class="login-form-foot">SakuraID · ${themeToggle(theme, cur, L)} · ${langToggle(L, cur)}</p>` : ''}
   </div></main>
 </div>
 ${scriptTags(scripts)}
@@ -309,31 +318,32 @@ ${scriptTags(scripts)}
 }
 
 /** 控制台骨架:左侧玻璃侧栏 + 内容区;导航按身份渲染 —— 管理员含管理项,普通用户仅「我的」分组 */
-export function adminPage({ theme, siteName, user, active = '', title, content, cur = '/', actions = '', headTitle = '', scripts = [] }) {
+export function adminPage({ theme, siteName, user, active = '', title, content, cur = '/', actions = '', headTitle = '', scripts = [], lang }) {
+  const L = normalizeLang(lang || currentLang());
   const link = (href, label, key) =>
     `<a href="${href}"${key === active ? ' class="active"' : ''}>${label}</a>`;
   const adminNav = user.is_admin
-    ? `${link('/admin', '控制台', 'dashboard')}
-    ${link('/admin/users', '用户', 'users')}
-    ${link('/admin/apps', '应用', 'apps')}
-    ${link('/admin/groups', '权限组', 'groups')}
-    ${link('/admin/audit', '审计日志', 'audit')}
+    ? `${link('/admin', esc(t(L, 'nav.dashboard')), 'dashboard')}
+    ${link('/admin/users', esc(t(L, 'nav.users')), 'users')}
+    ${link('/admin/apps', esc(t(L, 'nav.apps')), 'apps')}
+    ${link('/admin/groups', esc(t(L, 'nav.groups')), 'groups')}
+    ${link('/admin/audit', esc(t(L, 'nav.audit')), 'audit')}
     `
     : '';
-  return `${head(theme, title)}
+  return `${head(theme, title, L)}
 <body>
 <div class="topbar">${mark(22)} ${esc(siteName)}</div>
 <aside class="side">
-  <div class="side-brand">${mark(26)}<b>${esc(siteName)}<br><span class="muted small">${user.is_admin ? '管理控制台' : '个人中心'}</span></b></div>
+  <div class="side-brand">${mark(26)}<b>${esc(siteName)}<br><span class="muted small">${esc(t(L, user.is_admin ? 'side.adminConsole' : 'side.personal'))}</span></b></div>
   <nav>
-    ${adminNav}<div class="sep">我的</div>
-    ${link('/apps', '应用门户', 'portal')}
-    ${link('/account/apps', '我的授权', 'authz')}
-    ${link('/account', '账号设置', 'account')}
-    <a href="/logout">退出登录</a>
+    ${adminNav}<div class="sep">${esc(t(L, 'nav.my'))}</div>
+    ${link('/apps', esc(t(L, 'nav.portal')), 'portal')}
+    ${link('/account/apps', esc(t(L, 'nav.authz')), 'authz')}
+    ${link('/account', esc(t(L, 'nav.account')), 'account')}
+    <a href="/logout">${esc(t(L, 'nav.logout'))}</a>
   </nav>
   <div class="side-foot">
-    <div class="row"><span>${esc(user.username)}${user.is_admin ? ' · 管理员' : ''}</span><span>${themeToggle(theme, cur)}</span></div>
+    <div class="row"><span>${esc(user.username)}${user.is_admin ? ` · ${esc(t(L, 'side.adminBadge'))}` : ''}</span><span>${themeToggle(theme, cur, L)} ${langToggle(L, cur)}</span></div>
   </div>
 </aside>
 <main class="main">

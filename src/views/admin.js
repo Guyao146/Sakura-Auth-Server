@@ -1,4 +1,5 @@
 import { escapeHtml as esc, fmtTime } from '../core/util.js';
+import { t, fmt, normalizeLang, currentLang } from '../core/i18n.js';
 import { adminPage, pageTitle } from './layout.js';
 import { banner, badge, hiddenInputs, kvRow, scopeList, scopeItems, statCard, SCOPE_NAMES } from './components.js';
 import { SCOPES, DEFAULT_CLIENT_SCOPES } from '../core/config.js';
@@ -140,23 +141,24 @@ export function groupDetailPage({ theme, siteName, user, cur, group, members = [
   });
 }
 
-/* ---------------- 控制台首页 ---------------- */
-export function dashboardPage({ theme, siteName, user, cur, stats, issuer, allowRegister, csrf, msg, err, msOAuth = {} }) {
+/* ---------------- 控制台首页(仅页头/统计/卡片标题/按钮接入 i18n,深度表单保持中文) ---------------- */
+export function dashboardPage({ theme, siteName, user, cur, stats, issuer, allowRegister, csrf, msg, err, msOAuth = {}, lang }) {
+  const L = normalizeLang(lang || currentLang());
   const ms = { enabled: false, clientId: '', clientSecret: '', tenant: 'common', redirectUri: '', ...msOAuth };
   return adminPage({
-    theme, siteName, user, cur, active: 'dashboard', title: `控制台 · ${siteName}`,
+    theme, siteName, user, cur, active: 'dashboard', lang: L, title: `${t(L, 'nav.dashboard')} · ${siteName}`,
     content: `
-      ${pageTitle('控制台')}
+      ${pageTitle(t(L, 'nav.dashboard'))}
       ${banner(msg ? esc(msg) : '', 'ok')}
       ${banner(err ? esc(err) : '', 'err')}
       <div class="stats">
-        ${statCard(stats.users, '用户')}
-        ${statCard(stats.clients, '应用')}
-        ${statCard(stats.activeTokens, '有效访问令牌')}
-        ${statCard(stats.sessions, '在线会话')}
+        ${statCard(stats.users, t(L, 'dash.statUsers'))}
+        ${statCard(stats.clients, t(L, 'dash.statApps'))}
+        ${statCard(stats.activeTokens, t(L, 'dash.statTokens'))}
+        ${statCard(stats.sessions, t(L, 'dash.statSessions'))}
       </div>
       <div class="card">
-        <h3 style="margin-top:0">服务信息</h3>
+        <h3 style="margin-top:0">${esc(t(L, 'dash.serviceInfo'))}</h3>
         ${kvRow('Issuer', esc(issuer))}
         ${kvRow('发现文档', `<a href="${esc(issuer + '/.well-known/openid-configuration')}">${esc(issuer + '/.well-known/openid-configuration')}</a>`)}
         ${kvRow('JWKS', `<a href="${esc(issuer + '/jwks.json')}">${esc(issuer + '/jwks.json')}</a>`)}
@@ -164,19 +166,19 @@ export function dashboardPage({ theme, siteName, user, cur, stats, issuer, allow
         <p class="muted small">接入方只需发现文档地址即可自动完成 OIDC 配置。</p>
       </div>
       <div class="card">
-        <h3 style="margin-top:0">自助注册</h3>
-        <p class="small" style="margin:var(--s2) 0">当前状态:${allowRegister ? badge('开启') : badge('关闭', '')}</p>
+        <h3 style="margin-top:0">${esc(t(L, 'dash.selfRegister'))}</h3>
+        <p class="small" style="margin:var(--s2) 0">${esc(t(L, 'dash.currentStatus'))}${allowRegister ? badge(t(L, 'dash.on')) : badge(t(L, 'dash.off'), '')}</p>
         <p class="muted small">开启后,登录页会出现「注册新账号」入口,任何人都可以自助创建账号并直接登录;自助注册的账号永远不是管理员。</p>
         <form method="post" action="/admin/register-toggle">
           ${hiddenInputs({ _csrf: csrf })}
           <button class="btn ${allowRegister ? 'btn-danger' : 'btn-primary'}" type="submit">
-            ${allowRegister ? '关闭自助注册' : '开启自助注册'}
+            ${esc(t(L, allowRegister ? 'dash.disableRegister' : 'dash.enableRegister'))}
           </button>
         </form>
       </div>
       <div class="card">
-        <h3 style="margin-top:0">Microsoft 登录</h3>
-        <p class="small" style="margin:var(--s2) 0">当前状态:${ms.enabled ? badge('已启用') : badge('未启用', '')}</p>
+        <h3 style="margin-top:0">${esc(t(L, 'dash.msLogin'))}</h3>
+        <p class="small" style="margin:var(--s2) 0">${esc(t(L, 'dash.currentStatus'))}${ms.enabled ? badge(t(L, 'dash.enabled')) : badge(t(L, 'dash.disabled'), '')}</p>
         <p class="muted small">启用后,登录页出现「使用 Microsoft 账号登录」按钮;未绑定的 Microsoft 身份可在首次登录时关联已有本地账号或注册新号。</p>
         <form method="post" action="/admin/ms-oauth">
           ${hiddenInputs({ _csrf: csrf })}
@@ -196,21 +198,21 @@ export function dashboardPage({ theme, siteName, user, cur, stats, issuer, allow
         </form>
       </div>
       <div class="card">
-        <h3 style="margin-top:0">配置向导</h3>
+        <h3 style="margin-top:0">${esc(t(L, 'dash.wizard'))}</h3>
         <p class="muted small">重新运行初始化向导:会重走环境检测与站点设置(Issuer、令牌有效期、自助注册、SMTP 邮件),不会影响已有的用户与应用数据;期间全站暂时指向向导页,完成后恢复。</p>
         <form method="post" action="/admin/rerun-wizard">
           ${hiddenInputs({ _csrf: csrf })}
-          <button class="btn" type="submit">重新运行配置向导</button>
+          <button class="btn" type="submit">${esc(t(L, 'dash.rerunWizard'))}</button>
         </form>
       </div>
       <div class="card">
-        <h3 style="margin-top:0">快速开始</h3>
+        <h3 style="margin-top:0">${esc(t(L, 'dash.quickStart'))}</h3>
         <p class="small" style="margin-top:0">1. 在「应用」创建客户端,获取 client_id 与 client_secret;</p>
         <p class="small">2. 业务系统跳转到 <code>/authorize</code> 发起授权码 + PKCE 流程;</p>
         <p class="small">3. 回调换取 access_token,携带 Bearer 访问 <code>/userinfo</code>。</p>
         <div class="actions">
-          <a class="btn btn-primary" href="/admin/apps/new">新建应用</a>
-          <a class="btn" href="/admin/users/new">新建用户</a>
+          <a class="btn btn-primary" href="/admin/apps/new">${esc(t(L, 'dash.newApp'))}</a>
+          <a class="btn" href="/admin/users/new">${esc(t(L, 'dash.newUser'))}</a>
         </div>
       </div>`,
   });
@@ -540,8 +542,9 @@ export function secretRevealPage({ theme, siteName, user, cur, app, secret, issu
   });
 }
 
-/* ---------------- 审计日志 ---------------- */
-export function auditPage({ theme, siteName, user, cur, list, allActions = [], filters = {}, total = 0, page = 1, pages = 1, perPage = 50, csrf, msg, err }) {
+/* ---------------- 审计日志(页头/表头/筛选与按钮/分页接入 i18n) ---------------- */
+export function auditPage({ theme, siteName, user, cur, list, allActions = [], filters = {}, total = 0, page = 1, pages = 1, perPage = 50, csrf, msg, err, lang }) {
+  const L = normalizeLang(lang || currentLang());
   const selAction = filters.action || '';
   const q = filters.q || '';
   // 链接构造:保留当前 action/q 筛选参数,可覆盖 page(分页/导出共用)
@@ -559,20 +562,20 @@ export function auditPage({ theme, siteName, user, cur, list, allActions = [], f
     `<option value="${esc(a)}"${a === selAction ? ' selected' : ''}>${esc(a)}</option>`).join('\n');
   const filterForm = `
       <form method="get" action="/admin/audit" class="rowline" style="gap:var(--s2)">
-        <select name="action" style="width:auto;min-width:160px" aria-label="按动作筛选">
-          <option value="">全部动作</option>
+        <select name="action" style="width:auto;min-width:160px" aria-label="${esc(t(L, 'audit.filterAction'))}">
+          <option value="">${esc(t(L, 'audit.allActions'))}</option>
           ${options}
         </select>
-        <input type="text" name="q" value="${esc(q)}" placeholder="操作者或详情关键词" style="width:200px" aria-label="关键词">
-        <button class="btn" type="submit">筛选</button>
-        ${selAction || q ? '<a class="btn" href="/admin/audit">重置</a>' : ''}
+        <input type="text" name="q" value="${esc(q)}" placeholder="${esc(t(L, 'audit.searchPlaceholder'))}" style="width:200px" aria-label="${esc(t(L, 'audit.keyword'))}">
+        <button class="btn" type="submit">${esc(t(L, 'audit.filter'))}</button>
+        ${selAction || q ? `<a class="btn" href="/admin/audit">${esc(t(L, 'audit.reset'))}</a>` : ''}
       </form>
-      <a class="btn" href="${esc(exportHref)}">导出 CSV</a>`;
+      <a class="btn" href="${esc(exportHref)}">${esc(t(L, 'audit.export'))}</a>`;
   const clearForm = `
       <form method="post" action="/admin/audit/clear" class="rowline" style="gap:var(--s2)">
         ${hiddenInputs({ _csrf: csrf })}
-        <button class="btn btn-danger" type="submit">清空日志</button>
-        <span class="muted small">将删除全部审计记录且不可恢复,请谨慎操作</span>
+        <button class="btn btn-danger" type="submit">${esc(t(L, 'audit.clear'))}</button>
+        <span class="muted small">${esc(t(L, 'audit.clearHint'))}</span>
       </form>`;
   const rows = list.map((row) => `<tr>
       <td class="muted" style="white-space:nowrap">${fmtTime(row.ts)}</td>
@@ -583,25 +586,25 @@ export function auditPage({ theme, siteName, user, cur, list, allActions = [], f
     </tr>`).join('\n');
   // 分页页脚:上一页/下一页(保留筛选参数),边界用禁用样式占位
   const pagerBtn = (label, target, enabled) => (enabled
-    ? `<a class="btn" href="${esc(pageHref(target))}">${label}</a>`
-    : `<span class="btn" style="opacity:.45;cursor:not-allowed" aria-disabled="true">${label}</span>`);
+    ? `<a class="btn" href="${esc(pageHref(target))}">${esc(label)}</a>`
+    : `<span class="btn" style="opacity:.45;cursor:not-allowed" aria-disabled="true">${esc(label)}</span>`);
   const pager = `
       <div class="rowline" style="gap:var(--s2);margin-top:var(--s3)">
-        ${pagerBtn('上一页', page - 1, page > 1)}
-        <span class="muted small">第 ${page} / ${pages} 页 · 共 ${total} 条</span>
-        ${pagerBtn('下一页', page + 1, page < pages)}
+        ${pagerBtn(t(L, 'audit.prev'), page - 1, page > 1)}
+        <span class="muted small">${esc(fmt(t(L, 'audit.pageInfo'), { page, pages, total }))}</span>
+        ${pagerBtn(t(L, 'audit.next'), page + 1, page < pages)}
       </div>`;
   return adminPage({
-    theme, siteName, user, cur, active: 'audit', title: `审计日志 · ${siteName}`,
-    headTitle: `<h3>审计日志</h3>
-    <p class="muted small">登录、授权与关键管理动作的留痕记录 · 共 ${total} 条,每页 ${perPage} 条,当前展示 ${list.length} 条</p>`,
+    theme, siteName, user, cur, active: 'audit', lang: L, title: `${t(L, 'nav.audit')} · ${siteName}`,
+    headTitle: `<h3>${esc(t(L, 'nav.audit'))}</h3>
+    <p class="muted small">${esc(fmt(t(L, 'audit.headSub'), { total, per: perPage, n: list.length }))}</p>`,
     actions: `${filterForm}${clearForm}`,
     content: `
       ${banner(msg ? esc(msg) : '', 'ok')}
       ${banner(err ? esc(err) : '', 'err')}
       <div class="tblwrap"><table class="tbl">
-        <thead><tr><th>时间</th><th>操作者</th><th>动作</th><th>详情</th><th>IP</th></tr></thead>
-        <tbody>${rows || '<tr><td colspan="5" class="muted">暂无审计记录。</td></tr>'}</tbody>
+        <thead><tr><th>${esc(t(L, 'audit.thTime'))}</th><th>${esc(t(L, 'audit.thActor'))}</th><th>${esc(t(L, 'audit.thAction'))}</th><th>${esc(t(L, 'audit.thDetail'))}</th><th>IP</th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="5" class="muted">${esc(t(L, 'audit.empty'))}</td></tr>`}</tbody>
       </table></div>
       ${pager}
       <p class="muted small">审计日志滚动保留最新 5000 条,不随过期数据清理;清空后历史留痕无法找回。导出 CSV 最多包含最新 5000 条。</p>`,
