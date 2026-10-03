@@ -60,11 +60,22 @@ const msFail = (ctx, message) => sendHtml(ctx.res, 400, errorPage({
   title: 'Microsoft 登录失败', message,
 }));
 
+/**
+ * ms_tenant 合法性:仅允许字母/数字/._-(覆盖 common、organizations、租户域名与 UUID 形态)。
+ * 该值会拼接进 authority URL 路径({authority}/{tenant}/oauth2/v2.0/...),必须防止路径注入。
+ */
+export const MS_TENANT_RE = /^[a-zA-Z0-9._-]{1,200}$/;
+export const isValidMsTenant = (s) => MS_TENANT_RE.test(String(s || '').trim());
+
 /** GET /auth/microsoft —— 生成 state/PKCE 并 302 到 Microsoft 授权页 */
 export function startAuth(ctx) {
   const ms = ctx.runtime.msOAuth;
   if (!ms.enabled) return redirect(ctx.res, '/login?err=' + encodeURIComponent('未启用 Microsoft 登录。'));
   if (!ms.clientId) return redirect(ctx.res, '/login?err=' + encodeURIComponent('Microsoft 登录未配置完整,请联系管理员。'));
+  // 纵深防御:settings 直写库等绕过管理端校验的途径带来的非法租户在此兜底
+  if (!isValidMsTenant(ms.tenant)) {
+    return redirect(ctx.res, '/login?err=' + encodeURIComponent('Microsoft 租户配置不合法,请联系管理员检查设置。'));
+  }
   const state = randomToken(16);
   const verifier = randomToken(48);
   // ?bind=1 且当前已登录:进入绑定模式,回调后绑定到当前会话用户

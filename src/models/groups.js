@@ -6,6 +6,12 @@ export const byId = (id) => getDb().prepare('SELECT * FROM groups WHERE id = ?')
 
 export const byName = (name) => getDb().prepare('SELECT * FROM groups WHERE name = ?').get(name);
 
+/** 大小写不敏感查重:存在同名组('DEV' vs 'dev' 视为重名)且非 excludeId 时返回该行。
+ *  表级 COLLATE NOCASE 不做,唯一性由创建/重命名的服务层调用此函数保证 */
+export const nameTakenCI = (name, excludeId = null) =>
+  getDb().prepare('SELECT * FROM groups WHERE LOWER(name) = LOWER(?) AND id <> ?')
+    .get(String(name).trim(), excludeId || '');
+
 /** 组列表,附带成员数 */
 export const list = () =>
   getDb().prepare(

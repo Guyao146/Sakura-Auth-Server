@@ -22,6 +22,7 @@ import {
 import { dashboardPage, groupsPage, groupDetailPage, usersPage, userFormPage, appsPage, appFormPage, appDetailPage, secretRevealPage } from '../../views/admin.js';
 import { errorPage } from '../../views/error.js';
 import { record } from '../audit.js';
+import { isValidMsTenant } from '../auth/microsoft.js';
 import * as appHealth from '../app-health.js';
 
 const CSRF = (ctx) => ctx.session.csrf;
@@ -64,6 +65,10 @@ export function saveMsOAuth(ctx) {
     ms_client_id: String(b.ms_client_id || '').trim(),
     ms_tenant: String(b.ms_tenant || '').trim() || 'common',
   };
+  // 租户 ID 拼进 authority URL 路径:仅允许字母数字与 . _ -(含 UUID/域名形态),非法拒绝并回显
+  if (!isValidMsTenant(fields.ms_tenant)) {
+    return redirect(ctx.res, '/admin?err=' + encodeURIComponent('Microsoft 租户 ID 不合法,仅允许字母、数字与 . _ -(或 UUID 形态)。'));
+  }
   const secret = String(b.ms_client_secret || '');
   if (secret) fields.ms_client_secret = secret; // 留空 = 保留已保存的密钥
   const authority = String(b.ms_authority || '').trim();
@@ -91,7 +96,8 @@ export function createGroup(ctx) {
   const description = String(b.description || '').trim();
   if (!name || name.length > 40) return back('组名必填且不超过 40 字。');
   if (/\s/.test(name)) return back('组名不能包含空白字符。');
-  if (groups.byName(name)) return back(`权限组 ${name} 已存在。`);
+  // 大小写不敏感查重:'DEV' 与 'dev' 视为重名
+  if (groups.nameTakenCI(name)) return back(`权限组 ${name} 已存在。`);
   groups.create({ name, description });
   redirect(ctx.res, '/admin/groups?msg=' + encodeURIComponent(`权限组 ${name} 已创建。`));
 }
@@ -141,8 +147,8 @@ export function updateGroup(ctx) {
   const description = String(b.description || '').trim();
   if (!name || name.length > 40) return back('组名必填且不超过 40 字。');
   if (/\s/.test(name)) return back('组名不能包含空白字符。');
-  const dup = groups.byName(name);
-  if (dup && dup.id !== g.id) return back(`权限组 ${name} 已存在。`);
+  // 大小写不敏感查重(排除自身):'OPS' 与既有 ops 视为重名;自身改名大小写(Dev→DEV)允许
+  if (groups.nameTakenCI(name, g.id)) return back(`权限组 ${name} 已存在。`);
   groups.update(g.id, { name, description });
   if (name !== g.name) {
     // 组名变更:同步引用旧组名的应用访问限制,避免授权悄悄失效
@@ -256,10 +262,15 @@ export function createUser(ctx) {
   if (users.byUsername(username)) {
     return redirect(ctx.res, '/admin/users/new?err=' + encodeURIComponent('用户名已存在。'));
   }
+  // RFC 5321:邮箱地址路径最长 254 字符
+  const email = String(b.email || '').trim();
+  if (email.length > 254) {
+    return redirect(ctx.res, '/admin/users/new?err=' + encodeURIComponent('邮箱长度不能超过 254 字。'));
+  }
   const groupNames = collectGroupNames(b);
   const created = users.create({
     username, passwordHash: hashPassword(b.password),
-    name: String(b.name || '').trim(), email: String(b.email || '').trim(),
+    name: String(b.name || '').trim(), email,
     userGroups: groupNames.join(' '), isAdmin: b.is_admin === '1',
   });
   if (groupNames.length) groups.setUserGroups(created.id, groupNames);
@@ -309,10 +320,14 @@ export function updateUser(ctx) {
     users.clearTotp(target.id);
     recovery.clearFor(target.id);
   }
+  const email = String(b.email || '').trim();
+  if (email.length > 254) {
+    return redirect(ctx.res, `/admin/users/${target.id}?err=` + encodeURIComponent('邮箱长度不能超过 254 字。'));
+  }
   const groupNames = collectGroupNames(b);
   // user_groups 文本列保留为成员关系的镜像,便于人工排查;claims/授权一律读关系表
   users.update(target.id, {
-    name: String(b.name || '').trim(), email: String(b.email || '').trim(),
+    name: String(b.name || '').trim(), email,
     userGroups: groupNames.join(' '),
     passwordHash, isAdmin: willAdmin, disabled: willDisabled,
   });
