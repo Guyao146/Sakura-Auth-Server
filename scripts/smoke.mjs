@@ -59,6 +59,85 @@ const extractHidden = (html) => {
 };
 const basic = (id, secret) => 'Basic ' + Buffer.from(`${id}:${secret}`).toString('base64');
 
+/* ---------- 模拟认证器:最小 CBOR 编码 + ES256 手造 attestation/assertion(WebAuthn 段用) ---------- */
+/** 最小 CBOR 编码器:仅 map / 数组 / 字节串 / 文本串 / 正负整数(足够构造测试凭据) */
+function cborEncode(value) {
+  const out = [];
+  const head = (mt, val) => {
+    if (val < 24) out.push((mt << 5) | val);
+    else if (val < 256) out.push((mt << 5) | 24, val);
+    else if (val < 65536) out.push((mt << 5) | 25, val >> 8, val & 255);
+    else out.push((mt << 5) | 26, (val >>> 24) & 255, (val >>> 16) & 255, (val >>> 8) & 255, val & 255);
+  };
+  const walk = (v) => {
+    if (typeof v === 'number' && v >= 0) head(0, v);
+    else if (typeof v === 'number' && v < 0) head(1, -1 - v);
+    else if (Buffer.isBuffer(v)) { head(2, v.length); out.push(...v); }
+    else if (typeof v === 'string') { const b = Buffer.from(v); head(3, b.length); out.push(...b); }
+    else if (Array.isArray(v)) { head(4, v.length); v.forEach(walk); }
+    else {
+      const ks = Object.keys(v);
+      head(5, ks.length);
+      for (const k of ks) { walk(/^-?\d+$/.test(k) ? Number(k) : k); walk(v[k]); }
+    }
+  };
+  walk(value);
+  return Buffer.from(out);
+}
+// 测试用 ES256 密钥对与 COSE 公钥(EC2/P-256/ES256,与真实认证器产物同构)
+const pkKeys = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
+const pkJwk = pkKeys.publicKey.export({ format: 'jwk' });
+const pkCose = cborEncode({
+  1: 2, 3: -7, [-1]: 1,
+  [-2]: Buffer.from(pkJwk.x, 'base64url'),
+  [-3]: Buffer.from(pkJwk.y, 'base64url'),
+});
+const PK_RP_ID = new URL(BASE).hostname; // 与服务端 rpId(issuer hostname)一致
+
+/** authenticatorData:rpIdHash + flags + signCount(+ attestedCredentialData:仅注册时) */
+const makeAuthData = ({ flags = 0x05, counter = 0, credId = null } = {}) => {
+  const head = Buffer.alloc(37);
+  crypto.createHash('sha256').update(PK_RP_ID).digest().copy(head, 0);
+  head[32] = flags;
+  head.writeUInt32BE(counter, 33);
+  if (!credId) return head;
+  const len = Buffer.alloc(2);
+  len.writeUInt16BE(credId.length);
+  return Buffer.concat([head, Buffer.alloc(16, 0xab), len, credId, pkCose]);
+};
+
+/** 注册 attestation(fmt 'none' 或 'packed' 自签):clientDataJSON + attestationObject */
+const makeAttestation = ({ challenge, credId, origin = BASE, fmt = 'none' } = {}) => {
+  const cd = Buffer.from(JSON.stringify({ type: 'webauthn.create', challenge, origin }));
+  const authData = makeAuthData({ flags: 0x45, credId });
+  let attStmt = {};
+  if (fmt === 'packed') {
+    attStmt = { alg: -7, sig: crypto.sign('sha256', Buffer.concat([authData, crypto.createHash('sha256').update(cd).digest()]), pkKeys.privateKey) };
+  }
+  return {
+    clientDataJSON: cd.toString('base64url'),
+    attestationObject: cborEncode({ fmt, attStmt, authData }).toString('base64url'),
+    transports: ['internal'],
+  };
+};
+
+/** 登录 assertion:对 authData ‖ SHA256(clientDataJSON) 做 ES256 签名 */
+const makeAssertion = ({ challenge, credIdB64, counter = 1, origin = BASE, userHandle = '', corrupt = false } = {}) => {
+  const cd = Buffer.from(JSON.stringify({ type: 'webauthn.get', challenge, origin }));
+  const authData = makeAuthData({ flags: 0x05, counter });
+  let sig = crypto.sign('sha256', Buffer.concat([authData, crypto.createHash('sha256').update(cd).digest()]), pkKeys.privateKey);
+  if (corrupt) { sig = Buffer.from(sig); sig[7] ^= 0xff; }
+  return {
+    id: credIdB64, rawId: credIdB64, type: 'public-key',
+    response: {
+      clientDataJSON: cd.toString('base64url'),
+      authenticatorData: authData.toString('base64url'),
+      signature: sig.toString('base64url'),
+      userHandle,
+    },
+  };
+};
+
 /* ---------- 本地 mock Microsoft(OIDC 提供方,与被测服务并行运行) ---------- */
 function startMockMs({ clientId = 'smoke-ms-client', sub = 'ms-sub-123', email = 'msuser@example.com', name = 'MS 测试用户' } = {}) {
   const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
@@ -2260,6 +2339,209 @@ async function main() {
     ok('Logo:清空 Logo 字段后上传文件同步清理(无孤儿文件)', r.status === 302 && location(r).includes('msg=')
       && clients.byId(logoAppId).logo_url === '' && !fs.existsSync(path.join(uploadsDirSmoke, `${logoAppId}.png`)));
 
+
+    /* ---------- Passkey/WebAuthn:模拟真认证器(零依赖 CBOR + ES256 手造凭据) ---------- */
+    const webauthnModel = await import('../src/models/webauthn.js');
+    const pkUser = users.create({ username: 'passy', passwordHash: hashPassword('Passy#12345'), name: '帕斯基' });
+    const pkHandle = Buffer.from(pkUser.id).toString('base64url');
+    const pkJar = new Jar();
+    const pkPreLogin = await call(pkJar, '/api/login', { method: 'POST', json: { username: 'passy', password: 'Passy#12345' } });
+    ok('Passkey:前置用户经 API 登录成功', pkPreLogin.status === 200 && (await pkPreLogin.json()).ok === true);
+
+    // JS 资产:匿名可访问且 Content-Type 正确
+    r = await fetch(BASE + '/assets/webauthn.js');
+    ok('Passkey:webauthn.js 资产匿名可访问且 Content-Type 正确', r.status === 200
+      && /javascript/.test(r.headers.get('content-type') || '')
+      && (await r.text()).includes('navigator.credentials'));
+
+    // 登录页埋点:按钮 / 状态行 / defer 脚本引用
+    r = await call(new Jar(), '/login');
+    const pkLoginHtml0 = await r.text();
+    ok('Passkey:登录页含按钮、状态行与脚本引用', pkLoginHtml0.includes('id="passkey-login-btn"')
+      && pkLoginHtml0.includes('id="passkey-status"')
+      && pkLoginHtml0.includes('<script src="/assets/webauthn.js" defer></script>'));
+
+    // 未登录 JSON 接口 401(api.js 风格,不重定向)
+    r = await call(new Jar(), '/webauthn/register/options');
+    ok('Passkey:未登录请求注册参数返回 401', r.status === 401 && (await r.json()).error === 'unauthenticated');
+
+    // 匿名登录参数:discoverable(allowCredentials 为空)
+    r = await call(new Jar(), '/webauthn/login/options');
+    const pkAnonOpt = await r.json();
+    ok('Passkey:匿名可取登录参数且 allowCredentials 为空(discoverable)', r.status === 200
+      && !!pkAnonOpt.challengeId && (pkAnonOpt.challenge || '').length >= 43
+      && Array.isArray(pkAnonOpt.allowCredentials) && pkAnonOpt.allowCredentials.length === 0
+      && pkAnonOpt.rpId === PK_RP_ID && pkAnonOpt.userVerification === 'preferred');
+
+    // 注册辅助:options → 手造 attestation → verify
+    const regOnce = async (jar, { name = '测试密钥', credId, challengeOverride, originOverride, noHeader = false } = {}) => {
+      const optRes = await call(jar, '/webauthn/register/options', { headers: { 'X-Requested-With': 'JSON' } });
+      if (optRes.status !== 200) return { status: optRes.status, body: await optRes.json() };
+      const opt = (await optRes.json()).publicKey;
+      const att = makeAttestation({
+        challenge: challengeOverride ?? opt.challenge,
+        credId,
+        origin: originOverride ?? BASE,
+      });
+      const vRes = await call(jar, '/webauthn/register/verify', {
+        method: 'POST',
+        json: { name, response: att },
+        headers: noHeader ? {} : { 'X-Requested-With': 'JSON' },
+      });
+      return { status: vRes.status, body: await vRes.json() };
+    };
+
+    // 登录辅助:options → 手造 assertion → verify(独立 jar 承接会话)
+    const loginOnce = async ({ challengeOverride, originOverride, challengeIdOverride, credIdB64, counter = 1, corrupt = false, noHeader = false } = {}) => {
+      const jar = new Jar();
+      const oRes = await call(jar, '/webauthn/login/options');
+      const o = await oRes.json();
+      const assertion = makeAssertion({
+        challenge: challengeOverride ?? o.challenge,
+        credIdB64,
+        counter,
+        origin: originOverride ?? BASE,
+        userHandle: pkHandle,
+        corrupt,
+      });
+      const vRes = await call(jar, '/webauthn/login/verify', {
+        method: 'POST',
+        json: { challengeId: challengeIdOverride ?? o.challengeId, response: assertion },
+        headers: noHeader ? {} : { 'X-Requested-With': 'JSON' },
+      });
+      return { jar, o, status: vRes.status, body: await vRes.json() };
+    };
+
+    // 注册(fmt=none):成功入库,计数器 0
+    const credA = crypto.randomBytes(32).toString('base64url');
+    let pkR = await regOnce(pkJar, { name: '主力密钥', credId: Buffer.from(credA, 'base64url') });
+    ok('Passkey:注册(fmt=none)成功且返回名称', pkR.status === 200 && pkR.body.ok === true && pkR.body.name === '主力密钥');
+    ok('Passkey:凭据已入库且计数器为 0', webauthnModel.countForUser(pkUser.id) === 1
+      && webauthnModel.byId(credA).counter === 0 && webauthnModel.byId(credA).name === '主力密钥');
+
+    // 重复凭据 ID
+    pkR = await regOnce(pkJar, { credId: Buffer.from(credA, 'base64url') });
+    ok('Passkey:重复凭据 ID 注册被拒', pkR.status === 400 && pkR.body.error === 'duplicate');
+
+    // attestation origin / challenge 错误;缺 Ajax 头
+    pkR = await regOnce(pkJar, { credId: crypto.randomBytes(32), originOverride: 'https://evil.com' });
+    ok('Passkey:attestation origin 错误被拒', pkR.status === 400 && pkR.body.error === 'origin_mismatch');
+    pkR = await regOnce(pkJar, { credId: crypto.randomBytes(32), challengeOverride: 'wrong-challenge' });
+    ok('Passkey:attestation challenge 错误被拒', pkR.status === 400 && pkR.body.error === 'challenge_mismatch');
+    r = await call(pkJar, '/webauthn/register/verify', {
+      method: 'POST', json: { name: 'x', response: { clientDataJSON: 'e30', attestationObject: 'e30' } },
+    });
+    ok('Passkey:注册校验缺 X-Requested-With 头被拒(403)', r.status === 403);
+
+    // packed 自证明:合法通过,签名篡改被拒
+    const pkPackedReg = async (corrupt = false) => {
+      const opt = (await (await call(pkJar, '/webauthn/register/options')).json()).publicKey;
+      const cd = Buffer.from(JSON.stringify({ type: 'webauthn.create', challenge: opt.challenge, origin: BASE }));
+      const credId = crypto.randomBytes(32);
+      const ad = makeAuthData({ flags: 0x45, credId });
+      let sig = crypto.sign('sha256', Buffer.concat([ad, crypto.createHash('sha256').update(cd).digest()]), pkKeys.privateKey);
+      if (corrupt) { sig = Buffer.from(sig); sig[9] ^= 0xff; }
+      return call(pkJar, '/webauthn/register/verify', {
+        method: 'POST',
+        json: { name: '自签密钥', response: {
+          clientDataJSON: cd.toString('base64url'),
+          attestationObject: cborEncode({ fmt: 'packed', attStmt: { alg: -7, sig }, authData: ad }).toString('base64url'),
+        } },
+        headers: { 'X-Requested-With': 'JSON' },
+      });
+    };
+    r = await pkPackedReg(false);
+    ok('Passkey:packed 自证明 attestation 注册成功', r.status === 200 && (await r.json()).ok === true);
+    r = await pkPackedReg(true);
+    ok('Passkey:packed 伪造签名被拒', r.status === 400 && (await r.json()).error === 'attestation_invalid');
+
+    // 补满 8 个上限,第 9 个被拒
+    for (let i = 0; i < 6 && webauthnModel.countForUser(pkUser.id) < 8; i++) {
+      pkR = await regOnce(pkJar, { name: `补充密钥 ${i + 1}`, credId: crypto.randomBytes(32) });
+    }
+    ok('Passkey:可注册至 8 个上限', webauthnModel.countForUser(pkUser.id) === 8);
+    pkR = await regOnce(pkJar, { credId: crypto.randomBytes(32) });
+    ok('Passkey:超过 8 个上限被拒', pkR.status === 400 && pkR.body.error === 'too_many');
+
+    // 登录参数带 username:列出该用户全部凭据 ID
+    r = await call(new Jar(), '/webauthn/login/options?username=passy');
+    const pkWithUser = await r.json();
+    ok('Passkey:登录参数带 username 时列出该用户凭据', pkWithUser.allowCredentials.length === 8
+      && pkWithUser.allowCredentials.some((c) => c.id === credA));
+
+    // assertion:未知凭据 → 404 no_credentials
+    let pkL = await loginOnce({ credIdB64: crypto.randomBytes(32).toString('base64url') });
+    ok('Passkey:未知凭据返回 404 no_credentials', pkL.status === 404 && pkL.body.error === 'no_credentials');
+
+    // 缺 Ajax 头;未知 challengeId
+    {
+      const jar = new Jar();
+      const o = await (await call(jar, '/webauthn/login/options')).json();
+      r = await call(jar, '/webauthn/login/verify', {
+        method: 'POST',
+        json: { challengeId: o.challengeId, response: makeAssertion({ challenge: o.challenge, credIdB64: credA, counter: 1, userHandle: pkHandle }) },
+      });
+      ok('Passkey:登录校验缺 X-Requested-With 头被拒(403)', r.status === 403);
+    }
+    pkL = await loginOnce({ challengeIdOverride: 'bogus-challenge-id' });
+    ok('Passkey:未知 challengeId 被拒', pkL.status === 400 && pkL.body.error === 'challenge_expired');
+
+    // 伪造签名 / origin 错 / challenge 错
+    pkL = await loginOnce({ credIdB64: credA, corrupt: true });
+    ok('Passkey:assertion 伪造签名被拒(401)', pkL.status === 401 && pkL.body.error === 'invalid_credentials');
+    pkL = await loginOnce({ credIdB64: credA, originOverride: 'https://evil.com' });
+    ok('Passkey:assertion origin 错误被拒', pkL.status === 401 && pkL.body.error === 'invalid_credentials');
+    pkL = await loginOnce({ credIdB64: credA, challengeOverride: 'wrong-challenge' });
+    ok('Passkey:assertion challenge 错误被拒', pkL.status === 401 && pkL.body.error === 'invalid_credentials');
+
+    // 正常登录(counter=1):200 + Set-Cookie sid + 会话生效 + 计数器更新
+    pkL = await loginOnce({ credIdB64: credA, counter: 1 });
+    ok('Passkey:正常 assertion 登录成功', pkL.status === 200 && pkL.body.ok === true && pkL.body.user?.username === 'passy');
+    ok('Passkey:登录响应 Set-Cookie 携带 sid', !!pkL.jar.map.get('sid'));
+    const pkSess = await (await call(pkL.jar, '/api/session')).json();
+    ok('Passkey:登录后 /api/session 为 authenticated', pkSess.authenticated === true && pkSess.user.username === 'passy');
+    ok('Passkey:登录后计数器更新为 1', webauthnModel.byId(credA).counter === 1);
+
+    // 计数器回退:按克隆拒绝并记审计
+    pkL = await loginOnce({ credIdB64: credA, counter: 0 });
+    ok('Passkey:计数器回退按克隆拒绝(409)', pkL.status === 409 && pkL.body.error === 'credential_cloned');
+    ok('Passkey:克隆嫌疑计入审计', auditM.list({ action: 'auth.passkey_clone_suspect', limit: 10 })
+      .some((row) => row.detail === credA));
+
+    // 计数器递增后可再次登录
+    pkL = await loginOnce({ credIdB64: credA, counter: 2 });
+    ok('Passkey:计数器递增后可再次登录', pkL.status === 200 && webauthnModel.byId(credA).counter === 2);
+
+    // 账号设置页:管理卡片、列表项与删除按钮
+    r = await call(pkJar, '/account');
+    const pkAcct = await r.text();
+    ok('Passkey:账号设置页渲染管理卡片与脚本引用', pkAcct.includes('id="passkey-register-btn"')
+      && pkAcct.includes('id="passkey-name"') && pkAcct.includes('id="passkey-list"')
+      && pkAcct.includes('<script src="/assets/webauthn.js" defer></script>'));
+    const pkAcctForm = extractHidden(pkAcct);
+    ok('Passkey:列表项带凭据 ID 的删除按钮', pkAcct.includes(`data-cred-id="${credA}"`)
+      && pkAcct.includes(`action="/account/webauthn/${credA}/delete"`));
+
+    // 越权:不能删除其它用户的凭据(双条件删除)
+    webauthnModel.create({ id: 'bob-pk-cred', userId: bob.id, name: 'Bob 密钥', publicKey: pkCose.toString('base64url') });
+    r = await call(pkJar, '/account/webauthn/bob-pk-cred/delete', { method: 'POST', form: { _csrf: pkAcctForm._csrf } });
+    ok('Passkey:不能删除其它用户的凭据(防越权)', r.status === 302 && location(r).startsWith('/account?err=')
+      && !!webauthnModel.byId('bob-pk-cred'));
+
+    // 删除自己的凭据
+    r = await call(pkJar, `/account/webauthn/${credA}/delete`, { method: 'POST', form: { _csrf: pkAcctForm._csrf } });
+    ok('Passkey:删除凭据成功回账号页且库中消失', r.status === 302 && location(r).startsWith('/account?msg=')
+      && !webauthnModel.byId(credA) && webauthnModel.countForUser(pkUser.id) === 7);
+
+    // 删除后凭据不可再登录
+    pkL = await loginOnce({ credIdB64: credA, counter: 3 });
+    ok('Passkey:删除后的凭据不可登录', pkL.status === 404 && pkL.body.error === 'no_credentials');
+
+    // 审计:注册/删除/登录留痕
+    ok('Passkey:注册计入审计(account.passkey_registered)', auditM.list({ action: 'account.passkey_registered', limit: 20 }).length === 8);
+    ok('Passkey:删除计入审计(account.passkey_deleted)', auditM.list({ action: 'account.passkey_deleted', limit: 10 }).length === 1);
+    ok('Passkey:登录计入审计(auth.passkey_login)', auditM.list({ action: 'auth.passkey_login', limit: 10 }).length === 2);
+    webauthnModel.remove('bob-pk-cred', bob.id); // 清理越权测试夹具
 
     /* ---------- 配置向导增强:管理员重新运行向导(放在最后,尾部恢复 setup_done=1) ---------- */
     r = await call(aj, '/admin');

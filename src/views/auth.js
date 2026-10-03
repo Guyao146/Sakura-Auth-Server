@@ -2,6 +2,7 @@ import { escapeHtml as esc, fmtTime } from '../core/util.js';
 import { authPage, adminPage, brandPage } from './layout.js';
 import { banner, badge, hiddenInputs, kvRow, scopeItems, scopeIcon, SCOPE_NAMES } from './components.js';
 import { getRuntime } from '../core/runtime.js';
+import * as webauthnModel from '../models/webauthn.js';
 
 /* 登录页品牌面板的特性条目:线性小图标随 currentColor,零外部资源 */
 const featIcon = (paths) =>
@@ -26,13 +27,14 @@ const MS_LOGO = `<svg width="16" height="16" viewBox="0 0 23 23" aria-hidden="tr
 
 /** 登录页(品牌化分栏:左侧品牌渐变面板 + 右侧登录表单;窄屏仅表单)。
  *  msEnabled 缺省时回退读运行时配置(启用后表单下方出现 Microsoft 登录入口)。 */
-export function loginPage({ theme, siteName, csrf, next, err, username = '', allowRegister = false, msg = '', msEnabled }) {
+export function loginPage({ theme, siteName, csrf, next, err, username = '', allowRegister = false, msg = '', msEnabled, showPasskey = true }) {
   const rt = getRuntime();
   const showMs = msEnabled !== undefined ? !!msEnabled : !!(rt && rt.msOAuth && rt.msOAuth.enabled);
   return brandPage({
     theme, siteName, title: `登录 · ${siteName}`,
     tagline: '这一站,管好你所有系统的登录。',
     features: LOGIN_FEATURES,
+    scripts: showPasskey ? ['/assets/webauthn.js'] : [],
     content: `
       ${banner(err ? esc(err) : '', 'err')}
       ${banner(msg ? esc(msg) : '', 'ok')}
@@ -57,6 +59,16 @@ export function loginPage({ theme, siteName, csrf, next, err, username = '', all
       <div class="actions" style="margin-top:var(--s3)">
         <a class="btn" href="/auth/microsoft" style="flex:1;justify-content:center;padding:var(--s3) var(--s4);font-size:15px">${MS_LOGO}使用 Microsoft 账号登录</a>
       </div>` : ''}
+      ${showPasskey ? `
+      <div style="display:flex;align-items:center;gap:var(--s3);margin:var(--s4) 0 0">
+        <span style="flex:1;border-top:1px solid var(--border)"></span>
+        <span class="muted small">或</span>
+        <span style="flex:1;border-top:1px solid var(--border)"></span>
+      </div>
+      <div class="actions" style="margin-top:var(--s3)">
+        <button class="btn" type="button" id="passkey-login-btn" style="flex:1;justify-content:center;padding:var(--s3) var(--s4);font-size:15px">使用 Passkey 登录</button>
+      </div>
+      <p class="muted small" id="passkey-status" role="status" style="margin:var(--s2) 0 0;min-height:1.4em"></p>` : ''}
       <p class="muted small" style="margin:var(--s3) 0 0"><a href="/forgot-password">忘记密码?</a></p>
       ${allowRegister ? `<p class="muted small" style="text-align:center;margin:var(--s4) 0 0">还没有账号?<a href="/register${next ? `?next=${encodeURIComponent(next)}` : ''}">注册新账号</a></p>` : ''}`,
   });
@@ -361,9 +373,33 @@ export function accountPage({ theme, siteName, user, csrf, msg, err, twoFa, cur 
       </form>`
       : `<p class="muted small">绑定后,可以使用 Microsoft 账号一键登录,无需再输入本站密码。</p>
       <div class="actions"><a class="btn" href="/auth/microsoft?bind=1">绑定 Microsoft 账号</a></div>`}`;
+  // Passkey 管理区块:凭据列表服务端渲染,删除为普通表单(零 JS 也可用);注册/登录交互由 webauthn.js 承接
+  const passkeyRows = webauthnModel.listForUser(user.id).map((c) => `
+      <div class="app-item">
+        <div style="min-width:0;flex:1">
+          <b style="color:var(--text);font-size:15px">${esc(c.name)}</b>
+          <div class="muted small">注册于 ${fmtTime(c.created_at)}</div>
+        </div>
+        <form method="post" action="/account/webauthn/${encodeURIComponent(c.id)}/delete" style="margin:0">
+          ${hiddenInputs({ _csrf: csrf })}
+          <button class="btn btn-danger btn-sm" type="submit" data-cred-id="${esc(c.id)}">删除</button>
+        </form>
+      </div>`).join('\n');
+  const passkeyBlock = `
+    <hr>
+    <h3>Passkey(无密码登录)</h3>
+    <p class="muted small">注册 Passkey 后,可用指纹 / 面容 / 设备 PIN 一键登录,无需输入密码。每个账号最多 ${webauthnModel.MAX_PER_USER} 个。</p>
+    <div class="card tight" id="passkey-list" style="margin-bottom:var(--s3)">
+      ${passkeyRows || '<p class="muted" style="margin:0">尚未注册任何 Passkey。</p>'}
+    </div>
+    <label for="passkey-name">备注名称(可选)</label>
+    <input type="text" id="passkey-name" maxlength="40" placeholder="如:我的 MacBook" autocomplete="off">
+    <div class="actions"><button class="btn btn-primary" type="button" id="passkey-register-btn">注册 Passkey</button></div>
+    <p class="muted small" id="passkey-status" role="status" style="margin:var(--s2) 0 0;min-height:1.4em"></p>`;
   return adminPage({
     theme, siteName, user, active: 'account', cur,
     title: `账号设置 · ${siteName}`,
+    scripts: ['/assets/webauthn.js'],
     content: `
       ${banner(msg ? esc(msg) : '', 'ok')}
       ${banner(err ? esc(err) : '', 'err')}
@@ -386,7 +422,8 @@ export function accountPage({ theme, siteName, user, csrf, msg, err, twoFa, cur 
       </form>
       <hr>
       ${twofaBlock}
-      ${msBlock}`,
+      ${msBlock}
+      ${passkeyBlock}`,
   });
 }
 

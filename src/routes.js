@@ -16,6 +16,7 @@ import * as audit from './services/audit.js';
 import * as wizard from './services/setup/wizard.js';
 import * as portal from './services/portal.js';
 import * as api from './services/api.js';
+import * as webauthn from './services/webauthn.js';
 import { showLanding } from './services/home.js';
 import { setTheme } from './views/theme.js';
 import { showHealth } from './views/health.js';
@@ -62,6 +63,17 @@ export function registerRoutes() {
   r('POST', '/account/2fa/start', account.startTwoFa, { auth: 'user' });
   r('POST', '/account/2fa/confirm', account.confirmTwoFa, { auth: 'user' });
   r('POST', '/account/2fa/disable', account.disableTwoFa, { auth: 'user' });
+
+  // WebAuthn / Passkey(独立命名空间;JSON 接口按 api.js 风格由 handler 自行判定登录态,
+  // 未登录 401 而非重定向,便于前端 fetch 处理;写操作要求 X-Requested-With: JSON 头)
+  r('GET', '/webauthn/register/options', webauthn.registerOptions);
+  r('POST', '/webauthn/register/verify', webauthn.registerVerify);
+  r('GET', '/webauthn/login/options', webauthn.loginOptions);
+  r('POST', '/webauthn/login/verify', webauthn.loginVerify);
+  // 前端脚本资产(同源,CSP default-src 'self' 天然放行;全项目唯一页面 JS)
+  r('GET', '/assets/webauthn.js', webauthn.serveJs);
+  // 凭据删除:表单提交,走会话 CSRF 与登录态重定向(web 风格,区别于上面的 JSON 接口)
+  r('POST', '/account/webauthn/:id/delete', webauthn.deleteCredential, { auth: 'user' });
 
   // 邮件找回密码(匿名;防枚举由服务层保证)
   r('GET', '/forgot-password', reset.showForgot);

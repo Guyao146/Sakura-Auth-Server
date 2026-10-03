@@ -255,8 +255,12 @@ function head(theme, title) {
 </head>`;
 }
 
+/** 页面级脚本标签(defer,置于 </body> 前;全项目仅 WebAuthn 页面使用) */
+const scriptTags = (scripts) =>
+  (scripts || []).map((src) => `<script src="${esc(src)}" defer></script>`).join('\n');
+
 /** 认证类页面骨架(登录 / 同意 / 向导):居中卡片;wide 供授权页等需要更宽的场景 */
-export function authPage({ theme, siteName, title, content, footer = true, wide = false }) {
+export function authPage({ theme, siteName, title, content, footer = true, wide = false, scripts = [] }) {
   return `${head(theme, title)}
 <body>
 <div class="auth-wrap"><div class="auth-col${wide ? ' auth-col-wide' : ''}">
@@ -266,6 +270,7 @@ export function authPage({ theme, siteName, title, content, footer = true, wide 
   </div>
   ${footer ? '<p class="auth-foot">SakuraID · 由樱落生态设计语言驱动</p>' : ''}
 </div></div>
+${scriptTags(scripts)}
 </body></html>`;
 }
 
@@ -275,7 +280,7 @@ export function authPage({ theme, siteName, title, content, footer = true, wide 
  * wide=true 时右栏加宽(同意页的徽标行 / 权限清单需要更多横向空间),登录页不受影响。
  */
 export function brandPage({
-  theme, siteName, title, tagline = '', features = [], content, footer = true, cur = '/login', wide = false,
+  theme, siteName, title, tagline = '', features = [], content, footer = true, cur = '/login', wide = false, scripts = [],
 }) {
   const feats = features.map((f) => `
       <li><span class="feat-ico">${f.icon}</span><span><b>${esc(f.title)}</b><small>${esc(f.desc)}</small></span></li>`).join('\n');
@@ -299,11 +304,12 @@ export function brandPage({
     ${footer ? `<p class="login-form-foot">SakuraID · ${themeToggle(theme, cur)}</p>` : ''}
   </div></main>
 </div>
+${scriptTags(scripts)}
 </body></html>`;
 }
 
 /** 控制台骨架:左侧玻璃侧栏 + 内容区;导航按身份渲染 —— 管理员含管理项,普通用户仅「我的」分组 */
-export function adminPage({ theme, siteName, user, active = '', title, content, cur = '/', actions = '', headTitle = '' }) {
+export function adminPage({ theme, siteName, user, active = '', title, content, cur = '/', actions = '', headTitle = '', scripts = [] }) {
   const link = (href, label, key) =>
     `<a href="${href}"${key === active ? ' class="active"' : ''}>${label}</a>`;
   const adminNav = user.is_admin
@@ -337,6 +343,7 @@ ${actions || headTitle ? `<div class="main-head">
 </div>` : ''}
 ${content}
 </main>
+${scriptTags(scripts)}
 </body></html>`;
 }
 

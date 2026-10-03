@@ -113,6 +113,16 @@ CREATE TABLE IF NOT EXISTS group_members (
   PRIMARY KEY (group_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_group_members_user ON group_members(user_id);
+CREATE TABLE IF NOT EXISTS webauthn_credentials (
+  id          TEXT PRIMARY KEY,
+  user_id     TEXT NOT NULL,
+  name        TEXT NOT NULL DEFAULT 'Passkey',
+  public_key  TEXT NOT NULL,
+  counter     INTEGER NOT NULL DEFAULT 0,
+  transports  TEXT NOT NULL DEFAULT '',
+  created_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_webauthn_user ON webauthn_credentials(user_id);
 CREATE TABLE IF NOT EXISTS audit_logs (
   id     TEXT PRIMARY KEY,
   ts     INTEGER NOT NULL,
