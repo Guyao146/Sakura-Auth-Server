@@ -1,9 +1,10 @@
+import crypto from 'node:crypto';
 import { signJwt } from '../../core/jwt.js';
 import { getRuntime } from '../../core/runtime.js';
 import * as tokens from '../../models/tokens.js';
 import * as groups from '../../models/groups.js';
 import { SCOPES } from '../../core/config.js';
-import { sha256b64url, nowSec } from '../../core/crypto.js';
+import { nowSec } from '../../core/crypto.js';
 
 /** 请求 scope 与客户端允许 scope 取交集(按 SCOPES 顺序稳定输出) */
 export function filterScopes(requested, allowed) {
@@ -66,6 +67,10 @@ export function issueRefreshToken({ client, user, scope }) {
   return token;
 }
 
+/** OIDC Core §3.1.3.6:at_hash = access token SHA-256 摘要左半(16 字节)的 base64url 编码(22 字符) */
+const atHash = (accessToken) =>
+  crypto.createHash('sha256').update(accessToken).digest().subarray(0, 16).toString('base64url');
+
 /** OIDC id_token:openid scope 时返回 */
 export function mintIdToken({ client, user, scope, authTime, nonce, accessToken }) {
   if (!scope.includes('openid') || !user) return null;
@@ -76,7 +81,7 @@ export function mintIdToken({ client, user, scope, authTime, nonce, accessToken 
     aud: client.client_id,
     client_id: client.client_id,
     auth_time: authTime,
-    at_hash: sha256b64url(accessToken).slice(0, 43),
+    at_hash: atHash(accessToken),
     ...claims,
   };
   if (nonce) payload.nonce = nonce;

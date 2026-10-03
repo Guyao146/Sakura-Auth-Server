@@ -81,17 +81,19 @@ export function launch(ctx) {
     // 应用回调后凭 code 即可正常换取令牌(IdP-initiated 委托)
     const verifier = randomToken(48);
     if (launchStash.size > 500) launchStash.delete(launchStash.keys().next().value);
-    launchStash.set(ctx.session.id_hash, { verifier, clientId: app.client_id });
+    // 键 = 会话+应用:同一会话先后启动多个 PKCE 应用互不覆盖(verifier 各自随码落库)
+    launchStash.set(`${ctx.session.id_hash}:${app.client_id}`, { verifier });
     params.set('code_challenge', sha256b64url(verifier));
     params.set('code_challenge_method', 'S256');
   }
   redirect(ctx.res, '/authorize?' + params.toString());
 }
 
-/** authorize 发码时消费该会话的门户启动记录;无则返回 null */
+/** authorize 发码时消费该会话对某应用的门户启动记录;无则返回 null */
 export const consumeLaunch = (sessionIdHash, clientId) => {
-  const rec = launchStash.get(sessionIdHash);
-  if (!rec || rec.clientId !== clientId) return null;
-  launchStash.delete(sessionIdHash);
+  const key = `${sessionIdHash}:${clientId}`;
+  const rec = launchStash.get(key);
+  if (!rec) return null;
+  launchStash.delete(key);
   return rec.verifier;
 };

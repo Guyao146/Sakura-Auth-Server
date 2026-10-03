@@ -286,6 +286,10 @@ async function main() {
     const { verifyJwt } = await import('../src/core/jwt.js');
     const idPayload = verifyJwt(tok.id_token);
     ok('id_token 验签通过且带 nonce/sub', !!idPayload && idPayload.nonce === nonce && idPayload.preferred_username === 'bob');
+    // OIDC Core §3.1.3.6:at_hash = access token SHA-256 摘要左半(16 字节)的 base64url(22 字符)
+    const expectAtHash = crypto.createHash('sha256').update(tok.access_token).digest().subarray(0, 16).toString('base64url');
+    ok('id_token 的 at_hash 为 access token SHA-256 左半摘要', idPayload.at_hash === expectAtHash
+      && idPayload.at_hash.length === 22, `got=${idPayload.at_hash} want=${expectAtHash}`);
 
     const ui = await fetch(BASE + '/userinfo', { headers: { Authorization: `Bearer ${tok.access_token}` } });
     const uiBody = await ui.json();
@@ -326,6 +330,23 @@ async function main() {
     });
     const tok3 = await r.json();
     ok('正确 verifier 再次换取成功', r.status === 200 && !!tok3.access_token);
+
+    // PKCE verifier 字符集校验(RFC 7636 §4.1):plain 模式下 challenge 含 unreserved 之外的字符,
+    // 换取时 verifier 必须被字符集校验拒绝
+    r = await call(uj, '/authorize?' + new URLSearchParams({
+      client_id: web.client_id, redirect_uri: 'http://127.0.0.1:8080/cb',
+      response_type: 'code', scope: 'openid profile', state: 'pkce-cs',
+      code_challenge: 'a'.repeat(42) + '+', code_challenge_method: 'plain',
+    }).toString());
+    const codeCs = new URL(location(r), BASE).searchParams.get('code');
+    r = await fetch(BASE + '/token', {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code', code: codeCs, redirect_uri: 'http://127.0.0.1:8080/cb',
+        client_id: web.client_id, code_verifier: 'a'.repeat(42) + '+',
+      }).toString(),
+    });
+    ok('PKCE:verifier 含 RFC 7636 之外的字符被拒绝', r.status === 400 && (await r.json()).error === 'invalid_grant');
 
     /* ---------- 刷新令牌轮换 ---------- */
     r = await fetch(BASE + '/token', {
@@ -383,6 +404,23 @@ async function main() {
       body: new URLSearchParams({ grant_type: 'client_credentials' }).toString(),
     });
     ok('错误密钥返回 invalid_client', r.status === 401 && (await r.json()).error === 'invalid_client');
+    // RFC 6749 §5.2:经 Authorization 头认证失败,401 必须携带匹配方案的 WWW-Authenticate
+    ok('Basic 认证失败时 401 携带 WWW-Authenticate 挑战(RFC 6749 §5.2)',
+      (r.headers.get('www-authenticate') || '').startsWith('Basic'));
+
+    // RFC 6749 §2.3.1:Basic 的用户名/密码为 application/x-www-form-urlencoded 编码,
+    // 含特殊字符的 client_secret 以编码形式提交时必须被正确解码
+    const encApp = clients.create({
+      name: 'Smoke Encoded', redirectUris: ['http://127.0.0.1:8080/enc'],
+      scopes: 'openid', isPublic: false, pkceRequired: false,
+      secretHash: hashPassword('svc%sec@123'),
+    });
+    r = await fetch(BASE + '/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Authorization: basic(encApp.client_id, encodeURIComponent('svc%sec@123')) },
+      body: new URLSearchParams({ grant_type: 'client_credentials' }).toString(),
+    });
+    ok('Basic 认证:client_secret 的表单编码(RFC 6749 §2.3.1)被正确解码', r.status === 200 && !!(await r.json()).access_token);
 
     /* ---------- 登录流转:无 next 登录直达门户,登出回登录页带提示 ---------- */
     const qj = new Jar();
@@ -692,6 +730,35 @@ async function main() {
     const gConsentHtml = await r.text();
     ok('权限组:组内用户(∈dev)进入同意页', r.status === 200 && gConsentHtml.includes('请求访问你的账号'));
     const gForm = extractHidden(gConsentHtml);
+    // POST /authorize 直发绕过:PKCE 必选应用缺少 code_challenge 时必须拒绝(与 GET 同约束)
+    r = await call(fj, '/authorize', {
+      method: 'POST',
+      form: {
+        _csrf: gForm._csrf, response_type: 'code', client_id: web.client_id,
+        redirect_uri: 'http://127.0.0.1:8080/cb', decision: 'approve', state: 'bypass-st',
+      },
+    });
+    ok('POST /authorize:PKCE 必选应用缺少 code_challenge 被拒', r.status === 302
+      && new URL(location(r), BASE).searchParams.get('error') === 'invalid_request', location(r));
+    // 错误重定向(RFC 6749 §4.1.2.1):拒绝授权必须 302 回跳并携带 error=access_denied 与 state
+    r = await call(fj, '/authorize', {
+      method: 'POST',
+      form: {
+        _csrf: gForm._csrf, response_type: 'code', client_id: svc.client_id,
+        redirect_uri: 'http://127.0.0.1:8080/any', decision: 'deny', state: 'deny-st',
+      },
+    });
+    ok('POST /authorize:拒绝授权回跳 error=access_denied 并透传 state', r.status === 302
+      && new URL(location(r), BASE).searchParams.get('error') === 'access_denied'
+      && new URL(location(r), BASE).searchParams.get('state') === 'deny-st', location(r));
+    // GET 侧错误重定向:response_type 非法时 302 携带 error 而非 500
+    r = await call(fj, '/authorize?' + new URLSearchParams({
+      client_id: web.client_id, redirect_uri: 'http://127.0.0.1:8080/cb',
+      response_type: 'token', state: 'bad-rt',
+    }).toString());
+    ok('GET /authorize:非法 response_type 回跳 error=unsupported_response_type', r.status === 302
+      && new URL(location(r), BASE).searchParams.get('error') === 'unsupported_response_type'
+      && new URL(location(r), BASE).searchParams.get('state') === 'bad-rt', location(r));
     r = await call(fj, '/authorize', { method: 'POST', form: { ...gForm, decision: 'approve', remember: 'on' } });
     const gCode = new URL(location(r), BASE).searchParams.get('code');
     ok('权限组:组内用户授权通过并签发 code', r.status === 302 && !!gCode && !location(r).includes('error'));
@@ -948,6 +1015,24 @@ async function main() {
     const portalTok = await r.json();
     ok('门户:PKCE 应用经门户启动后可无 verifier 换取令牌', r.status === 200 && !!portalTok.access_token,
       JSON.stringify(portalTok).slice(0, 120));
+
+    // 连续启动:先后启动两个 PKCE 应用,先启动应用的 verifier 不应被后启动的覆盖
+    r = await call(fj, `/apps/launch/${web.client_id}`);
+    const firstLaunch = location(r);
+    r = await call(fj, `/apps/launch/${gApp.client_id}`);
+    ok('门户:连续启动第二个应用进入授权流程', r.status === 302 && location(r).startsWith('/authorize?'));
+    r = await call(fj, firstLaunch); // 已记住授权,直接发码
+    const firstCb = new URL(location(r), BASE);
+    r = await fetch(BASE + '/token', {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code', code: firstCb.searchParams.get('code'),
+        redirect_uri: 'http://127.0.0.1:8080/cb', client_id: web.client_id,
+      }).toString(),
+    });
+    const firstTok = await r.json();
+    ok('门户:连发两个应用后先启动的仍可无 verifier 换令牌(verifier 不被覆盖)',
+      r.status === 200 && !!firstTok.access_token, JSON.stringify(firstTok).slice(0, 120));
 
     r = await call(nj2, `/apps/launch/${gApp.client_id}`);
     const noahLaunch = await r.text();
@@ -1949,6 +2034,19 @@ async function main() {
     const regAfter = await call(new Jar(), '/register');
     ok('向导:完成后首页未登录重定向登录页', homeAfter.status === 302 && location(homeAfter) === '/login');
     ok('向导:完成后注册开关生效且注册页可用', regAfter.status === 200 && (await regAfter.text()).includes('确认密码'));
+
+    /* ---------- 模型层补充:consents 合并语义(重复授权按并集合并) ---------- */
+    const consentsM = await import('../src/models/consents.js');
+    const mergeApp = clients.create({
+      name: 'Merge Probe', redirectUris: ['http://127.0.0.1:8080/merge'],
+      scopes: 'openid profile email', isPublic: true, pkceRequired: false,
+    });
+    consentsM.grant(bob.id, mergeApp.client_id, 'openid profile');
+    consentsM.grant(bob.id, mergeApp.client_id, 'email');
+    ok('consents:重复授权按并集合并(既有 scope 不丢失)',
+      consentsM.get(bob.id, mergeApp.client_id).scope === 'openid profile email');
+    consentsM.revoke(bob.id, mergeApp.client_id);
+    clients.remove(mergeApp.client_id); // 清理探针应用
 
     console.log(failed ? `\n${failed} 项失败` : '\n全部通过 ✔');
   } finally {

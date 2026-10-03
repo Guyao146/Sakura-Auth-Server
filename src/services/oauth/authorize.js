@@ -31,7 +31,8 @@ function buildRedirect(uri, params) {
   return uri + (uri.includes('?') ? '&' : '?') + q.toString();
 }
 
-const errRedirect = (uri, obj) => redirect(null, buildRedirect(uri, obj));
+// 错误重定向必须传真实响应对象:传 null 会让 redirect() 内部 setHeader 抛错,错误重定向整体失效
+const errRedirect = (res, uri, obj) => redirect(res, buildRedirect(uri, obj));
 
 /**
  * 应用按权限组限制访问:allowed_groups 非空且用户不属于其中任何组时,
@@ -65,7 +66,7 @@ export function authorizeGet(ctx) {
   const client = resolved.client;
   const state = q.get('state') || '';
   const bad = (error, description) =>
-    errRedirect(redirectUri, { error, error_description: description, state });
+    errRedirect(ctx.res, redirectUri, { error, error_description: description, state });
 
   if (q.get('response_type') !== 'code') return bad('unsupported_response_type', '仅支持 response_type=code');
 
@@ -117,7 +118,7 @@ export function authorizePost(ctx) {
   }
   const redirectUri = body.redirect_uri;
   const state = body.state || '';
-  const bad = (error, description) => errRedirect(redirectUri, { error, error_description: description, state });
+  const bad = (error, description) => errRedirect(ctx.res, redirectUri, { error, error_description: description, state });
 
   // 同意页提交同样校验(防止绕过 GET 直接 POST approve)
   if (denyIfNotAllowed(ctx, resolved.client)) return;
@@ -126,8 +127,16 @@ export function authorizePost(ctx) {
   const client = resolved.client;
   const scopeList = filterScopes(body.scope, client.scopes);
 
+  // 与 GET 一致的 PKCE 约束:防止绕过授权页直接 POST 发码跳过强制 PKCE / 伪造 method
+  if (!body.code_challenge && client.pkce_required) {
+    return bad('invalid_request', '该应用已强制要求 PKCE,请携带 code_challenge');
+  }
+  if (body.code_challenge && !['S256', 'plain'].includes(body.code_challenge_method || '')) {
+    return bad('invalid_request', 'code_challenge_method 仅支持 S256 或 plain');
+  }
+
   if (body.decision !== 'approve') {
-    return errRedirect(redirectUri, { error: 'access_denied', error_description: '用户拒绝了授权', state });
+    return errRedirect(ctx.res, redirectUri, { error: 'access_denied', error_description: '用户拒绝了授权', state });
   }
   if (body.remember === 'on') consents.grant(ctx.user.id, client.client_id, scopeList.join(' '));
   record(ctx, 'oauth.consent_granted', `${client.client_id} ${scopeList.join(' ')}`);

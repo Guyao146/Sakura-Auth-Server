@@ -8,8 +8,11 @@ import { sha256b64url, timingSafeEqStr, nowSec } from '../../core/crypto.js';
 import { sendJson } from '../../core/http.js';
 import { filterScopes, issueFull, issueAccessToken, mintIdToken } from './issue.js';
 
-const bad = (ctx, error, description, status = 400) =>
-  sendJson(ctx.res, status, { error, error_description: description });
+const bad = (ctx, error, description, status = 400, headers = {}) =>
+  sendJson(ctx.res, status, { error, error_description: description }, headers);
+
+/** Basic 凭证按 RFC 6749 §2.3.1 是 application/x-www-form-urlencoded 编码,需先解码;非法编码原样返回 */
+const safeDecodeComponent = (s) => { try { return decodeURIComponent(s); } catch { return s; } };
 
 /**
  * RFC 6749 §2.3.1 客户端认证:HTTP Basic 或表单 client_id/client_secret。
@@ -20,32 +23,38 @@ export function authenticateClient(ctx) {
   let id = body.client_id || null;
   let secret = body.client_secret || null;
   const header = ctx.req.headers['authorization'];
-  if (header && header.startsWith('Basic ')) {
+  const viaBasic = !!(header && header.startsWith('Basic '));
+  // RFC 6749 §5.2:客户端经 Authorization 头认证失败时,401 必须携带对应方案的 WWW-Authenticate
+  const challenge = viaBasic ? { 'WWW-Authenticate': 'Basic realm="oauth2"' } : {};
+  if (viaBasic) {
     try {
       const dec = Buffer.from(header.slice(6), 'base64').toString('utf8');
       const i = dec.indexOf(':');
-      id = dec.slice(0, i) || id;
-      secret = dec.slice(i + 1) || secret;
+      // Basic 的用户名/密码为表单编码,先解码再比对(纯 ASCII 值解码后不变)
+      id = safeDecodeComponent(dec.slice(0, i)) || id;
+      secret = safeDecodeComponent(dec.slice(i + 1)) || secret;
     } catch { /* 非法 base64 时回落到表单参数 */ }
   }
-  if (!id) { bad(ctx, 'invalid_client', '缺少 client_id', 401); return null; }
+  if (!id) { bad(ctx, 'invalid_client', '缺少 client_id', 401, challenge); return null; }
   const client = clients.byId(id);
-  if (!client) { bad(ctx, 'invalid_client', 'client_id 无效', 401); return null; }
+  if (!client) { bad(ctx, 'invalid_client', 'client_id 无效', 401, challenge); return null; }
 
   if (client.token_auth === 'none') {
-    if (secret) { bad(ctx, 'invalid_client', '公开客户端不应携带客户端密钥', 401); return null; }
+    if (secret) { bad(ctx, 'invalid_client', '公开客户端不应携带客户端密钥', 401, challenge); return null; }
     return client;
   }
   if (!secret || !client.secret_hash || !verifyPassword(secret, client.secret_hash)) {
-    bad(ctx, 'invalid_client', '客户端认证失败', 401);
+    bad(ctx, 'invalid_client', '客户端认证失败', 401, challenge);
     return null;
   }
   return client;
 }
 
-/** PKCE 校验:S256=sha256(verifier) base64url;plain=原文 */
+/** PKCE 校验:verifier 长度/字符集受限(RFC 7636 §4.1);S256=sha256(verifier) base64url;plain=原文 */
 function pkceOk(verifier, challenge, method) {
   if (typeof verifier !== 'string' || verifier.length < 43 || verifier.length > 128) return false;
+  // RFC 7636 §4.1:verifier 仅允许 unreserved 字符(字母/数字/"-"/"."/"_"/"~")
+  if (!/^[A-Za-z0-9\-._~]+$/.test(verifier)) return false;
   return method === 'S256'
     ? timingSafeEqStr(sha256b64url(verifier), challenge)
     : timingSafeEqStr(verifier, challenge);
