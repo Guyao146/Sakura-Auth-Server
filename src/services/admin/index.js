@@ -11,7 +11,7 @@ import { getRuntime, updateRuntime } from '../../core/runtime.js';
 import * as settingsApi from '../../models/settings.js';
 import { hashPassword } from '../../core/password.js';
 import { randomToken } from '../../core/crypto.js';
-import { splitLines, redirectUri as validUri, httpUrl } from '../../core/util.js';
+import { splitLines, redirectUri as validUri, httpUrl, fmtTime } from '../../core/util.js';
 import { SCOPES, DEFAULT_CLIENT_SCOPES } from '../../core/config.js';
 import { sendHtml, sendJson, redirect } from '../../core/http.js';
 import { logger } from '../../core/logger.js';
@@ -21,7 +21,7 @@ import {
 } from '../../core/upload.js';
 import { dashboardPage, groupsPage, groupDetailPage, usersPage, userFormPage, appsPage, appFormPage, appDetailPage, secretRevealPage } from '../../views/admin.js';
 import { errorPage } from '../../views/error.js';
-import { record } from '../audit.js';
+import { record, csvCell } from '../audit.js';
 import { isValidMsTenant } from '../auth/microsoft.js';
 import * as appHealth from '../app-health.js';
 
@@ -480,6 +480,29 @@ export function appDetail(ctx) {
     issuer: getRuntime().issuer,
     msg: ctx.query.get('msg'), err: ctx.query.get('err'),
   }));
+}
+
+/** GET /admin/apps/:id/consents.csv —— 导出应用已授权用户 CSV
+ *  UTF-8 BOM 防 Excel 乱码;csvCell 复用审计导出的转义(公式注入中和 + 引号/逗号),无授权时仅表头。 */
+export function exportAppConsentsCsv(ctx) {
+  const app = clients.byId(ctx.params.id);
+  if (!app) return redirect(ctx.res, '/admin/apps?err=' + encodeURIComponent('应用不存在。'));
+  const rows = consents.listForClient(app.client_id);
+  const lines = ['用户名,姓名,授权范围,授权时间',
+    ...rows.map((row) => [row.username, row.name, row.scope, fmtTime(row.granted_at)]
+      .map(csvCell).join(','))];
+  const d = new Date();
+  const p2 = (n) => String(n).padStart(2, '0');
+  const stamp = `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}`
+    + `-${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}`;
+  const res = ctx.res;
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.writeHead(200, {
+    'Content-Type': 'text/csv; charset=utf-8',
+    'Content-Disposition': `attachment; filename="consents-${stamp}.csv"`,
+    'Cache-Control': 'no-store',
+  });
+  res.end('\uFEFF' + lines.join('\n') + '\n');
 }
 
 export function updateApp(ctx) {
