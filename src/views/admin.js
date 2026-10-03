@@ -1,6 +1,6 @@
 import { escapeHtml as esc, fmtTime } from '../core/util.js';
 import { t, fmt, normalizeLang, currentLang } from '../core/i18n.js';
-import { adminPage, pageTitle } from './layout.js';
+import { adminPage, pageTitle, brandMark } from './layout.js';
 import { banner, badge, hiddenInputs, kvRow, scopeList, scopeItems, statCard, SCOPE_NAMES } from './components.js';
 import { SCOPES, DEFAULT_CLIENT_SCOPES } from '../core/config.js';
 
@@ -142,7 +142,8 @@ export function groupDetailPage({ theme, siteName, user, cur, group, members = [
 }
 
 /* ---------------- 控制台首页(仅页头/统计/卡片标题/按钮接入 i18n,深度表单保持中文) ---------------- */
-export function dashboardPage({ theme, siteName, user, cur, stats, issuer, allowRegister, csrf, msg, err, msOAuth = {}, lang }) {
+export function dashboardPage({ theme, siteName, user, cur, stats, issuer, allowRegister, csrf, msg, err, msOAuth = {}, lang,
+  brandLogoUrl = '', brandAccent = '', brandTagline = '' }) {
   const L = normalizeLang(lang || currentLang());
   const ms = { enabled: false, clientId: '', clientSecret: '', tenant: 'common', redirectUri: '', ...msOAuth };
   return adminPage({
@@ -164,6 +165,41 @@ export function dashboardPage({ theme, siteName, user, cur, stats, issuer, allow
         ${kvRow('JWKS', `<a href="${esc(issuer + '/jwks.json')}">${esc(issuer + '/jwks.json')}</a>`)}
         ${kvRow('心跳接口', `<a href="${esc(issuer + '/api/heartbeat')}">${esc(issuer + '/api/heartbeat')}</a>`)}
         <p class="muted small">接入方只需发现文档地址即可自动完成 OIDC 配置。</p>
+      </div>
+      <div class="card">
+        <h3 style="margin-top:0">品牌定制</h3>
+        <p class="muted small">站点 Logo、主题强调色与品牌口号保存后全站即时生效:登录页、授权页、控制台与健康页统一应用。</p>
+        <div class="rowline" style="align-items:flex-start;margin:0 0 var(--s3)">
+          <div style="flex:none;padding:var(--s1);background:var(--surface-soft);border-radius:var(--radius)">${brandMark(brandLogoUrl, 56)}</div>
+          <div style="min-width:0">
+            ${brandLogoUrl
+    ? `<p class="small" style="margin:0 0 var(--s1)">当前 Logo:<code>${esc(brandLogoUrl)}</code></p>`
+    : `<p class="small" style="margin:0 0 var(--s1)">当前使用默认樱花标。</p>`}
+            <form method="post" action="/admin/branding/logo" enctype="multipart/form-data" class="rowline">
+              ${hiddenInputs({ _csrf: csrf })}
+              <input type="file" name="logo" accept="image/*" required>
+              <button class="btn btn-primary btn-sm" type="submit">上传 Logo</button>
+            </form>
+            ${brandLogoUrl ? `
+            <form method="post" action="/admin/branding/logo/delete" style="margin:var(--s2) 0 0">
+              ${hiddenInputs({ _csrf: csrf })}
+              <button class="btn btn-danger btn-sm" type="submit">删除 Logo</button>
+            </form>` : ''}
+            <p class="muted small" style="margin:var(--s1) 0 0">支持 PNG / JPEG / WebP / GIF,不超过 2MB;按文件内容校验,与应用 Logo 上传同一套安全基线。</p>
+          </div>
+        </div>
+        <form method="post" action="/admin/branding">
+          ${hiddenInputs({ _csrf: csrf })}
+          <div class="grid2">
+            <div><label for="brand_accent">主题强调色</label>
+              <input type="color" id="brand_accent" name="accent" value="${esc(brandAccent || '#b84d66')}" style="width:72px;height:38px;padding:2px">
+              <span class="muted small">留空恢复默认樱色系;夜间主题同样使用品牌色。</span></div>
+            <div><label for="brand_tagline">品牌口号(留空 = 各页默认文案)</label>
+              <input type="text" id="brand_tagline" name="tagline" value="${esc(brandTagline)}" maxlength="80"
+                placeholder="这一站,管好你所有系统的登录。"></div>
+          </div>
+          <div class="actions"><button class="btn btn-primary" type="submit">保存品牌设置</button></div>
+        </form>
       </div>
       <div class="card">
         <h3 style="margin-top:0">${esc(t(L, 'dash.selfRegister'))}</h3>

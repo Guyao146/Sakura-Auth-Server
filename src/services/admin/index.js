@@ -11,7 +11,7 @@ import { getRuntime, updateRuntime } from '../../core/runtime.js';
 import * as settingsApi from '../../models/settings.js';
 import { hashPassword } from '../../core/password.js';
 import { randomToken } from '../../core/crypto.js';
-import { splitLines, redirectUri as validUri, httpUrl, fmtTime } from '../../core/util.js';
+import { splitLines, redirectUri as validUri, httpUrl, fmtTime, normalizeHexColor } from '../../core/util.js';
 import { SCOPES, DEFAULT_CLIENT_SCOPES } from '../../core/config.js';
 import { sendHtml, sendJson, redirect } from '../../core/http.js';
 import { logger } from '../../core/logger.js';
@@ -37,6 +37,9 @@ export function showDashboard(ctx) {
     issuer: rt.issuer,
     allowRegister: rt.allowRegister,
     msOAuth: rt.msOAuth,
+    brandLogoUrl: rt.brandLogoUrl,
+    brandAccent: rt.brandAccent,
+    brandTagline: rt.brandTagline,
     csrf: CSRF(ctx),
     msg: ctx.query.get('msg'), err: ctx.query.get('err'),
   }));
@@ -647,6 +650,94 @@ export function deleteAppLogo(ctx) {
   clients.update(app.client_id, { logoUrl: '' });
   record(ctx, 'admin.app_logo_deleted', app.name);
   redirect(ctx.res, `/admin/apps/${app.client_id}?msg=` + encodeURIComponent('应用 Logo 已删除,门户与授权页恢复首字母徽标。'));
+}
+
+/* ---------------- 站点品牌定制:Logo / 主题强调色 / 口号(全站即时生效) ---------------- */
+
+/** 站点 Logo 固定文件名前缀(覆盖式:site-logo.<ext>,扩展名随魔数判定) */
+const SITE_LOGO_PREFIX = 'site-logo.';
+
+/** 当前站点 Logo 文件名(brand_logo_url 形如 /uploads/site-logo.png)或空串 */
+function siteLogoFile() {
+  const url = getRuntime().brandLogoUrl || '';
+  return url.startsWith(`/uploads/${SITE_LOGO_PREFIX}`) ? url.slice('/uploads/'.length) : '';
+}
+
+/** POST /admin/branding —— 保存主题强调色与品牌口号(普通表单;留空 = 恢复各页默认)。
+ *  颜色仅接受 #RGB / #RRGGBB 并规范化为小写 #rrggbb,非法值拒绝且不落库(CSS 注入防线)。 */
+export function saveBranding(ctx) {
+  const b = ctx.body || {};
+  const back = (e) => redirect(ctx.res, '/admin?err=' + encodeURIComponent(e));
+  if (b._csrf !== CSRF(ctx)) return back('页面已过期,请重试。');
+  const accentRaw = String(b.accent || '').trim();
+  let accent = '';
+  if (accentRaw) {
+    accent = normalizeHexColor(accentRaw);
+    if (!accent) return back('主题强调色格式不合法,仅支持 #RGB / #RRGGBB 颜色值。');
+  }
+  const tagline = String(b.tagline || '').trim();
+  if (tagline.length > 80) return back('品牌口号不超过 80 字。');
+  updateRuntime({ brand_accent: accent, brand_tagline: tagline }, settingsApi.setSetting);
+  record(ctx, 'admin.branding_saved', `强调色 ${accent || '(默认)'} · 口号 ${tagline ? `「${tagline}」` : '(默认)'}`);
+  logger.info('管理员保存品牌设置', { accent, tagline: tagline ? `${tagline.length} 字` : '' });
+  redirect(ctx.res, '/admin?msg=' + encodeURIComponent('品牌设置已保存,全站即时生效。'));
+}
+
+/** POST /admin/branding/logo —— multipart 上传站点 Logo(魔数校验,固定名覆盖式,复用应用 Logo 上传安全基线) */
+export async function uploadSiteLogo(ctx) {
+  const back = (e) => redirect(ctx.res, '/admin?err=' + encodeURIComponent(e));
+  let fields, files;
+  try {
+    ({ fields, files } = await parseMultipart(ctx.req, { maxSize: MAX_LOGO_SIZE }));
+  } catch (err) {
+    if (err?.status === 413) throw err; // 管线统一渲染 413 页
+    if (err?.status === 400) return back('上传报文不完整,请重新提交。');
+    throw err;
+  }
+  // multipart 中 CSRF 位于文本字段 _csrf
+  if (fields._csrf !== CSRF(ctx)) return back('页面已过期,请重试。');
+  const file = files.logo;
+  if (!file || !file.data?.length) return back('请选择要上传的图片文件。');
+  const ext = sniffImageExt(file.data);
+  if (!ext) {
+    return sendHtml(ctx.res, 415, errorPage({
+      theme: ctx.theme, siteName: getRuntime().siteName,
+      title: '不支持的图片格式',
+      message: '站点 Logo 仅支持 PNG / JPEG / WebP / GIF 图片(按文件内容校验),且不超过 2MB。',
+    }));
+  }
+  ensureUploadsDir();
+  const name = `${SITE_LOGO_PREFIX}${ext}`;
+  // 原子化落盘:先写同盘临时文件再 rename 覆盖目标(与应用 Logo 上传同模式)
+  const target = path.join(uploadsDir(), name);
+  const tmp = `${target}.tmp-${randomToken(6)}`;
+  try {
+    await fs.promises.writeFile(tmp, file.data);
+    await fs.promises.rename(tmp, target);
+  } finally {
+    await fs.promises.unlink(tmp).catch(() => {});
+  }
+  // 仅扩展名变化时清理旧格式文件,避免 site-logo.png / site-logo.jpg 双份残留
+  const prev = siteLogoFile();
+  if (prev && prev !== name) {
+    try { fs.unlinkSync(path.join(uploadsDir(), prev)); } catch { /* 文件不存在视为已清理 */ }
+  }
+  updateRuntime({ brand_logo_url: `/uploads/${name}` }, settingsApi.setSetting);
+  record(ctx, 'admin.branding_logo_uploaded', name);
+  logger.info('管理员上传站点 Logo', { file: name, size: file.data.length });
+  redirect(ctx.res, '/admin?msg=' + encodeURIComponent('站点 Logo 已上传,全站即时生效。'));
+}
+
+/** POST /admin/branding/logo/delete —— 清理站点 Logo 文件并把 brand_logo_url 置空(恢复默认樱花标) */
+export function deleteSiteLogo(ctx) {
+  if (ctx.body?._csrf !== CSRF(ctx)) return redirect(ctx.res, '/admin?err=' + encodeURIComponent('页面已过期,请重试。'));
+  const prev = siteLogoFile();
+  if (prev) {
+    try { fs.unlinkSync(path.join(uploadsDir(), prev)); } catch { /* 文件不存在视为已清理 */ }
+  }
+  updateRuntime({ brand_logo_url: '' }, settingsApi.setSetting);
+  record(ctx, 'admin.branding_logo_deleted', prev || '(无)');
+  redirect(ctx.res, '/admin?msg=' + encodeURIComponent('站点 Logo 已删除,全站恢复默认樱花标。'));
 }
 
 /** GET /uploads/:file —— 上传文件静态服务(匿名;Logo 属公开品牌资产)。文件名严格白名单,防目录穿越 */

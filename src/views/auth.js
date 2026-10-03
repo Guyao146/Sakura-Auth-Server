@@ -53,7 +53,8 @@ export function loginPage({ theme, siteName, csrf, next, err, username = '', all
       </div>`;
   return brandPage({
     theme, siteName, lang: L, title: `${t(L, 'page.login')} · ${siteName}`,
-    tagline: t(L, 'login.tagline'),
+    // 管理端配置了品牌口号时两页(登录/授权)统一使用;留空回退各页默认
+    tagline: (rt && rt.brandTagline) || t(L, 'login.tagline'),
     features: loginFeatures(L),
     scripts: showPasskey ? ['/assets/webauthn.js'] : [],
     content: `
@@ -194,6 +195,7 @@ export function resetDonePage({ theme, siteName }) {
 /** 同意授权页(品牌化分栏,与登录页同一骨架):应用徽标 + 身份标识 + 图标化权限清单 + 跳转目标提示 */
 export function consentPage({ theme, siteName, user, client, scopeList: scopes, csrf, replay, remember, lang }) {
   const L = normalizeLang(lang || currentLang());
+  const rt = getRuntime();
   const items = scopeItems(scopes);
   let target = String(replay.redirect_uri || '');
   try { target = new URL(replay.redirect_uri).host || target; } catch { /* 自定义 scheme 原样展示 */ }
@@ -211,7 +213,7 @@ export function consentPage({ theme, siteName, user, client, scopeList: scopes, 
     : `<span>以 <b style="color:var(--text)">${esc(user.name || user.username)}</b>(<span>${esc(user.username)}</span>)的身份继续</span>`;
   return brandPage({
     theme, siteName, lang: L, title: `${t(L, 'page.consent')} · ${siteName}`,
-    tagline: t(L, 'consent.tagline'),
+    tagline: (rt && rt.brandTagline) || t(L, 'consent.tagline'),
     features: loginFeatures(L),
     wide: true, cur: back,
     content: `

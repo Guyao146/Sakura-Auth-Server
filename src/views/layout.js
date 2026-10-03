@@ -1,5 +1,6 @@
-import { escapeHtml as esc } from '../core/util.js';
+import { escapeHtml as esc, brandAccentCss } from '../core/util.js';
 import { t, normalizeLang, currentLang } from '../core/i18n.js';
+import { getRuntime } from '../core/runtime.js';
 
 /**
  * 页面骨架 + 樱落设计语言(参照 mcylyr 设计规范):
@@ -228,6 +229,8 @@ pre.block{background:var(--code-bg);color:var(--code-text);border-radius:var(--r
 .rowline{display:flex;gap:var(--s3);align-items:center;flex-wrap:wrap}
 .spread{display:flex;justify-content:space-between;align-items:center;gap:var(--s3);flex-wrap:wrap}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+/* 站点品牌 Logo(brandMark 的 img 形态,未配置时不出现任何该类元素):等比缩放 + 圆角 */
+.brand-logo{object-fit:contain;border-radius:8px;flex:none}
 `;
 
 const themeToggle = (theme, cur, lang = 'zh') => {
@@ -249,8 +252,26 @@ export function mark(size = 26) {
 <g><circle cx="12" cy="6.5" r="4.1"/><circle cx="6.77" cy="10.3" r="4.1"/><circle cx="8.77" cy="16.45" r="4.1"/><circle cx="15.23" cy="16.45" r="4.1"/><circle cx="17.23" cy="10.3" r="4.1"/><circle cx="12" cy="11.8" r="2.1" style="fill:var(--page)"/></g></svg>`;
 }
 
+/** 品牌运行时快照(防御式:运行时未初始化时全部回退内置默认) */
+const brandState = () => {
+  const rt = getRuntime();
+  return {
+    logoUrl: (rt && rt.brandLogoUrl) || '',
+    accentCss: rt ? brandAccentCss(rt.brandAccent) : '',
+  };
+};
+
+/** 站点品牌标:管理端配置了 brand_logo_url 时输出上传 Logo(img.brand-logo),否则回退默认樱花标 */
+export function brandMark(logoUrl, size = 26) {
+  if (logoUrl) return `<img src="${esc(logoUrl)}" alt="" class="brand-logo" style="width:${size}px;height:${size}px">`;
+  return mark(size);
+}
+
 function head(theme, title, lang = 'zh') {
   const htmlLang = lang === 'en' ? 'en' : 'zh-CN';
+  // 品牌覆盖块:置于全站样式(含明暗两套主题变量)之后,统一覆盖强调色与登录渐变;
+  // 未配置 brand_accent 时为空串,不输出任何额外节点(渲染与基线一字不差)
+  const brandCss = brandState().accentCss;
   return `<!doctype html>
 <html lang="${htmlLang}"${theme ? ` data-theme="${theme}"` : ''}>
 <head>
@@ -258,7 +279,7 @@ function head(theme, title, lang = 'zh') {
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <title>${esc(title)}</title>
-<style>${SAKURA_CSS}</style>
+<style>${SAKURA_CSS}</style>${brandCss ? `\n<style>${brandCss}</style>` : ''}
 </head>`;
 }
 
@@ -269,11 +290,12 @@ const scriptTags = (scripts) =>
 /** 认证类页面骨架(登录 / 同意 / 向导):居中卡片;wide 供授权页等需要更宽的场景 */
 export function authPage({ theme, siteName, title, content, footer = true, wide = false, scripts = [], lang }) {
   const L = normalizeLang(lang || currentLang());
+  const logoUrl = brandState().logoUrl;
   return `${head(theme, title, L)}
 <body>
 <div class="auth-wrap"><div class="auth-col${wide ? ' auth-col-wide' : ''}">
   <div class="auth-card">
-    <div class="auth-brand">${mark(30)}<div><h1>${esc(siteName)}</h1><div class="muted">${esc(t(L, 'brand.subtitle'))}</div></div></div>
+    <div class="auth-brand">${brandMark(logoUrl, 30)}<div><h1>${esc(siteName)}</h1><div class="muted">${esc(t(L, 'brand.subtitle'))}</div></div></div>
     ${content}
   </div>
   ${footer ? `<p class="auth-foot">SakuraID · ${esc(t(L, 'footer.powered'))}</p>` : ''}
@@ -291,15 +313,16 @@ export function brandPage({
   theme, siteName, title, tagline = '', features = [], content, footer = true, cur = '/login', wide = false, scripts = [], lang,
 }) {
   const L = normalizeLang(lang || currentLang());
+  const logoUrl = brandState().logoUrl;
   const feats = features.map((f) => `
       <li><span class="feat-ico">${f.icon}</span><span><b>${esc(f.title)}</b><small>${esc(f.desc)}</small></span></li>`).join('\n');
   return `${head(theme, title, L)}
 <body>
 <div class="login-split">
   <aside class="login-brand">
-    <div class="login-brand-deco" aria-hidden="true">${mark(220)}</div>
+    <div class="login-brand-deco" aria-hidden="true">${brandMark(logoUrl, 220)}</div>
     <div class="login-brand-body">
-      <div class="login-brand-mark">${mark(40)}</div>
+      <div class="login-brand-mark">${brandMark(logoUrl, 40)}</div>
       <h1 class="login-brand-name">${esc(siteName)}</h1>
       ${tagline ? `<p class="login-brand-slogan">${esc(tagline)}</p>` : ''}
       ${features.length ? `<ul class="login-brand-feats">${feats}
@@ -308,7 +331,7 @@ export function brandPage({
     <p class="login-brand-foot">${esc(t(L, 'footer.powered'))}</p>
   </aside>
   <main class="login-form"><div class="login-form-col${wide ? ' login-form-col-wide' : ''}">
-    <div class="login-form-brand">${mark(24)}<b>${esc(siteName)}</b></div>
+    <div class="login-form-brand">${brandMark(logoUrl, 24)}<b>${esc(siteName)}</b></div>
     ${content}
     ${footer ? `<p class="login-form-foot">SakuraID · ${themeToggle(theme, cur, L)} · ${langToggle(L, cur)}</p>` : ''}
   </div></main>
@@ -320,6 +343,7 @@ ${scriptTags(scripts)}
 /** 控制台骨架:左侧玻璃侧栏 + 内容区;导航按身份渲染 —— 管理员含管理项,普通用户仅「我的」分组 */
 export function adminPage({ theme, siteName, user, active = '', title, content, cur = '/', actions = '', headTitle = '', scripts = [], lang }) {
   const L = normalizeLang(lang || currentLang());
+  const logoUrl = brandState().logoUrl;
   const link = (href, label, key) =>
     `<a href="${href}"${key === active ? ' class="active"' : ''}>${label}</a>`;
   const adminNav = user.is_admin
@@ -332,9 +356,9 @@ export function adminPage({ theme, siteName, user, active = '', title, content, 
     : '';
   return `${head(theme, title, L)}
 <body>
-<div class="topbar">${mark(22)} ${esc(siteName)}</div>
+<div class="topbar">${brandMark(logoUrl, 22)} ${esc(siteName)}</div>
 <aside class="side">
-  <div class="side-brand">${mark(26)}<b>${esc(siteName)}<br><span class="muted small">${esc(t(L, user.is_admin ? 'side.adminConsole' : 'side.personal'))}</span></b></div>
+  <div class="side-brand">${brandMark(logoUrl, 26)}<b>${esc(siteName)}<br><span class="muted small">${esc(t(L, user.is_admin ? 'side.adminConsole' : 'side.personal'))}</span></b></div>
   <nav>
     ${adminNav}<div class="sep">${esc(t(L, 'nav.my'))}</div>
     ${link('/apps', esc(t(L, 'nav.portal')), 'portal')}

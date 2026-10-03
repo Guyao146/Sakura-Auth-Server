@@ -110,6 +110,10 @@ export function registerRoutes() {
   r('GET', '/admin', admin.showDashboard, { auth: 'admin' });
   r('POST', '/admin/register-toggle', admin.toggleRegister, { auth: 'admin' });
   r('POST', '/admin/ms-oauth', admin.saveMsOAuth, { auth: 'admin' });
+  // 站点品牌定制:强调色/口号保存(普通表单)、Logo 上传(multipart)与删除 —— 全站即时生效
+  r('POST', '/admin/branding', admin.saveBranding, { auth: 'admin' });
+  r('POST', '/admin/branding/logo', admin.uploadSiteLogo, { auth: 'admin' });
+  r('POST', '/admin/branding/logo/delete', admin.deleteSiteLogo, { auth: 'admin' });
   r('GET', '/admin/users', admin.listUsers, { auth: 'admin' });
   r('GET', '/admin/users/new', admin.newUserForm, { auth: 'admin' });
   r('POST', '/admin/users/create', admin.createUser, { auth: 'admin' });

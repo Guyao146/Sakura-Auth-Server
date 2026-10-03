@@ -8,6 +8,7 @@ const KEYS = [
   'site_name', 'issuer', 'access_ttl', 'refresh_ttl', 'session_ttl', 'allow_register',
   'smtp_host', 'smtp_port', 'smtp_user', 'smtp_pass', 'smtp_from',
   'ms_enabled', 'ms_client_id', 'ms_client_secret', 'ms_tenant', 'ms_authority',
+  'brand_logo_url', 'brand_accent', 'brand_tagline',
 ];
 
 let rt = null;
@@ -47,6 +48,10 @@ export function reloadRuntime() {
     setupStep: Number(s.setup_step || 1),
     setupDone: String(s.setup_done || '') === '1',
     allowRegister: String(s.allow_register || '') === '1',
+    // 品牌定制(空串 = 使用内置默认):logo 为 /uploads/site-logo.<ext>,accent 为规范化 #rrggbb
+    brandLogoUrl: s.brand_logo_url || '',
+    brandAccent: s.brand_accent || '',
+    brandTagline: s.brand_tagline || '',
     smtp: mergeSmtp(s),
     // Microsoft 账号登录(联邦 OIDC):redirectUri 恒为 {issuer}/auth/microsoft/callback,不落库
     msOAuth: {

@@ -2927,6 +2927,187 @@ async function main() {
     consentsM.revoke(bob.id, mergeApp.client_id);
     clients.remove(mergeApp.client_id); // 清理探针应用
 
+    /* ---------- 品牌定制:站点 Logo / 主题强调色 / 口号(管理端可视化,全站即时生效) ---------- */
+    const BRAND_TAGLINE = '统一入口,尽在樱落。';
+
+    // 红线:未配置任何品牌定制时,登录页渲染与基线一字不差(樱花标 + 默认口号,无覆盖块/无 brand-logo)
+    r = await call(new Jar(), '/login');
+    const brandBaseLogin = await r.text();
+    ok('品牌:未配置时登录页保持默认渲染(樱花标/默认口号/无覆盖块)', r.status === 200
+      && brandBaseLogin.includes('viewBox="0 0 24 24"')
+      && brandBaseLogin.includes('管好你所有系统的登录')
+      && (brandBaseLogin.match(/--accent:/g) || []).length === 3
+      && !brandBaseLogin.includes('class="brand-logo"')
+      && !brandBaseLogin.includes('color-mix(in srgb,#fff,transparent 25%)'));
+
+    // 控制台品牌定制卡片
+    r = await call(aj, '/admin');
+    const brandDash0 = await r.text();
+    ok('品牌:控制台提供品牌定制卡片(Logo 上传/取色器/口号)', r.status === 200
+      && brandDash0.includes('品牌定制')
+      && brandDash0.includes('action="/admin/branding/logo"')
+      && brandDash0.includes('enctype="multipart/form-data"')
+      && brandDash0.includes('name="logo"') && brandDash0.includes('accept="image/*"')
+      && brandDash0.includes('name="accent"') && brandDash0.includes('type="color"')
+      && brandDash0.includes('name="tagline"')
+      && brandDash0.includes('当前使用默认樱花标'));
+
+    // 保存强调色与口号
+    r = await call(aj, '/admin/branding', {
+      method: 'POST', form: { accent: '#123456', tagline: BRAND_TAGLINE, _csrf: adminCsrf },
+    });
+    ok('品牌:保存强调色与口号成功且落库', r.status === 302 && location(r).includes('/admin?msg=')
+      && settings.getSetting('brand_accent') === '#123456'
+      && settings.getSetting('brand_tagline') === BRAND_TAGLINE);
+
+    // 登录页:覆盖块 + 派生色(加深 12% / 渐变混紫罗兰 / YIQ 选白字)+ 自定义口号
+    r = await call(new Jar(), '/login');
+    const brandLogin = await r.text();
+    ok('品牌:登录页注入强调色覆盖块(派生加深/渐变/on-accent)与自定义口号', brandLogin.includes('--accent:#123456')
+      && brandLogin.includes('--accent-strong:#102e4c')
+      && brandLogin.includes('--on-accent:#ffffff')
+      && brandLogin.includes('--login-grad-a:#123456')
+      && brandLogin.includes('--login-grad-b:#42379a')
+      && brandLogin.includes(BRAND_TAGLINE));
+
+    // 全站生效:健康页与控制台
+    const brandHealth = await (await fetch(BASE + '/health')).text();
+    const brandDash1 = await (await call(aj, '/admin')).text();
+    ok('品牌:健康页与控制台同样生效强调色覆盖', brandHealth.includes('--accent:#123456')
+      && brandDash1.includes('--accent:#123456'));
+
+    // 授权同意页:品牌口号与强调色生效(新公开应用 require_consent + PKCE,bob 已登录且未授权过)
+    r = await call(aj, '/admin/apps/create', {
+      method: 'POST',
+      form: [['name', '品牌演示'], ['client_type', 'public'],
+        ['redirect_uris', 'http://127.0.0.1:8080/brand-cb'], ['scopes', 'openid'],
+        ['require_consent', '1'], ['_csrf', adminCsrf]],
+    });
+    const brandAppId = new URL(location(r), BASE).pathname.split('/').pop();
+    ok('品牌:创建 consent 演示应用成功', r.status === 302 && location(r).startsWith('/admin/apps/') && !!brandAppId);
+    r = await call(uj, '/authorize?' + new URLSearchParams({
+      client_id: brandAppId, redirect_uri: 'http://127.0.0.1:8080/brand-cb',
+      response_type: 'code', scope: 'openid', state: 'brand-t',
+      code_challenge: b64urlSha256('brand-verifier-0123456789abcdef'), code_challenge_method: 'S256',
+    }));
+    const brandConsent = await r.text();
+    ok('品牌:授权同意页品牌面板口号与强调色生效', r.status === 200
+      && brandConsent.includes('class="login-brand"') && brandConsent.includes(BRAND_TAGLINE)
+      && brandConsent.includes('--accent:#123456'));
+    clients.remove(brandAppId); // 清理演示应用
+
+    // CSS 注入防护:非法色值被拒且不落库,注入内容不出现在页面
+    r = await call(aj, '/admin/branding', {
+      method: 'POST', form: { accent: 'red; } body{background:url(//evil)', tagline: BRAND_TAGLINE, _csrf: adminCsrf },
+    });
+    ok('品牌:CSS 注入形态的色值被拒(302 err 且不落库)', r.status === 302 && location(r).includes('/admin?err=')
+      && settings.getSetting('brand_accent') === '#123456');
+    ok('品牌:注入内容不出现在登录页样式', !((await (await call(new Jar(), '/login')).text()).includes('body{background')));
+
+    // 其它非法形态:无 # 前缀 / 非法字符
+    r = await call(aj, '/admin/branding', { method: 'POST', form: { accent: '123456', tagline: '', _csrf: adminCsrf } });
+    const brandBadNoHash = r.status === 302 && location(r).includes('/admin?err=');
+    r = await call(aj, '/admin/branding', { method: 'POST', form: { accent: '#12g45z', tagline: '', _csrf: adminCsrf } });
+    ok('品牌:无 # 前缀与非法字符色值均被拒', brandBadNoHash && r.status === 302 && location(r).includes('/admin?err=')
+      && settings.getSetting('brand_accent') === '#123456');
+
+    // #RGB 三位色值接受并规范化为小写六位
+    r = await call(aj, '/admin/branding', { method: 'POST', form: { accent: '#AbC', tagline: '', _csrf: adminCsrf } });
+    ok('品牌:#RGB 三位色值接受并规范化为小写 #RRGGBB', r.status === 302 && location(r).includes('/admin?msg=')
+      && settings.getSetting('brand_accent') === '#aabbcc');
+
+    // 浅色强调色:on-accent 依 YIQ 自动切深色文字
+    r = await call(aj, '/admin/branding', { method: 'POST', form: { accent: '#ffff00', tagline: '', _csrf: adminCsrf } });
+    const brandLightLogin = await (await call(new Jar(), '/login')).text();
+    ok('品牌:浅色强调色自动切深色文字(YIQ 分支)', brandLightLogin.includes('--accent:#ffff00')
+      && brandLightLogin.includes('--on-accent:#1f2330'));
+
+    // 权限:普通用户 403 / 未登录重定向
+    ok('品牌:普通用户保存品牌被拒(403)', (await call(fj, '/admin/branding', {
+      method: 'POST', form: { accent: '#123456', _csrf: 'x' },
+    })).status === 403);
+    const brandAnonRes = await call(new Jar(), '/admin/branding', {
+      method: 'POST', form: { accent: '#123456', _csrf: 'x' },
+    });
+    ok('品牌:未登录保存品牌重定向登录页', brandAnonRes.status === 302 && location(brandAnonRes).startsWith('/login'));
+
+    // 恢复强调色与口号供 Logo 用例
+    r = await call(aj, '/admin/branding', {
+      method: 'POST', form: { accent: '#123456', tagline: BRAND_TAGLINE, _csrf: adminCsrf },
+    });
+
+    // 上传站点 Logo(multipart,1x1 PNG):brand_logo_url 落库
+    r = await postMultipart(aj, '/admin/branding/logo', {
+      fields: { _csrf: adminCsrf },
+      file: { name: 'logo', filename: 'site.png', contentType: 'image/png', data: PNG_1PX },
+    });
+    ok('品牌:上传站点 Logo 成功且 brand_logo_url 落库', r.status === 302 && location(r).includes('/admin?msg=')
+      && settings.getSetting('brand_logo_url') === '/uploads/site-logo.png');
+
+    // 静态服务:匿名可取、字节一致
+    const siteLogoRes = await fetch(BASE + '/uploads/site-logo.png');
+    ok('品牌:站点 Logo 匿名可取且字节一致', siteLogoRes.status === 200
+      && siteLogoRes.headers.get('content-type') === 'image/png'
+      && Buffer.compare(Buffer.from(await siteLogoRes.arrayBuffer()), PNG_1PX) === 0);
+
+    // 登录页:brand-logo img 出现,樱花标回退消失
+    r = await call(new Jar(), '/login');
+    const brandLogoLogin = await r.text();
+    ok('品牌:登录页 brand-logo img 生效且樱花标回退消失', brandLogoLogin.includes('<img src="/uploads/site-logo.png"')
+      && brandLogoLogin.includes('class="brand-logo"')
+      && !brandLogoLogin.includes('viewBox="0 0 24 24"'));
+
+    // 换格式重传(JPG 魔数):旧 PNG 清理、URL 指向新扩展
+    const JPG_MAGIC = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(32, 0x11)]);
+    r = await postMultipart(aj, '/admin/branding/logo', {
+      fields: { _csrf: adminCsrf },
+      file: { name: 'logo', filename: 'site.jpg', contentType: 'image/jpeg', data: JPG_MAGIC },
+    });
+    ok('品牌:重传 JPG 成功且旧 PNG 清理、URL 指向新扩展', r.status === 302
+      && settings.getSetting('brand_logo_url') === '/uploads/site-logo.jpg'
+      && !fs.existsSync(path.join(uploadsDirSmoke, 'site-logo.png'))
+      && fs.existsSync(path.join(uploadsDirSmoke, 'site-logo.jpg')));
+
+    // 上传后控制台出现 Logo 预览 img 与删除按钮
+    r = await call(aj, '/admin');
+    const brandDash2 = await r.text();
+    ok('品牌:上传后控制台显示 Logo 预览与删除按钮', r.status === 200
+      && brandDash2.includes('<img src="/uploads/site-logo.jpg"') && brandDash2.includes('class="brand-logo"')
+      && brandDash2.includes('action="/admin/branding/logo/delete"'));
+
+    // 删除 Logo:文件清理 + 全站恢复樱花标
+    r = await call(aj, '/admin/branding/logo/delete', { method: 'POST', form: { _csrf: adminCsrf } });
+    const brandAfterDelete = await (await call(new Jar(), '/login')).text();
+    ok('品牌:删除 Logo 后恢复默认樱花标且文件已清理', r.status === 302 && location(r).includes('/admin?msg=')
+      && (settings.getSetting('brand_logo_url') || '') === ''
+      && !fs.existsSync(path.join(uploadsDirSmoke, 'site-logo.jpg'))
+      && brandAfterDelete.includes('viewBox="0 0 24 24"') && !brandAfterDelete.includes('class="brand-logo"'));
+
+    // CSRF 错误被拒(multipart 文本字段)/ 非图片字节 415
+    r = await postMultipart(aj, '/admin/branding/logo', {
+      fields: { _csrf: 'wrong-csrf-value' },
+      file: { name: 'logo', filename: 'x.png', contentType: 'image/png', data: PNG_1PX },
+    });
+    ok('品牌:CSRF 错误时 Logo 上传被拒', r.status === 302 && location(r).includes('err='));
+    r = await postMultipart(aj, '/admin/branding/logo', {
+      fields: { _csrf: adminCsrf },
+      file: { name: 'logo', filename: 'fake.png', contentType: 'image/png', data: Buffer.from('not-an-image-at-all') },
+    });
+    ok('品牌:非图片字节上传被拒(415)', r.status === 415);
+
+    // 审计留痕:成功保存 4 次(注入/非法被拒不计),上传 2 次,删除 1 次
+    ok('品牌:品牌保存/Logo 上传与删除计入审计',
+      auditM.list({ action: 'admin.branding_saved', limit: 100 }).length >= 4
+      && auditM.list({ action: 'admin.branding_logo_uploaded', limit: 100 }).length === 2
+      && auditM.list({ action: 'admin.branding_logo_deleted', limit: 100 }).length === 1);
+
+    // 重置品牌回默认(收尾恢复基线,后续段落回归默认态)
+    r = await call(aj, '/admin/branding', { method: 'POST', form: { accent: '', tagline: '', _csrf: adminCsrf } });
+    const brandResetLogin = await (await call(new Jar(), '/login')).text();
+    ok('品牌:重置后全站恢复默认(无覆盖块/无 brand-logo)', r.status === 302 && location(r).includes('/admin?msg=')
+      && (settings.getSetting('brand_accent') || '') === '' && (settings.getSetting('brand_tagline') || '') === ''
+      && !brandResetLogin.includes('--accent:#123456') && !brandResetLogin.includes('class="brand-logo"'));
+
     /* ---------- 打磨项:LICENSE 文件 / truncateCodePoints 码点安全截断 ---------- */
     const licenseText = fs.readFileSync(path.join(ROOT, 'LICENSE'), 'utf8');
     ok('打磨:LICENSE 文件存在且为标准 MIT(含版权行)',
