@@ -3,19 +3,22 @@ import { getDb } from '../core/db.js';
 import { nowSec, randomToken } from '../core/crypto.js';
 
 const MAX_ROWS = 5000;
+let writeCounter = 0;
 
-/** 写入一条审计记录;超过上限时删除最旧的溢出部分(保留最新 5000 条) */
+/** 写入一条审计记录;滚动上限核对降频为每 64 次写一次(COUNT 是 O(n) 全表计数) */
 export function log({ actor = 'anonymous', action, detail = '', ip = '' }) {
   if (!action) return;
   getDb()
     .prepare('INSERT INTO audit_logs (id, ts, actor, action, detail, ip) VALUES (?, ?, ?, ?, ?, ?)')
     .run(randomToken(12), nowSec(), String(actor || 'anonymous'), String(action), String(detail ?? ''), String(ip || ''));
-  const n = getDb().prepare('SELECT COUNT(*) AS n FROM audit_logs').get().n;
-  if (n > MAX_ROWS) {
-    const excess = n - MAX_ROWS;
-    getDb()
-      .prepare('DELETE FROM audit_logs WHERE id IN (SELECT id FROM audit_logs ORDER BY ts ASC, rowid ASC LIMIT ?)')
-      .run(excess);
+  if (++writeCounter % 64 === 0) {
+    const n = getDb().prepare('SELECT COUNT(*) AS n FROM audit_logs').get().n;
+    if (n > MAX_ROWS) {
+      const excess = n - MAX_ROWS;
+      getDb()
+        .prepare('DELETE FROM audit_logs WHERE id IN (SELECT id FROM audit_logs ORDER BY ts ASC, rowid ASC LIMIT ?)')
+        .run(excess);
+    }
   }
 }
 

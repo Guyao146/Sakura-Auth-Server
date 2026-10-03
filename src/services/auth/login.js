@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import * as users from '../../models/users.js';
 import * as sessions from '../../models/sessions.js';
 import * as recovery from '../../models/recovery.js';
-import { verifyPassword } from '../../core/password.js';
+import { hashPassword, verifyPassword } from '../../core/password.js';
 import { randomToken, timingSafeEqStr, nowSec } from '../../core/crypto.js';
 import { verifyTotp } from '../../core/totp.js';
 import { getSigningKey } from '../../core/keys.js';
@@ -16,9 +16,11 @@ import { loginPage, twofaPage } from '../../views/auth.js';
 import { errorPage } from '../../views/error.js';
 import { record } from '../audit.js';
 
-/* 登录失败限流:同 IP+用户名 5 次失败锁定 60 秒 */
+/* 登录失败限流:同 IP+用户名 5 次失败锁定 60 秒;另设 IP 级总失败上限(防同 IP 换用户名绕过) */
 const MAX_FAILS = 5, LOCK_SEC = 60, MAX_ATTEMPT_KEYS = 5000;
+const MAX_IP_FAILS = 20, IP_WINDOW = 600; // IP 级:20 次失败 / 10 分钟
 const attempts = new Map();
+const ipFails = new Map();
 
 function failKey(ctx, username) {
   const ip = ctx.req.socket.remoteAddress || '?';
@@ -41,6 +43,10 @@ function pruneAttempts() {
 
 function isLocked(ctx, username) {
   pruneAttempts();
+  const ip = ctx.req.socket.remoteAddress || '?';
+  // 两级判定:用户名级(5 次/60s)+ IP 级(20 次失败/10 分钟,换用户名无法绕过)
+  const ipRec = ipFails.get(ip);
+  if (ipRec && ipRec.count >= MAX_IP_FAILS && Date.now() - ipRec.first < IP_WINDOW * 1000) return true;
   const rec = attempts.get(failKey(ctx, username));
   return rec && rec.count >= MAX_FAILS && Date.now() - rec.first < LOCK_SEC * 1000;
 }
@@ -48,6 +54,10 @@ function isLocked(ctx, username) {
 /** 记一次凭据失败(限流计数 + 审计;web 与 /api 登录共用,action 可区分两步验证失败) */
 function recordFail(ctx, username, action = 'auth.login_failed') {
   pruneAttempts();
+  const ip = ctx.req.socket.remoteAddress || '?';
+  const ipRec = ipFails.get(ip);
+  if (!ipRec || Date.now() - ipRec.first > IP_WINDOW * 1000) ipFails.set(ip, { count: 1, first: Date.now() });
+  else ipRec.count += 1;
   const key = failKey(ctx, username);
   const rec = attempts.get(key);
   if (!rec || Date.now() - rec.first > LOCK_SEC * 1000) attempts.set(key, { count: 1, first: Date.now() });
@@ -57,7 +67,12 @@ function recordFail(ctx, username, action = 'auth.login_failed') {
 
 function clearFails(ctx, username) {
   attempts.delete(failKey(ctx, username));
+  ipFails.delete(ctx.req.socket.remoteAddress || '?');
 }
+
+/* 未知用户名的时序均衡:对固定 Dummy 哈希执行一次等价 scrypt,
+ * 消除「用户存在性」响应时间差异,并强制枚举者每次都付出计算成本 */
+const DUMMY_HASH = hashPassword('sakuraid-dummy-timing-equalizer');
 
 export { isLocked, recordFail, clearFails };
 
@@ -118,8 +133,11 @@ export function handleLogin(ctx) {
     return showLogin(ctx, { err: '失败次数过多,请 1 分钟后再试。', username: body.username });
   }
   const user = body.username ? users.byUsername(String(body.username)) : null;
-  const ok = user && !user.disabled && typeof body.password === 'string' && verifyPassword(body.password, user.password_hash);
+  const pw = typeof body.password === 'string' ? body.password : '';
+  // 未知用户对 Dummy 哈希也执行一次等价 scrypt:消除存在性时序差异,强制枚举者每次都付出计算成本
+  const ok = user && !user.disabled && pw !== '' && verifyPassword(pw, user.password_hash);
   if (!ok) {
+    if (!user) verifyPassword(pw || 'x', DUMMY_HASH);
     recordFail(ctx, body.username);
     logger.warn('登录失败', { username: String(body.username || '') });
     return showLogin(ctx, { err: '用户名或密码不正确。', username: body.username });

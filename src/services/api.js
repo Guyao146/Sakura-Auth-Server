@@ -15,10 +15,12 @@ import { getRuntime } from '../core/runtime.js';
 import { sendJson, clearCookie } from '../core/http.js';
 import { verifyJwt } from '../core/jwt.js';
 import { verifyTotp } from '../core/totp.js';
-import { verifyPassword } from '../core/password.js';
+import { verifyPassword, hashPassword } from '../core/password.js';
 import { isLocked, recordFail, clearFails, startSession, sessionMeta } from './auth/login.js';
 
 const NO_STORE = { 'Cache-Control': 'no-store' };
+// 未知用户名的时序均衡 Dummy 哈希(与 web 登录同策略)
+const DUMMY_HASH = hashPassword('sakuraid-dummy-timing-equalizer');
 
 /** JSON API 深度防御:cookie 会话的写操作要求显式 X-Requested-With 头。
  *  第一道防线是 cookie 的 SameSite=Lax(跨站 POST 不携带);此头为第二道,
@@ -69,8 +71,10 @@ export function login(ctx) {
   if (isLocked(ctx, username)) return sendJson(ctx.res, 401, { error: 'rate_limited' }, NO_STORE);
 
   const user = users.byUsername(username);
+  // 未知用户对 Dummy 哈希也执行一次等价 scrypt(时序均衡,与 web 登录同策略)
   const ok = user && !user.disabled && verifyPassword(password, user.password_hash);
   if (!ok) {
+    if (!user) verifyPassword(password, DUMMY_HASH);
     recordFail(ctx, username);
     return sendJson(ctx.res, 401, { error: 'invalid_credentials' }, NO_STORE);
   }

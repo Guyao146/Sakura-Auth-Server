@@ -222,7 +222,8 @@ export function grantGroupApp(ctx) {
 
 /* ---------------- 用户管理 ---------------- */
 export function listUsers(ctx) {
-  const list = users.list().map((u) => ({ ...u, groupNames: groups.membersOf(u.id), _csrf: CSRF(ctx) }));
+  const groupMap = groups.membersOfAll(); // 一次查询消除 N+1
+  const list = users.list().map((u) => ({ ...u, groupNames: groupMap.get(u.id) || [], _csrf: CSRF(ctx) }));
   sendHtml(ctx.res, 200, usersPage({
     theme: ctx.theme, siteName: getRuntime().siteName, user: ctx.user,
     cur: ctx.url.pathname + ctx.url.search, list,

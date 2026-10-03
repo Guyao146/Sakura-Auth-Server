@@ -69,6 +69,19 @@ export function remove(id) {
 }
 
 /** 用户所属组名数组(按组名字典序稳定输出) */
+/** 一次性取全部成员关系(userId → [组名]),列表页用它消除 N+1 */
+export const membersOfAll = () => {
+  const map = new Map();
+  for (const r of getDb().prepare(
+    `SELECT m.user_id AS uid, g.name AS name FROM groups g JOIN group_members m ON m.group_id = g.id
+     ORDER BY g.name ASC`
+  ).all()) {
+    if (!map.has(r.uid)) map.set(r.uid, []);
+    map.get(r.uid).push(r.name);
+  }
+  return map;
+};
+
 export const membersOf = (userId) =>
   getDb().prepare(
     `SELECT g.name FROM groups g JOIN group_members m ON m.group_id = g.id
