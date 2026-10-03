@@ -16,7 +16,7 @@ import { loginPage, twofaPage } from '../../views/auth.js';
 import { errorPage } from '../../views/error.js';
 import { record } from '../audit.js';
 import { sendMail } from '../../core/smtp.js';
-import { fmtTime } from '../../core/util.js';
+import { fmtTime, truncateCodePoints } from '../../core/util.js';
 
 /* 登录失败限流:同 IP+用户名 5 次失败锁定 60 秒;另设 IP 级总失败上限(防同 IP 换用户名绕过) */
 const MAX_FAILS = 5, LOCK_SEC = 60, MAX_ATTEMPT_KEYS = 5000;
@@ -226,7 +226,7 @@ async function checkNewDevice(res, user, meta, sid) {
         '如非本人操作,请立即登录并修改密码,必要时联系管理员。',
       ].join('\n'),
     });
-    record({ req: res.req, user }, 'auth.new_device', `ip=${ip} ua=${ua.slice(0, 120)}`, { actor: user.username });
+    record({ req: res.req, user }, 'auth.new_device', `ip=${ip} ua=${truncateCodePoints(ua, 120)}`, { actor: user.username });
   } catch (err) {
     logger.warn('新设备登录提醒发送失败(不影响登录)', { username: user.username, error: err?.message });
   }

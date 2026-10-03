@@ -115,7 +115,7 @@ curl -s http://localhost:9000/token -d grant_type=authorization_code -d code=<CO
 curl -s http://localhost:9000/userinfo -H "Authorization: Bearer <ACCESS_TOKEN>"
 ```
 
-测试工具链:`npm run smoke` 会自动拉起独立实例,端到端验证向导、登录、两步验证(TOTP/恢复代码/管理员重置)、找回密码、自助注册、权限组与应用访问控制、授权码 + PKCE、刷新轮换、内省/吊销、client_credentials 与控制台权限、我的授权管理、应用门户、JSON API 套件、Microsoft 账号登录绑定、审计日志、应用元数据、注册表 API、会话管理、Logo 上传、审计导出与双部署方式;协议合规加固、WebAuthn/Passkey 无密码登录、备份恢复与运维工具(430 项断言);另有 `node scripts/test-qr.mjs`(QR 编码器 46 项)与 `node scripts/test-smtp.mjs`(SMTP 对话 9 项)两个单元测试。
+测试工具链:`npm run smoke` 会自动拉起独立实例,端到端验证向导、登录、两步验证(TOTP/恢复代码/管理员重置)、找回密码、自助注册、权限组与应用访问控制、授权码 + PKCE、刷新轮换、内省/吊销、client_credentials 与控制台权限、我的授权管理、应用门户、JSON API 套件、Microsoft 账号登录绑定、审计日志、应用元数据、注册表 API、会话管理、Logo 上传、审计导出与双部署方式;协议合规加固、WebAuthn/Passkey 无密码登录、备份恢复与运维工具(434 项断言);另有 `node scripts/test-qr.mjs`(QR 编码器 46 项)与 `node scripts/test-smtp.mjs`(SMTP 对话 9 项)两个单元测试。
 
 运维脚本:`npm run reset-admin -- <用户名> [新密码]`(直接重置管理员密码,用于忘记密码);`npm run seed-demo`(灌入演示用户与一个 PKCE 公开客户端)。首次部署自动进入配置向导(环境检测 → 站点/注册/SMTP → 管理员 → 完成);已初始化的实例可在控制台「配置向导」卡片重新运行,不影响已有用户与应用数据。
 
@@ -130,3 +130,5 @@ curl -s http://localhost:9000/userinfo -H "Authorization: Bearer <ACCESS_TOKEN>"
 - 反代部署时务必设置 `BASE_URL` 为 https 地址,会话 Cookie 会自动附加 `Secure`。
 
 > 文档基于对应项目源码整理。实现变更后,以项目仓库、版本文件和 CHANGELOG 为最终依据。
+
+License: [MIT](./LICENSE)

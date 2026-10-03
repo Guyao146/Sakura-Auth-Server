@@ -2241,6 +2241,8 @@ async function main() {
     const logoPngPath = path.join(uploadsDirSmoke, `${logoAppId}.png`);
     ok('Logo:上传后 logo_url 指向 /uploads 且文件字节与上传一致', clients.byId(logoAppId).logo_url === `/uploads/${logoAppId}.png`
       && fs.existsSync(logoPngPath) && Buffer.compare(fs.readFileSync(logoPngPath), PNG_1PX) === 0);
+    ok('打磨:Logo 原子化上传(上传完成后 uploads 目录无 .tmp- 临时文件残留)', listUploads().length > 0
+      && listUploads().every((n) => !n.includes('.tmp-')), `dir=${JSON.stringify(listUploads())}`);
 
     // 静态服务:匿名 200 + image/png + 字节一致 + 公开缓存 + nosniff
     r = await fetch(BASE + `/uploads/${logoAppId}.png`);
@@ -2304,6 +2306,9 @@ async function main() {
       && clients.byId(logoAppId).logo_url === `/uploads/${logoAppId}.gif`
       && !fs.existsSync(logoPngPath)
       && fs.existsSync(path.join(uploadsDirSmoke, `${logoAppId}.gif`)));
+    ok('打磨:Logo 连传两种扩展后目录文件名集合精确(仅 *.gif,无旧 PNG 与 .tmp- 残留)',
+      JSON.stringify(listUploads().filter((n) => n.startsWith(logoAppId + '.'))) === JSON.stringify([`${logoAppId}.gif`])
+      && listUploads().every((n) => !n.includes('.tmp-')), `dir=${JSON.stringify(listUploads())}`);
 
     // 删除 Logo:文件删除 + logo_url 置空
     r = await call(aj, `/admin/apps/${logoAppId}/logo/delete`, { method: 'POST', form: { _csrf: logoCsrf } });
@@ -2921,6 +2926,23 @@ async function main() {
       consentsM.get(bob.id, mergeApp.client_id).scope === 'openid profile email');
     consentsM.revoke(bob.id, mergeApp.client_id);
     clients.remove(mergeApp.client_id); // 清理探针应用
+
+    /* ---------- 打磨项:LICENSE 文件 / truncateCodePoints 码点安全截断 ---------- */
+    const licenseText = fs.readFileSync(path.join(ROOT, 'LICENSE'), 'utf8');
+    ok('打磨:LICENSE 文件存在且为标准 MIT(含版权行)',
+      licenseText.includes('MIT License') && licenseText.includes('Copyright (c) 2026 Guyao146 / Sakura-Auth-Server contributors'));
+
+    const { truncateCodePoints } = await import('../src/core/util.js');
+    const loneSurrogate = (s) => /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(s);
+    const emojiUA = '👍'.repeat(50); // 50 个码点 / 100 个 UTF-16 编码单元
+    ok('打磨:truncateCodePoints 码点安全截断(emoji 代理对不被拦腰截断,默认 max=40)',
+      truncateCodePoints(emojiUA) === '👍'.repeat(40) + '…'
+      && [...truncateCodePoints(emojiUA)].length === 41
+      && !loneSurrogate(truncateCodePoints(emojiUA))
+      && truncateCodePoints('a'.repeat(50), 40) === 'a'.repeat(40) + '…'
+      && truncateCodePoints('樱'.repeat(45), 40) === '樱'.repeat(40) + '…'
+      && truncateCodePoints('短的') === '短的' && truncateCodePoints('') === ''
+      && truncateCodePoints(null) === '');
 
     console.log(failed ? `\n${failed} 项失败` : '\n全部通过 ✔');
   } finally {

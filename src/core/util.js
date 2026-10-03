@@ -40,3 +40,12 @@ export function safeNext(n, fallback = '/') {
 }
 
 export const USERNAME_RE = /^[a-zA-Z0-9_.@-]{2,64}$/;
+
+/** 码点安全截断:按 Unicode 码点(而非 UTF-16 编码单元)计数与截取,
+ *  emoji 等代理对字符不会被拦腰截成非法半截;超长时以「…」结尾 */
+export function truncateCodePoints(str, max = 40) {
+  const s = String(str ?? '');
+  const cps = Array.from(s);
+  if (cps.length <= max) return s;
+  return cps.slice(0, max).join('') + '…';
+}
