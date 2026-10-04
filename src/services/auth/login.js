@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import * as users from '../../models/users.js';
 import * as sessions from '../../models/sessions.js';
 import * as recovery from '../../models/recovery.js';
-import { verifyPassword } from '../../core/password.js';
+import { verifyUserPassword } from '../../core/password.js';
 import { randomToken, timingSafeEqStr, nowSec } from '../../core/crypto.js';
 import { verifyTotp } from '../../core/totp.js';
 import { getSigningKey } from '../../core/keys.js';
@@ -107,7 +107,7 @@ export function showLogin(ctx, { err, username = '' } = {}) {
 }
 
 /** POST /login —— 第一因子:密码 */
-export function handleLogin(ctx) {
+export async function handleLogin(ctx) {
   const body = ctx.body || {};
   const next = safeNext(body.next, '');
   const cookieCsrf = ctx.cookies.csrf || '';
@@ -117,9 +117,10 @@ export function handleLogin(ctx) {
   if (isLocked(ctx, body.username)) {
     return showLogin(ctx, { err: '失败次数过多,请 1 分钟后再试。', username: body.username });
   }
+  // 用户名不存在时也对占位哈希做一次完整 scrypt,避免通过响应快慢枚举用户名
   const user = body.username ? users.byUsername(String(body.username)) : null;
-  const ok = user && !user.disabled && typeof body.password === 'string' && verifyPassword(body.password, user.password_hash);
-  if (!ok) {
+  const passwordOk = await verifyUserPassword(user, body.password);
+  if (!passwordOk || (user && user.disabled)) {
     recordFail(ctx, body.username);
     logger.warn('登录失败', { username: String(body.username || '') });
     return showLogin(ctx, { err: '用户名或密码不正确。', username: body.username });

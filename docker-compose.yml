@@ -22,6 +22,8 @@ services:
     environment:
       # 对外地址(同时是 OIDC issuer),通过域名/反代访问时必改
       BASE_URL: ${BASE_URL:-https://sso.example.com}
+      # 默认保证提交持久性;NORMAL 在断电/系统崩溃时可能丢失已提交事务
+      SQLITE_SYNCHRONOUS: ${SQLITE_SYNCHRONOUS:-FULL}
       # 数据目录(容器内固定 /data,配合下面的卷,一般不改)
       # DATA_DIR: /data
       # TLS 直连(不经过反代,容器内直接 HTTPS,自动附加 HSTS):

@@ -1,9 +1,10 @@
+import crypto from 'node:crypto';
 import { signJwt } from '../../core/jwt.js';
 import { getRuntime } from '../../core/runtime.js';
 import * as tokens from '../../models/tokens.js';
 import * as groups from '../../models/groups.js';
 import { SCOPES } from '../../core/config.js';
-import { sha256b64url, nowSec } from '../../core/crypto.js';
+import { nowSec } from '../../core/crypto.js';
 
 /** 请求 scope 与客户端允许 scope 取交集(按 SCOPES 顺序稳定输出) */
 export function filterScopes(requested, allowed) {
@@ -55,12 +56,12 @@ export function issueAccessToken({ client, user, scope, authTime }) {
 }
 
 /** 签发 opaque refresh token(落库存哈希) */
-export function issueRefreshToken({ client, user, scope }) {
+export function issueRefreshToken({ client, user, scope, authTime, nonce }) {
   const rt = getRuntime();
   const token = tokens.newRefreshToken();
   tokens.insert({
     id: tokens.refreshKey(token), kind: 'refresh', clientId: client.client_id,
-    userId: user ? user.id : null, scope: scope.join(' '),
+    userId: user ? user.id : null, scope: scope.join(' '), authTime, nonce,
     expiresAt: nowSec() + rt.refreshTokenTtl,
   });
   return token;
@@ -76,7 +77,8 @@ export function mintIdToken({ client, user, scope, authTime, nonce, accessToken 
     aud: client.client_id,
     client_id: client.client_id,
     auth_time: authTime,
-    at_hash: sha256b64url(accessToken).slice(0, 43),
+    // OIDC Core §3.1.3.6:先取哈希字节的左半部分,再做 base64url 编码。
+    at_hash: crypto.createHash('sha256').update(accessToken).digest().subarray(0, 16).toString('base64url'),
     ...claims,
   };
   if (nonce) payload.nonce = nonce;
@@ -92,7 +94,7 @@ export function issueFull({ client, user, scope, authTime, nonce, withRefresh, w
     expires_in: expiresIn,
     scope: scope.join(' '),
   };
-  if (withRefresh) res.refresh_token = issueRefreshToken({ client, user, scope });
+  if (withRefresh) res.refresh_token = issueRefreshToken({ client, user, scope, authTime, nonce });
   if (withIdToken) res.id_token = mintIdToken({ client, user, scope, authTime, nonce, accessToken: access_token });
   return res;
 }

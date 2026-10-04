@@ -46,7 +46,7 @@ export function showRegister(ctx, { err, values } = {}) {
 }
 
 /** POST /register —— 校验通过后直接建立会话并进入首页 */
-export function handleRegister(ctx) {
+export async function handleRegister(ctx) {
   const rt = getRuntime();
   if (!rt.allowRegister) return redirect(ctx.res, '/login');
   const b = ctx.body || {};
@@ -74,7 +74,7 @@ export function handleRegister(ctx) {
   // 自助注册的账号永远不是管理员
   const user = users.create({
     username,
-    passwordHash: hashPassword(b.password),
+    passwordHash: await hashPassword(b.password),
     name: String(b.name || '').trim(),
     email: String(b.email || '').trim(),
     isAdmin: false,

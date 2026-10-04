@@ -10,6 +10,8 @@ import * as register from './services/auth/register.js';
 import * as logout from './services/auth/logout.js';
 import * as account from './services/auth/account.js';
 import * as microsoft from './services/auth/microsoft.js';
+import * as about from './services/about.js';
+import * as unilink from './services/auth/unilink.js';
 import * as reset from './services/auth/reset.js';
 import * as admin from './services/admin/index.js';
 import * as audit from './services/audit.js';
@@ -31,6 +33,7 @@ export function registerRoutes() {
   r('GET', '/favicon.ico', (ctx) => { ctx.res.writeHead(204); ctx.res.end(); });
   r('GET', '/', showLanding);
   r('GET', '/-/theme/:mode', setTheme);
+  r('GET', '/about', about.showAbout);
 
   // JSON API 套件:处理器内部自行判定登录态(未登录返回 JSON 错误,不重定向)
   r('GET', '/api/heartbeat', api.heartbeat, { cors: true });
@@ -71,6 +74,11 @@ export function registerRoutes() {
 
   // Microsoft 账号登录与绑定(发起/回调/关联匿名;解绑需登录态)
   r('GET', '/auth/microsoft', microsoft.startAuth);
+  r('GET', '/auth/unilink', unilink.start);
+  r('GET', '/auth/unilink/callback', unilink.callback);
+  r('POST', '/auth/unilink/2fa', unilink.secondFactor);
+  r('GET', '/admin/unilink', unilink.settingsPage, { auth: 'admin' });
+  r('POST', '/admin/unilink', unilink.saveSettings, { auth: 'admin' });
   r('GET', '/auth/microsoft/callback', microsoft.callback);
   r('POST', '/auth/microsoft/link', microsoft.link);
   r('POST', '/auth/microsoft/register', microsoft.registerNew);

@@ -31,7 +31,20 @@ function buildRedirect(uri, params) {
   return uri + (uri.includes('?') ? '&' : '?') + q.toString();
 }
 
-const errRedirect = (uri, obj) => redirect(null, buildRedirect(uri, obj));
+const errRedirect = (ctx, uri, obj) => redirect(ctx.res, buildRedirect(uri, obj));
+
+/** GET/POST 共用 PKCE 校验;省略 method 按 RFC 7636 默认为 plain。 */
+function pkceError(client, challenge, method) {
+  if (typeof challenge !== 'string' || typeof method !== 'string') return 'PKCE 参数必须是字符串';
+  if (!challenge) {
+    if (method) return 'code_challenge_method 必须与 code_challenge 一起提交';
+    return client.pkce_required ? '该应用已强制要求 PKCE,请携带 code_challenge' : null;
+  }
+  const effectiveMethod = method || 'plain';
+  if (!['S256', 'plain'].includes(effectiveMethod)) return 'code_challenge_method 仅支持 S256 或 plain';
+  const pattern = effectiveMethod === 'S256' ? /^[A-Za-z0-9_-]{43}$/ : /^[A-Za-z0-9._~-]{43,128}$/;
+  return pattern.test(challenge) ? null : 'code_challenge 格式不正确';
+}
 
 /**
  * 应用按权限组限制访问:allowed_groups 非空且用户不属于其中任何组时,
@@ -65,7 +78,7 @@ export function authorizeGet(ctx) {
   const client = resolved.client;
   const state = q.get('state') || '';
   const bad = (error, description) =>
-    errRedirect(redirectUri, { error, error_description: description, state });
+    errRedirect(ctx, redirectUri, { error, error_description: description, state });
 
   if (q.get('response_type') !== 'code') return bad('unsupported_response_type', '仅支持 response_type=code');
 
@@ -73,13 +86,8 @@ export function authorizeGet(ctx) {
   const challenge = q.get('code_challenge') || '';
   const challengeMethod = q.get('code_challenge_method') || '';
 
-  if (challenge) {
-    if (!['S256', 'plain'].includes(challengeMethod)) {
-      return bad('invalid_request', 'code_challenge_method 仅支持 S256 或 plain');
-    }
-  } else if (client.pkce_required) {
-    return bad('invalid_request', '该应用已强制要求 PKCE,请携带 code_challenge');
-  }
+  const challengeError = pkceError(client, challenge, challengeMethod);
+  if (challengeError) return bad('invalid_request', challengeError);
 
   if (!ctx.session) {
     const next = ctx.url.pathname + ctx.url.search;
@@ -117,7 +125,7 @@ export function authorizePost(ctx) {
   }
   const redirectUri = body.redirect_uri;
   const state = body.state || '';
-  const bad = (error, description) => errRedirect(redirectUri, { error, error_description: description, state });
+  const bad = (error, description) => errRedirect(ctx, redirectUri, { error, error_description: description, state });
 
   // 同意页提交同样校验(防止绕过 GET 直接 POST approve)
   if (denyIfNotAllowed(ctx, resolved.client)) return;
@@ -125,16 +133,20 @@ export function authorizePost(ctx) {
   if (body.response_type !== 'code') return bad('unsupported_response_type', '仅支持 response_type=code');
   const client = resolved.client;
   const scopeList = filterScopes(body.scope, client.scopes);
+  const challenge = body.code_challenge ?? '';
+  const challengeMethod = body.code_challenge_method ?? '';
+  const challengeError = pkceError(client, challenge, challengeMethod);
+  if (challengeError) return bad('invalid_request', challengeError);
 
   if (body.decision !== 'approve') {
-    return errRedirect(redirectUri, { error: 'access_denied', error_description: '用户拒绝了授权', state });
+    return errRedirect(ctx, redirectUri, { error: 'access_denied', error_description: '用户拒绝了授权', state });
   }
   if (body.remember === 'on') consents.grant(ctx.user.id, client.client_id, scopeList.join(' '));
   record(ctx, 'oauth.consent_granted', `${client.client_id} ${scopeList.join(' ')}`);
 
   issueCode(ctx, {
     client, redirectUri, scopeList,
-    challenge: body.code_challenge || '', challengeMethod: body.code_challenge_method || '',
+    challenge, challengeMethod,
     state, nonce: body.nonce,
   });
 }

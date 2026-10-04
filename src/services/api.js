@@ -15,7 +15,7 @@ import { getRuntime } from '../core/runtime.js';
 import { sendJson, clearCookie } from '../core/http.js';
 import { verifyJwt } from '../core/jwt.js';
 import { verifyTotp } from '../core/totp.js';
-import { verifyPassword } from '../core/password.js';
+import { verifyUserPassword } from '../core/password.js';
 import { isLocked, recordFail, clearFails, startSession, sessionMeta } from './auth/login.js';
 
 const NO_STORE = { 'Cache-Control': 'no-store' };
@@ -60,7 +60,7 @@ export function session(ctx) {
 
 /** POST /api/login —— JSON 或表单 {username, password, totp_code?};
  *  复用 web 登录的限流与凭据校验规则 */
-export function login(ctx) {
+export async function login(ctx) {
   const b = ctx.body || {};
   const username = typeof b.username === 'string' ? b.username.trim() : '';
   const password = typeof b.password === 'string' ? b.password : '';
@@ -69,8 +69,9 @@ export function login(ctx) {
   if (isLocked(ctx, username)) return sendJson(ctx.res, 401, { error: 'rate_limited' }, NO_STORE);
 
   const user = users.byUsername(username);
-  const ok = user && !user.disabled && verifyPassword(password, user.password_hash);
-  if (!ok) {
+  // 占位哈希保证用户名不存在时也做完整 scrypt(防枚举)
+  const passwordOk = await verifyUserPassword(user, password);
+  if (!passwordOk || (user && user.disabled)) {
     recordFail(ctx, username);
     return sendJson(ctx.res, 401, { error: 'invalid_credentials' }, NO_STORE);
   }
@@ -171,7 +172,10 @@ function bearerLive(ctx) {
   const payload = verifyJwt(header.slice(7).trim());
   if (!payload) return false;
   const row = tokens.byId(payload.jti);
-  return !!row && row.kind === 'access' && tokens.isLive(row);
+  if (!row || row.kind !== 'access' || !tokens.isLive(row)) return false;
+  if (!row.user_id) return true; // client_credentials 的机器身份
+  const user = users.byId(row.user_id);
+  return !!user && !user.disabled;
 }
 
 /** GET /api/registry —— 应用健康状态注册表(应用读取其它应用的状态)。

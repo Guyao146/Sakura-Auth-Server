@@ -21,7 +21,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - name: 端到端冒烟测试(307 项断言,自动拉起独立实例)
+      - name: OAuth/OIDC 安全与兼容性回归
+        run: npm run test:oauth
+      - name: 端到端冒烟测试(自动拉起独立实例)
         run: npm run smoke
       - name: 单元测试(QR / SMTP / MS 联邦)
         run: |

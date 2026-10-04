@@ -47,6 +47,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   ip         TEXT NOT NULL DEFAULT '',
   user_agent TEXT NOT NULL DEFAULT ''
 );
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
 CREATE TABLE IF NOT EXISTS auth_codes (
   code_hash             TEXT PRIMARY KEY,
   client_id             TEXT NOT NULL,
@@ -61,6 +63,8 @@ CREATE TABLE IF NOT EXISTS auth_codes (
   expires_at            INTEGER NOT NULL,
   used                  INTEGER NOT NULL DEFAULT 0
 );
+CREATE INDEX IF NOT EXISTS idx_auth_codes_expires ON auth_codes(expires_at);
+CREATE INDEX IF NOT EXISTS idx_auth_codes_client ON auth_codes(client_id);
 CREATE TABLE IF NOT EXISTS tokens (
   id         TEXT PRIMARY KEY,
   kind       TEXT NOT NULL,
@@ -76,6 +80,7 @@ CREATE TABLE IF NOT EXISTS tokens (
 );
 CREATE INDEX IF NOT EXISTS idx_tokens_user  ON tokens(user_id);
 CREATE INDEX IF NOT EXISTS idx_tokens_client ON tokens(client_id);
+CREATE INDEX IF NOT EXISTS idx_tokens_expires ON tokens(expires_at);
 CREATE TABLE IF NOT EXISTS consents (
   user_id    TEXT NOT NULL,
   client_id  TEXT NOT NULL,
@@ -100,6 +105,7 @@ CREATE TABLE IF NOT EXISTS reset_tokens (
   used_at    INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_reset_tokens_user ON reset_tokens(user_id);
+CREATE INDEX IF NOT EXISTS idx_reset_tokens_expires ON reset_tokens(expires_at);
 CREATE TABLE IF NOT EXISTS groups (
   id          TEXT PRIMARY KEY,
   name        TEXT NOT NULL UNIQUE,
@@ -130,6 +136,8 @@ function migrate() {
   if (!cols.includes('totp_enabled')) db.exec('ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0');
   if (!cols.includes('ms_sub')) db.exec('ALTER TABLE users ADD COLUMN ms_sub TEXT');
   if (!cols.includes('ms_email')) db.exec('ALTER TABLE users ADD COLUMN ms_email TEXT');
+  // ms_sub 索引须在列补齐之后建(老库 users 无该列);微软联邦登录按 ms_sub 查用户
+  db.exec('CREATE INDEX IF NOT EXISTS idx_users_ms_sub ON users(ms_sub);');
   const ccols = db.prepare('PRAGMA table_info(clients)').all().map((c) => c.name);
   if (!ccols.includes('allowed_groups')) {
     db.exec("ALTER TABLE clients ADD COLUMN allowed_groups TEXT NOT NULL DEFAULT '[]'");
@@ -213,15 +221,19 @@ export function seedDefaultAdminGroup() {
 }
 
 export function initDb() {
+  const synchronous = (process.env.SQLITE_SYNCHRONOUS || 'FULL').trim().toUpperCase();
+  if (!['FULL', 'NORMAL'].includes(synchronous)) throw new Error('SQLITE_SYNCHRONOUS 仅支持 FULL 或 NORMAL');
   fs.mkdirSync(config.dataDir, { recursive: true });
   db = new DatabaseSync(config.dbFile);
   db.exec('PRAGMA journal_mode = WAL;');
+  // 认证数据默认优先持久性;只有显式选择 NORMAL 才接受断电/系统崩溃时丢失已提交事务的风险。
+  db.exec(`PRAGMA synchronous = ${synchronous};`);
   db.exec('PRAGMA foreign_keys = ON;');
   // 并发写(smoke 多进程/双实例误配)时等待而非立即 SQLITE_BUSY 报错
   db.exec('PRAGMA busy_timeout = 5000;');
   db.exec(SCHEMA);
   migrate();
-  logger.info('数据库已就绪', { file: config.dbFile });
+  logger.info('数据库已就绪', { file: config.dbFile, synchronous });
   return db;
 }
 

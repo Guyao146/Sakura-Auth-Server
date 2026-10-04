@@ -4,6 +4,7 @@ import * as consents from '../../models/consents.js';
 import * as tokens from '../../models/tokens.js';
 import * as sessions from '../../models/sessions.js';
 import { hashPassword, verifyPassword } from '../../core/password.js';
+import { invalidateUserCredentials } from './credentials.js';
 import { generateSecret, otpauthUri, verifyTotp } from '../../core/totp.js';
 import { qrSvg } from '../../core/qr.js';
 import { getRuntime } from '../../core/runtime.js';
@@ -45,11 +46,11 @@ export function showAccount(ctx, { msg, err } = {}) {
 }
 
 /** POST /account —— 修改自己的密码 */
-export function handleChangePassword(ctx) {
+export async function handleChangePassword(ctx) {
   const b = ctx.body || {};
   if (b._csrf !== ctx.session.csrf) return showAccount(ctx, { err: '页面已过期,请重试。' });
   const { current, password, password2 } = b;
-  if (typeof current !== 'string' || !verifyPassword(current, ctx.user.password_hash)) {
+  if (typeof current !== 'string' || !(await verifyPassword(current, ctx.user.password_hash))) {
     return showAccount(ctx, { err: '当前密码不正确。' });
   }
   if (typeof password !== 'string' || password.length < 8) {
@@ -58,20 +59,22 @@ export function handleChangePassword(ctx) {
   if (password !== password2) {
     return showAccount(ctx, { err: '两次输入的新密码不一致。' });
   }
-  users.update(ctx.user.id, { passwordHash: hashPassword(password) });
+  users.update(ctx.user.id, { passwordHash: await hashPassword(password) });
+  // 统一凭据失效:吊销令牌、删除未使用授权码、清除其它设备会话(保留当前会话)
+  invalidateUserCredentials(ctx.user.id, { keepSession: ctx.session.id_hash });
   record(ctx, 'account.password_changed');
   logger.info('用户修改了密码', { username: ctx.user.username });
-  showAccount(ctx, { msg: '密码已修改。' });
+  showAccount(ctx, { msg: '密码已修改,其它设备需要重新登录。' });
 }
 
 /* ---- 两步验证管理 ---- */
 
 /** POST /account/2fa/start —— 验密码后生成待确认密钥 */
-export function startTwoFa(ctx) {
+export async function startTwoFa(ctx) {
   const b = ctx.body || {};
   if (b._csrf !== ctx.session.csrf) return showAccount(ctx, { err: '页面已过期,请重试。' });
   if (ctx.user.totp_enabled) return showAccount(ctx, { msg: '两步验证已开启。' });
-  if (typeof b.password !== 'string' || !verifyPassword(b.password, ctx.user.password_hash)) {
+  if (typeof b.password !== 'string' || !(await verifyPassword(b.password, ctx.user.password_hash))) {
     return showAccount(ctx, { err: '当前密码不正确。' });
   }
   users.setTotpSecret(ctx.user.id, generateSecret());
@@ -99,10 +102,10 @@ export function confirmTwoFa(ctx) {
 }
 
 /** POST /account/2fa/disable —— 验密码后关闭并清除恢复代码 */
-export function disableTwoFa(ctx) {
+export async function disableTwoFa(ctx) {
   const b = ctx.body || {};
   if (b._csrf !== ctx.session.csrf) return showAccount(ctx, { err: '页面已过期,请重试。' });
-  if (typeof b.password !== 'string' || !verifyPassword(b.password, ctx.user.password_hash)) {
+  if (typeof b.password !== 'string' || !(await verifyPassword(b.password, ctx.user.password_hash))) {
     return showAccount(ctx, { err: '当前密码不正确。' });
   }
   users.clearTotp(ctx.user.id);

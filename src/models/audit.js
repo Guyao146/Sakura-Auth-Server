@@ -7,13 +7,14 @@ const MAX_ROWS = 5000;
 /** 写入一条审计记录;超过上限时删除最旧的溢出部分(保留最新 5000 条) */
 export function log({ actor = 'anonymous', action, detail = '', ip = '' }) {
   if (!action) return;
-  getDb()
-    .prepare('INSERT INTO audit_logs (id, ts, actor, action, detail, ip) VALUES (?, ?, ?, ?, ?, ?)')
+  const db = getDb();
+  db.prepare('INSERT INTO audit_logs (id, ts, actor, action, detail, ip) VALUES (?, ?, ?, ?, ?, ?)')
     .run(randomToken(12), nowSec(), String(actor || 'anonymous'), String(action), String(detail ?? ''), String(ip || ''));
-  const n = getDb().prepare('SELECT COUNT(*) AS n FROM audit_logs').get().n;
+  // 保持严格上限;不依赖进程内计数,重启及其它连接写入后也能正确收敛。
+  const n = db.prepare('SELECT COUNT(*) AS n FROM audit_logs').get().n;
   if (n > MAX_ROWS) {
     const excess = n - MAX_ROWS;
-    getDb()
+    db
       .prepare('DELETE FROM audit_logs WHERE id IN (SELECT id FROM audit_logs ORDER BY ts ASC, rowid ASC LIMIT ?)')
       .run(excess);
   }

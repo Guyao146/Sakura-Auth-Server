@@ -48,6 +48,7 @@ export function loginPage({ theme, siteName, csrf, next, err, username = '', all
           <button class="btn btn-primary" type="submit">登 录</button>
         </div>
       </form>
+      ${rt?.unilink?.enabled ? `<div class="actions"><a class="btn" href="/auth/unilink?next=${encodeURIComponent(next || '/apps')}">使用 UniLink 手机扫码登录</a></div>` : ''}
       ${showMs ? `
       <div style="display:flex;align-items:center;gap:var(--s3);margin:var(--s4) 0 0">
         <span style="flex:1;border-top:1px solid var(--border)"></span>

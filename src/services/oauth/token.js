@@ -6,6 +6,8 @@ import { getDb } from '../../core/db.js';
 import { verifyPassword } from '../../core/password.js';
 import { sha256b64url, timingSafeEqStr, nowSec } from '../../core/crypto.js';
 import { sendJson } from '../../core/http.js';
+import { logger } from '../../core/logger.js';
+import { record } from '../audit.js';
 import { filterScopes, issueFull, issueAccessToken, mintIdToken } from './issue.js';
 
 const bad = (ctx, error, description, status = 400) =>
@@ -15,7 +17,7 @@ const bad = (ctx, error, description, status = 400) =>
  * RFC 6749 §2.3.1 客户端认证:HTTP Basic 或表单 client_id/client_secret。
  * 公开客户端(token_auth=none)不带密钥。失败返回 null 并已写出 401。
  */
-export function authenticateClient(ctx) {
+export async function authenticateClient(ctx) {
   const body = ctx.body || {};
   let id = body.client_id || null;
   let secret = body.client_secret || null;
@@ -36,7 +38,7 @@ export function authenticateClient(ctx) {
     if (secret) { bad(ctx, 'invalid_client', '公开客户端不应携带客户端密钥', 401); return null; }
     return client;
   }
-  if (!secret || !client.secret_hash || !verifyPassword(secret, client.secret_hash)) {
+  if (!secret || !client.secret_hash || !(await verifyPassword(secret, client.secret_hash))) {
     bad(ctx, 'invalid_client', '客户端认证失败', 401);
     return null;
   }
@@ -45,18 +47,19 @@ export function authenticateClient(ctx) {
 
 /** PKCE 校验:S256=sha256(verifier) base64url;plain=原文 */
 function pkceOk(verifier, challenge, method) {
-  if (typeof verifier !== 'string' || verifier.length < 43 || verifier.length > 128) return false;
+  if (typeof verifier !== 'string' || !/^[A-Za-z0-9._~-]{43,128}$/.test(verifier)) return false;
+  if (!['S256', 'plain'].includes(method)) return false;
   return method === 'S256'
     ? timingSafeEqStr(sha256b64url(verifier), challenge)
     : timingSafeEqStr(verifier, challenge);
 }
 
 /** POST /token —— authorization_code / refresh_token / client_credentials */
-export function tokenPost(ctx) {
+export async function tokenPost(ctx) {
   ctx.res.setHeader('Cache-Control', 'no-store');
   ctx.res.setHeader('Pragma', 'no-cache');
   const body = ctx.body || {};
-  const client = authenticateClient(ctx);
+  const client = await authenticateClient(ctx);
   if (!client) return;
 
   switch (body.grant_type) {
@@ -99,13 +102,23 @@ function grantAuthorizationCode(ctx, client, body) {
   if (!user || user.disabled) return fail('用户不可用');
 
   const scope = row.scope.split(/\s+/).filter(Boolean);
-  const res = issueFull({
-    client, user, scope,
-    authTime: row.auth_time,
-    nonce: row.nonce,
-    withRefresh: scope.includes('offline_access'),
-    withIdToken: scope.includes('openid'),
-  });
+  // 消费授权码 + 签发令牌放一个事务:避免中途失败留下「已用未发」或「已发未记」状态
+  const db = getDb();
+  let res;
+  db.exec('BEGIN');
+  try {
+    res = issueFull({
+      client, user, scope,
+      authTime: row.auth_time,
+      nonce: row.nonce,
+      withRefresh: scope.includes('offline_access'),
+      withIdToken: scope.includes('openid'),
+    });
+    db.exec('COMMIT');
+  } catch (err) {
+    try { db.exec('ROLLBACK'); } catch { /* 连接异常时保留原始错误 */ }
+    throw err;
+  }
   return sendJson(ctx.res, 200, res);
 }
 
@@ -114,26 +127,48 @@ function grantRefreshToken(ctx, client, body) {
   if (!body.refresh_token) return fail('缺少 refresh_token');
   const row = tokens.byId(tokens.refreshKey(body.refresh_token));
   if (!row || row.kind !== 'refresh') return fail('refresh_token 无效');
-  if (row.revoked || row.expires_at <= nowSec()) return fail('refresh_token 已失效');
+  if (row.revoked) {
+    // 轮换链重放:已作废的刷新令牌再次出现,按令牌泄漏处理,作废其下游整条轮换链
+    const revoked = revokeRotationChain(row.id);
+    record(ctx, 'oauth.refresh_replay', `${row.client_id} revoked=${revoked.length}`);
+    logger.warn('刷新令牌重放:已作废整条轮换链', { client_id: row.client_id, revoked: revoked.length });
+    return fail('refresh_token 已失效');
+  }
+  if (row.expires_at <= nowSec()) return fail('refresh_token 已失效');
   if (row.client_id !== client.client_id) return fail('refresh_token 不属于该客户端');
 
   const user = row.user_id ? users.byId(row.user_id) : null;
   if (row.user_id && (!user || user.disabled)) return fail('用户不可用');
 
   const original = row.scope.split(/\s+/).filter(Boolean);
-  const requested = filterScopes(body.scope || '', original.join(' '));
-  const scope = requested.length ? requested : original;
+  let scope = original;
+  if (body.scope !== undefined) {
+    if (typeof body.scope !== 'string') return bad(ctx, 'invalid_scope', 'scope 必须是字符串');
+    const requested = [...new Set(body.scope.trim().split(/\s+/).filter(Boolean))];
+    if (!requested.length || requested.some((s) => !original.includes(s))) {
+      return bad(ctx, 'invalid_scope', 'scope 必须是原授权范围的非空子集');
+    }
+    scope = requested;
+  }
   const authTime = row.auth_time;
 
-  // 轮换:新 refresh 立即签发,旧的标记作废并记录 replaced_by 轮换链
+  // 轮换:新 refresh 立即签发,旧的标记作废并记录 replaced_by 轮换链;两者同事务
   const newRefresh = tokens.newRefreshToken();
   const newHash = tokens.refreshKey(newRefresh);
-  tokens.insert({
-    id: newHash, kind: 'refresh', clientId: client.client_id,
-    userId: row.user_id, scope: scope.join(' '), authTime,
-    expiresAt: nowSec() + ctx.runtime.refreshTokenTtl,
-  });
-  getDb().prepare('UPDATE tokens SET revoked = 1, replaced_by = ? WHERE id = ?').run(newHash, row.id);
+  const db = getDb();
+  db.exec('BEGIN');
+  try {
+    tokens.insert({
+      id: newHash, kind: 'refresh', clientId: client.client_id,
+      userId: row.user_id, scope: scope.join(' '), authTime, nonce: row.nonce,
+      expiresAt: nowSec() + ctx.runtime.refreshTokenTtl,
+    });
+    db.prepare('UPDATE tokens SET revoked = 1, replaced_by = ? WHERE id = ?').run(newHash, row.id);
+    db.exec('COMMIT');
+  } catch (err) {
+    try { db.exec('ROLLBACK'); } catch { /* 连接异常时保留原始错误 */ }
+    throw err;
+  }
 
   const { access_token, expiresIn } = issueAccessToken({ client, user, scope, authTime });
   const res = {
@@ -143,6 +178,21 @@ function grantRefreshToken(ctx, client, body) {
   const idToken = mintIdToken({ client, user, scope, authTime, nonce: row.nonce, accessToken: access_token });
   if (idToken) res.id_token = idToken;
   return sendJson(ctx.res, 200, res);
+}
+
+/** 沿 replaced_by 链作废全部下游令牌(重放检测:旧令牌再次出现视为泄漏,全链作废强制重新登录) */
+function revokeRotationChain(startId) {
+  const db = getDb();
+  const mark = db.prepare('UPDATE tokens SET revoked = 1 WHERE id = ? AND revoked = 0');
+  const next = db.prepare('SELECT replaced_by FROM tokens WHERE id = ?');
+  const revoked = [];
+  const seen = new Set();
+  for (let cur = startId; cur && !seen.has(cur) && revoked.length < 64;) {
+    seen.add(cur);
+    if (mark.run(cur).changes > 0) revoked.push(cur);
+    cur = next.get(cur)?.replaced_by || null;
+  }
+  return revoked;
 }
 
 function grantClientCredentials(ctx, client, body) {

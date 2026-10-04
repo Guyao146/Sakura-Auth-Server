@@ -25,6 +25,6 @@ if (explicitPassword && explicitPassword.length < 8) {
   console.error('密码至少 8 位。');
   process.exit(1);
 }
-users.update(user.id, { passwordHash: hashPassword(password) });
+users.update(user.id, { passwordHash: await hashPassword(password) });
 console.log(`已重置 ${username} 的密码:${password}`);
 console.log('请立即登录并妥善保存。');

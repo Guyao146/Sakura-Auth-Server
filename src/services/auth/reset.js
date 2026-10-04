@@ -1,6 +1,5 @@
 /** 邮件找回密码:申请重置链接 + 凭 token 设置新密码(防枚举、防 CSRF) */
 import * as users from '../../models/users.js';
-import * as sessions from '../../models/sessions.js';
 import * as resets from '../../models/resets.js';
 import { getDb } from '../../core/db.js';
 import { sendMail } from '../../core/smtp.js';
@@ -8,7 +7,9 @@ import { getRuntime } from '../../core/runtime.js';
 import { setCookie, sendHtml } from '../../core/http.js';
 import { randomToken } from '../../core/crypto.js';
 import { hashPassword } from '../../core/password.js';
+import { invalidateUserCredentials } from '../auth/credentials.js';
 import { logger } from '../../core/logger.js';
+import { record } from '../audit.js';
 import { forgotPasswordPage, resetPasswordPage, resetDonePage } from '../../views/auth.js';
 import { errorPage } from '../../views/error.js';
 
@@ -115,7 +116,7 @@ export function showReset(ctx, { err, token } = {}) {
 }
 
 /** POST /reset-password —— 校验通过后改密、消费 token、清掉全部会话 */
-export function handleReset(ctx) {
+export async function handleReset(ctx) {
   const b = ctx.body || {};
   const cookieCsrf = ctx.cookies.csrf || '';
   if (!cookieCsrf || typeof b._csrf !== 'string' || b._csrf !== cookieCsrf) {
@@ -140,8 +141,10 @@ export function handleReset(ctx) {
     }));
   }
 
-  users.update(user.id, { passwordHash: hashPassword(password) });
-  sessions.removeByUser(user.id);
-  logger.info('密码已通过邮件重置,全部会话已清除', { username: user.username });
+  users.update(user.id, { passwordHash: await hashPassword(password) });
+  // 统一凭据失效:全部会话、令牌与未使用授权码;重置后必须重新登录
+  invalidateUserCredentials(user.id);
+  record(ctx, 'auth.password_reset', user.username, { actor: user.username });
+  logger.info('密码已通过邮件重置,全部会话与令牌已清除', { username: user.username });
   sendHtml(ctx.res, 200, resetDonePage({ theme: ctx.theme, siteName: ctx.runtime.siteName }));
 }

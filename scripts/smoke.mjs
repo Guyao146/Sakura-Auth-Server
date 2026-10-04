@@ -7,13 +7,14 @@ import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const PORT = Number(process.env.SMOKE_PORT || 9901); // 并发跑多份时用 SMOKE_PORT 错开
 const BASE = `http://localhost:${PORT}`;
-const DATA = path.join(ROOT, '.smoke-data');
+const DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'sakura-smoke-'));
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const b64urlSha256 = (s) => crypto.createHash('sha256').update(s).digest('base64url');
@@ -142,13 +143,14 @@ async function main() {
   child.stderr.on('data', (d) => { serverLog += d; });
 
   let msMock = null;
+  let fixtureDb = null;
   try {
     let ready = false;
     for (let i = 0; i < 120 && !ready; i++) {
       try { ready = (await fetch(BASE + '/healthz')).ok; } catch { await sleep(150); }
     }
     ok('服务启动并响应 /healthz', ready);
-    if (!ready) { console.log(serverLog.slice(-2000)); return; }
+    if (!ready) throw new Error('服务未就绪:\n' + serverLog.slice(-2000));
 
     // 本地 mock Microsoft(0.0.0.0 随机端口),供 MS 登录链路联调
     msMock = await startMockMs();
@@ -160,9 +162,9 @@ async function main() {
     const users = await import('../src/models/users.js');
     const clients = await import('../src/models/clients.js');
     const settings = await import('../src/models/settings.js');
-    initDb();
+    fixtureDb = initDb();
     initKeys(); // 测试进程也要载入签名密钥,便于本地验签
-    const bob = users.create({ username: 'bob', passwordHash: hashPassword('BobPassw0rd!'), name: '小明', userGroups: 'dev ops' });
+    const bob = users.create({ username: 'bob', passwordHash: await hashPassword('BobPassw0rd!'), name: '小明', userGroups: 'dev ops' });
     const web = clients.create({
       name: 'Smoke Web', redirectUris: ['http://127.0.0.1:8080/cb'],
       scopes: 'openid profile email offline_access groups', isPublic: true, pkceRequired: true,
@@ -170,7 +172,7 @@ async function main() {
     const svc = clients.create({
       name: 'Smoke Service', redirectUris: ['http://127.0.0.1:8080/any'],
       scopes: 'openid profile', isPublic: false, pkceRequired: false,
-      secretHash: hashPassword('svc-secret-123'),
+      secretHash: await hashPassword('svc-secret-123'),
     });
     // 模拟老库迁移:users.user_groups 自由文本 → 组与成员关系(migrate() 内自动执行,幂等)
     const { seedGroupsFromUserGroups } = await import('../src/core/db.js');
@@ -263,6 +265,20 @@ async function main() {
       && consentHtml.includes('value="deny"') && consentHtml.includes('value="approve"')
       && consentHtml.includes('完成登录'));
 
+    // 防止直接 POST 绕过 GET 上的必需 PKCE 校验。
+    r = await call(uj, '/authorize', {
+      method: 'POST', form: { ...consentForm, decision: 'approve', code_challenge: '', code_challenge_method: '' },
+    });
+    const rejectedPkce = new URL(location(r), BASE);
+    ok('POST 授权缺失必需 PKCE 返回 invalid_request 且保留 state', r.status === 302
+      && rejectedPkce.searchParams.get('error') === 'invalid_request'
+      && rejectedPkce.searchParams.get('state') === state && !rejectedPkce.searchParams.has('code'));
+    r = await call(uj, '/authorize', {
+      method: 'POST', form: { ...consentForm, decision: 'deny' },
+    });
+    ok('拒绝授权返回 access_denied 而非 500', r.status === 302
+      && new URL(location(r), BASE).searchParams.get('error') === 'access_denied');
+
     r = await call(uj, '/authorize', {
       method: 'POST',
       form: { ...consentForm, decision: 'approve', remember: 'on' },
@@ -286,6 +302,8 @@ async function main() {
     const { verifyJwt } = await import('../src/core/jwt.js');
     const idPayload = verifyJwt(tok.id_token);
     ok('id_token 验签通过且带 nonce/sub', !!idPayload && idPayload.nonce === nonce && idPayload.preferred_username === 'bob');
+    ok('id_token 的 RS256 at_hash 符合 OIDC', idPayload?.at_hash === crypto.createHash('sha256')
+      .update(tok.access_token).digest().subarray(0, 16).toString('base64url'));
 
     const ui = await fetch(BASE + '/userinfo', { headers: { Authorization: `Bearer ${tok.access_token}` } });
     const uiBody = await ui.json();
@@ -336,6 +354,15 @@ async function main() {
     });
     const tok4 = await r.json();
     ok('刷新成功且轮换出新 refresh_token', r.status === 200 && tok4.refresh_token && tok4.refresh_token !== tok3.refresh_token);
+    const refreshedId = verifyJwt(tok4.id_token);
+    ok('刷新后 ID Token 保留原始 auth_time 与 nonce', refreshedId?.auth_time === idPayload.auth_time
+      && refreshedId?.nonce === nonce);
+    r = await fetch(BASE + '/token', {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: tok4.refresh_token,
+        client_id: web.client_id, scope: 'ungranted-scope' }).toString(),
+    });
+    ok('刷新拒绝未授权 scope', r.status === 400 && (await r.json()).error === 'invalid_scope');
 
     r = await fetch(BASE + '/token', {
       method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -710,7 +737,7 @@ async function main() {
       && gUi.groups.includes('dev') && gUi.groups.includes('contractors') && !gUi.groups.includes('ops'));
 
     // 组外用户(无任何组):渲染 403 风格无权访问页,不重定向回 redirect_uri
-    users.create({ username: 'noah', passwordHash: hashPassword('NoahPass#123'), name: '诺亚' });
+    users.create({ username: 'noah', passwordHash: await hashPassword('NoahPass#123'), name: '诺亚' });
     const nj2 = new Jar();
     r = await call(nj2, '/login');
     const nfa = extractHidden(await r.text());
@@ -734,7 +761,7 @@ async function main() {
     const gSvc = clients.create({
       name: 'Groups Svc', redirectUris: ['http://127.0.0.1:8080/any'],
       scopes: 'openid profile', isPublic: false, pkceRequired: false,
-      secretHash: hashPassword('gsvc-secret-456'), allowedGroups: ['dev'],
+      secretHash: await hashPassword('gsvc-secret-456'), allowedGroups: ['dev'],
     });
     r = await fetch(BASE + '/token', {
       method: 'POST',
@@ -1659,7 +1686,7 @@ async function main() {
 
     /* ---------- 会话管理:用户自助查看/撤销登录设备(放在向导重跑段之前) ---------- */
     const sessionsM = await import('../src/models/sessions.js');
-    const sessUser = users.create({ username: 'sessman', passwordHash: hashPassword('Sess#12345'), name: '会话管理' });
+    const sessUser = users.create({ username: 'sessman', passwordHash: await hashPassword('Sess#12345'), name: '会话管理' });
     const UA_A = 'smoke-agent-A/1.0', UA_B = 'smoke-agent-B/2.0';
     const apiLoginAs = (jar, ua) => call(jar, '/api/login', {
       method: 'POST',
@@ -1955,6 +1982,7 @@ async function main() {
     child.kill();
     if (msMock) { try { await msMock.close(); } catch { /* 关闭失败不掩盖测试结果 */ } }
     await sleep(800);
+    fixtureDb?.close();
     // Windows 下 SQLite WAL 句柄释放稍慢,失败不掩盖真实测试结果
     try { fs.rmSync(DATA, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 }); } catch {}
   }

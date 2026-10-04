@@ -10,6 +10,7 @@ import * as recovery from '../../models/recovery.js';
 import { getRuntime, updateRuntime } from '../../core/runtime.js';
 import * as settingsApi from '../../models/settings.js';
 import { hashPassword } from '../../core/password.js';
+import { invalidateUserCredentials } from '../auth/credentials.js';
 import { randomToken } from '../../core/crypto.js';
 import { splitLines, redirectUri as validUri, httpUrl } from '../../core/util.js';
 import { SCOPES, DEFAULT_CLIENT_SCOPES } from '../../core/config.js';
@@ -222,7 +223,8 @@ export function grantGroupApp(ctx) {
 
 /* ---------------- 用户管理 ---------------- */
 export function listUsers(ctx) {
-  const list = users.list().map((u) => ({ ...u, groupNames: groups.membersOf(u.id), _csrf: CSRF(ctx) }));
+  const groupMap = groups.membersOfAll(); // 一次查询消除 N+1
+  const list = users.list().map((u) => ({ ...u, groupNames: groupMap.get(u.id) || [], _csrf: CSRF(ctx) }));
   sendHtml(ctx.res, 200, usersPage({
     theme: ctx.theme, siteName: getRuntime().siteName, user: ctx.user,
     cur: ctx.url.pathname + ctx.url.search, list,
@@ -239,7 +241,7 @@ export function newUserForm(ctx) {
   }));
 }
 
-export function createUser(ctx) {
+export async function createUser(ctx) {
   const b = ctx.body || {};
   const username = String(b.username || '').trim();
   if (!/^[a-zA-Z0-9_.@-]{2,64}$/.test(username)) {
@@ -253,7 +255,7 @@ export function createUser(ctx) {
   }
   const groupNames = collectGroupNames(b);
   const created = users.create({
-    username, passwordHash: hashPassword(b.password),
+    username, passwordHash: await hashPassword(b.password),
     name: String(b.name || '').trim(), email: String(b.email || '').trim(),
     userGroups: groupNames.join(' '), isAdmin: b.is_admin === '1',
   });
@@ -278,7 +280,7 @@ export function userDetail(ctx) {
   }));
 }
 
-export function updateUser(ctx) {
+export async function updateUser(ctx) {
   const b = ctx.body || {};
   const target = users.byId(ctx.params.id);
   if (!target) return redirect(ctx.res, '/admin/users?err=' + encodeURIComponent('用户不存在。'));
@@ -298,7 +300,7 @@ export function updateUser(ctx) {
     if (b.password.length < 8) {
       return redirect(ctx.res, `/admin/users/${target.id}?err=` + encodeURIComponent('新密码至少 8 位。'));
     }
-    passwordHash = hashPassword(b.password);
+    passwordHash = await hashPassword(b.password);
   }
   if (b.totp_reset === '1' && target.totp_enabled) {
     users.clearTotp(target.id);
@@ -312,6 +314,10 @@ export function updateUser(ctx) {
     passwordHash, isAdmin: willAdmin, disabled: willDisabled,
   });
   groups.setUserGroups(target.id, groupNames);
+  // 改密或禁用账号时统一失效凭据:吊销令牌、删除未使用授权码;本人改密保留当前会话
+  if (passwordHash || willDisabled) {
+    invalidateUserCredentials(target.id, { keepSession: self && !willDisabled ? ctx.session.id_hash : null });
+  }
   record(ctx, 'admin.user_updated', target.username);
   redirect(ctx.res, '/admin/users?msg=' + encodeURIComponent(`用户 ${target.username} 已更新。`));
 }
@@ -410,7 +416,7 @@ export function newAppForm(ctx, { err, values } = {}) {
   }));
 }
 
-export function createApp(ctx) {
+export async function createApp(ctx) {
   const b = ctx.body || {};
   const v = validateAppInput(b);
   const allowedGroups = collectAllowedGroups(b);
@@ -425,7 +431,7 @@ export function createApp(ctx) {
   let secret = null, secretHash = null;
   if (!isPublic) {
     secret = randomToken(24);
-    secretHash = hashPassword(secret);
+    secretHash = await hashPassword(secret);
   }
   const app = clients.create({
     name: v.name, redirectUris: v.uris, scopes: v.scopes.join(' '),
@@ -493,7 +499,7 @@ export function revokeAppUserConsent(ctx) {
   redirect(ctx.res, `/admin/apps/${app.client_id}?msg=` + encodeURIComponent(`已撤销用户 ${target.username} 对该应用的授权,其现有令牌已一并失效。`));
 }
 
-export function regenerateSecret(ctx) {
+export async function regenerateSecret(ctx) {
   const app = clients.byId(ctx.params.id);
   if (!app) return redirect(ctx.res, '/admin/apps?err=' + encodeURIComponent('应用不存在。'));
   if (ctx.body?._csrf !== CSRF(ctx)) return redirect(ctx.res, `/admin/apps/${app.client_id}?err=` + encodeURIComponent('页面已过期,请重试。'));
@@ -501,7 +507,7 @@ export function regenerateSecret(ctx) {
     return redirect(ctx.res, `/admin/apps/${app.client_id}?err=` + encodeURIComponent('公开客户端没有密钥。'));
   }
   const secret = randomToken(24);
-  clients.update(app.client_id, { secretHash: hashPassword(secret) });
+  clients.update(app.client_id, { secretHash: await hashPassword(secret) });
   record(ctx, 'admin.app_secret_rotated', app.name);
   sendHtml(ctx.res, 200, secretRevealPage({
     theme: ctx.theme, siteName: getRuntime().siteName, user: ctx.user,

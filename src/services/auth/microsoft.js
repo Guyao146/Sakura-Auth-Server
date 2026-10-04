@@ -1,5 +1,5 @@
 import * as users from '../../models/users.js';
-import { verifyPassword, hashPassword } from '../../core/password.js';
+import { verifyUserPassword, hashPassword } from '../../core/password.js';
 import { randomToken, sha256b64url, nowSec } from '../../core/crypto.js';
 import { setCookie, redirect, sendHtml } from '../../core/http.js';
 import { buildAuthUrl, exchangeCode, verifyIdToken } from '../../core/msal.js';
@@ -135,7 +135,7 @@ function finishCallback(ctx, entry, identity) {
 }
 
 /** POST /auth/microsoft/link —— 已有本地账号:验密码 → 绑定 → 建会话 */
-export function link(ctx) {
+export async function link(ctx) {
   const ms = ctx.runtime.msOAuth;
   if (!ms.enabled) return redirect(ctx.res, '/login?err=' + encodeURIComponent('未启用 Microsoft 登录。'));
   const b = ctx.body || {};
@@ -154,7 +154,7 @@ export function link(ctx) {
   }
   const username = String(b.username || '').trim();
   const user = username ? users.byUsername(username) : null;
-  const okPwd = user && !user.disabled && typeof b.password === 'string' && verifyPassword(b.password, user.password_hash);
+  const okPwd = await verifyUserPassword(user, b.password) && !user?.disabled;
   if (!okPwd) {
     logger.warn('Microsoft 关联失败:密码校验未通过', { username });
     return rerender('用户名或密码不正确。');
@@ -170,7 +170,7 @@ export function link(ctx) {
 }
 
 /** POST /auth/microsoft/register —— 注册新号(永远非管理员)→ 绑定 → 建会话 */
-export function registerNew(ctx) {
+export async function registerNew(ctx) {
   const rt = getRuntime();
   if (!rt.msOAuth.enabled) return redirect(ctx.res, '/login?err=' + encodeURIComponent('未启用 Microsoft 登录。'));
   const b = ctx.body || {};
@@ -197,7 +197,7 @@ export function registerNew(ctx) {
   linkTokens.delete(stateVal);
   const user = users.create({
     username,
-    passwordHash: hashPassword(b.password),
+    passwordHash: await hashPassword(b.password),
     name: String(b.name || '').trim(),
     email: entry.email || '',
     isAdmin: false,

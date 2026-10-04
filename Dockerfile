@@ -5,7 +5,7 @@ FROM node:24-alpine
 LABEL org.opencontainers.image.title="SakuraID" \
       org.opencontainers.image.description="类 authentik 的轻量 OAuth2 / OpenID Connect 认证服务(零 npm 依赖)" \
       org.opencontainers.image.source="https://github.com/sakura-eco/oauth2-idp" \
-      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.licenses="Sakura-License-1.2" \
       org.opencontainers.image.vendor="Sakura Eco" \
       org.opencontainers.image.base.name="docker.io/library/node:24-alpine"
 
@@ -14,7 +14,7 @@ ENV DATA_DIR=/data
 ENV PORT=9000
 
 WORKDIR /app
-COPY package.json server.js ./
+COPY package.json server.js LICENSE ./
 COPY src ./src
 
 # 数据目录归属官方镜像自带的 node 用户(uid 1000),服务以非 root 运行

@@ -6,8 +6,8 @@ import { authenticateClient } from './token.js';
 import { nowSec } from '../../core/crypto.js';
 
 /** POST /introspect —— RFC 7662 令牌内省(仅机密客户端) */
-export function introspectPost(ctx) {
-  const client = authenticateClient(ctx);
+export async function introspectPost(ctx) {
+  const client = await authenticateClient(ctx);
   if (!client) return;
   if (client.token_auth === 'none') {
     return sendJson(ctx.res, 401, { error: 'invalid_client' });
@@ -18,6 +18,9 @@ export function introspectPost(ctx) {
     return sendJson(ctx.res, 200, { active: false });
   }
   const user = row.user_id ? users.byId(row.user_id) : null;
+  if (row.user_id && (!user || user.disabled)) {
+    return sendJson(ctx.res, 200, { active: false });
+  }
   sendJson(ctx.res, 200, {
     active: true,
     scope: row.scope,
@@ -30,8 +33,8 @@ export function introspectPost(ctx) {
 }
 
 /** POST /revoke —— RFC 7009 令牌吊销;按 RFC 语义即使未找到也返回 200 */
-export function revokePost(ctx) {
-  const client = authenticateClient(ctx);
+export async function revokePost(ctx) {
+  const client = await authenticateClient(ctx);
   if (!client) return;
   const token = ctx.body?.token || '';
   const row = lookup(token);
@@ -40,7 +43,7 @@ export function revokePost(ctx) {
 }
 
 function lookup(token) {
-  if (!token) return null;
+  if (typeof token !== 'string' || !token) return null;
   if (token.split('.').length === 3) {
     const payload = verifyJwt(token, { ignoreExp: true });
     if (payload?.jti) return tokens.byId(payload.jti);

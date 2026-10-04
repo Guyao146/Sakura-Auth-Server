@@ -15,5 +15,9 @@ export function create({ clientId, userId, redirectUri, scope, codeChallenge, co
 
 export const byCode = (code) => getDb().prepare('SELECT * FROM auth_codes WHERE code_hash = ?').get(sha256hex(code));
 
+/** 删除某用户的全部未使用授权码(凭据失效时用,防止遗留码继续换令牌) */
+export const removeForUser = (userId) =>
+  getDb().prepare('DELETE FROM auth_codes WHERE user_id = ?').run(userId);
+
 export const markUsed = (codeHash) =>
   getDb().prepare('UPDATE auth_codes SET used = 1 WHERE code_hash = ?').run(codeHash);

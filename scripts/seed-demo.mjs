@@ -10,7 +10,7 @@ initDb();
 if (!users.byUsername('demo')) {
   users.create({
     username: 'demo',
-    passwordHash: hashPassword('Demo#12345'),
+    passwordHash: await hashPassword('Demo#12345'),
     name: '演示用户',
     email: 'demo@example.com',
     userGroups: 'demo',

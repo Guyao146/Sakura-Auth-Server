@@ -125,7 +125,7 @@ export function step2(ctx) {
 }
 
 /** POST /setup/step3 —— 创建管理员并完成安装(库中已有账号时可跳过创建) */
-export function step3(ctx) {
+export async function step3(ctx) {
   const b = ctx.body || {};
   if (String(b.skip || '') === '1' && users.count() > 0) {
     updateRuntime({ setup_done: 1 }, settingsApi.setSetting);
@@ -142,7 +142,7 @@ export function step3(ctx) {
   if (b.password !== b.password2) return showSetup(ctx, { err: '两次输入的密码不一致。', values });
   if (users.byUsername(username)) return showSetup(ctx, { err: '该用户名已存在。', values });
 
-  users.create({ username, passwordHash: hashPassword(b.password), name: values.name, isAdmin: true });
+  users.create({ username, passwordHash: await hashPassword(b.password), name: values.name, isAdmin: true });
   updateRuntime({ setup_done: 1 }, settingsApi.setSetting);
   logger.info('向导:初始化完成,管理员已创建', { username });
   const rt = getRuntime();

@@ -197,6 +197,7 @@ export function dashboardPage({ theme, siteName, user, cur, stats, issuer, allow
       </div>
       <div class="card">
         <h3 style="margin-top:0">配置向导</h3>
+        <p><a class="btn" href="/admin/unilink">UniLink 手机扫码登录配置</a></p>
         <p class="muted small">重新运行初始化向导:会重走环境检测与站点设置(Issuer、令牌有效期、自助注册、SMTP 邮件),不会影响已有的用户与应用数据;期间全站暂时指向向导页,完成后恢复。</p>
         <form method="post" action="/admin/rerun-wizard">
           ${hiddenInputs({ _csrf: csrf })}

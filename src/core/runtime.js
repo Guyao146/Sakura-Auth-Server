@@ -8,6 +8,8 @@ const KEYS = [
   'site_name', 'issuer', 'access_ttl', 'refresh_ttl', 'session_ttl', 'allow_register',
   'smtp_host', 'smtp_port', 'smtp_user', 'smtp_pass', 'smtp_from',
   'ms_enabled', 'ms_client_id', 'ms_client_secret', 'ms_tenant', 'ms_authority',
+  'unilink_enabled', 'unilink_issuer', 'unilink_client_id', 'unilink_client_secret',
+  'about_title', 'about_content',
 ];
 
 let rt = null;
@@ -48,6 +50,18 @@ export function reloadRuntime() {
     setupDone: String(s.setup_done || '') === '1',
     allowRegister: String(s.allow_register || '') === '1',
     smtp: mergeSmtp(s),
+    // 「关于我们」公开页(/about):管理端填写,空内容时不显示页脚入口
+    about: {
+      title: s.about_title || '关于我们',
+      content: s.about_content || '',
+    },
+    unilink: {
+      enabled: s.unilink_enabled === '1',
+      issuer: (s.unilink_issuer || '').replace(/\/+$/, ''),
+      clientId: s.unilink_client_id || 'unilink-qr',
+      clientSecret: s.unilink_client_secret || '',
+      redirectUri: `${issuer}/auth/unilink/callback`,
+    },
     // Microsoft 账号登录(联邦 OIDC):redirectUri 恒为 {issuer}/auth/microsoft/callback,不落库
     msOAuth: {
       enabled: String(s.ms_enabled || '') === '1',

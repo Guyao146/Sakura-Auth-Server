@@ -2,6 +2,7 @@
   "name": "oauth2-idp",
   "version": "0.9.3",
   "private": true,
+  "license": "Sakura-License-1.2",
   "type": "module",
   "description": "类 authentik 的轻量 OAuth2 / OpenID Connect 认证服务(零依赖,Node >= 22.5)",
   "engines": {
@@ -10,6 +11,7 @@
   "scripts": {
     "start": "node server.js",
     "smoke": "node scripts/smoke.mjs",
+    "test:oauth": "node scripts/test-oauth.mjs",
     "seed-demo": "node scripts/seed-demo.mjs",
     "reset-admin": "node scripts/reset-admin-password.mjs"
   }
