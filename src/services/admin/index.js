@@ -12,7 +12,7 @@ import * as settingsApi from '../../models/settings.js';
 import { hashPassword } from '../../core/password.js';
 import { invalidateUserCredentials } from '../auth/credentials.js';
 import { randomToken } from '../../core/crypto.js';
-import { splitLines, redirectUri as validUri, httpUrl } from '../../core/util.js';
+import { splitLines, redirectUri as validUri, httpUrl, fmtTime, normalizeHexColor } from '../../core/util.js';
 import { SCOPES, DEFAULT_CLIENT_SCOPES } from '../../core/config.js';
 import { sendHtml, sendJson, redirect } from '../../core/http.js';
 import { logger } from '../../core/logger.js';
@@ -22,7 +22,8 @@ import {
 } from '../../core/upload.js';
 import { dashboardPage, groupsPage, groupDetailPage, usersPage, userFormPage, appsPage, appFormPage, appDetailPage, secretRevealPage } from '../../views/admin.js';
 import { errorPage } from '../../views/error.js';
-import { record } from '../audit.js';
+import { record, csvCell } from '../audit.js';
+import { isValidMsTenant } from '../auth/microsoft.js';
 import * as appHealth from '../app-health.js';
 
 const CSRF = (ctx) => ctx.session.csrf;
@@ -37,6 +38,9 @@ export function showDashboard(ctx) {
     issuer: rt.issuer,
     allowRegister: rt.allowRegister,
     msOAuth: rt.msOAuth,
+    brandLogoUrl: rt.brandLogoUrl,
+    brandAccent: rt.brandAccent,
+    brandTagline: rt.brandTagline,
     csrf: CSRF(ctx),
     msg: ctx.query.get('msg'), err: ctx.query.get('err'),
   }));
@@ -65,6 +69,10 @@ export function saveMsOAuth(ctx) {
     ms_client_id: String(b.ms_client_id || '').trim(),
     ms_tenant: String(b.ms_tenant || '').trim() || 'common',
   };
+  // 租户 ID 拼进 authority URL 路径:仅允许字母数字与 . _ -(含 UUID/域名形态),非法拒绝并回显
+  if (!isValidMsTenant(fields.ms_tenant)) {
+    return redirect(ctx.res, '/admin?err=' + encodeURIComponent('Microsoft 租户 ID 不合法,仅允许字母、数字与 . _ -(或 UUID 形态)。'));
+  }
   const secret = String(b.ms_client_secret || '');
   if (secret) fields.ms_client_secret = secret; // 留空 = 保留已保存的密钥
   const authority = String(b.ms_authority || '').trim();
@@ -92,7 +100,8 @@ export function createGroup(ctx) {
   const description = String(b.description || '').trim();
   if (!name || name.length > 40) return back('组名必填且不超过 40 字。');
   if (/\s/.test(name)) return back('组名不能包含空白字符。');
-  if (groups.byName(name)) return back(`权限组 ${name} 已存在。`);
+  // 大小写不敏感查重:'DEV' 与 'dev' 视为重名
+  if (groups.nameTakenCI(name)) return back(`权限组 ${name} 已存在。`);
   groups.create({ name, description });
   redirect(ctx.res, '/admin/groups?msg=' + encodeURIComponent(`权限组 ${name} 已创建。`));
 }
@@ -142,8 +151,8 @@ export function updateGroup(ctx) {
   const description = String(b.description || '').trim();
   if (!name || name.length > 40) return back('组名必填且不超过 40 字。');
   if (/\s/.test(name)) return back('组名不能包含空白字符。');
-  const dup = groups.byName(name);
-  if (dup && dup.id !== g.id) return back(`权限组 ${name} 已存在。`);
+  // 大小写不敏感查重(排除自身):'OPS' 与既有 ops 视为重名;自身改名大小写(Dev→DEV)允许
+  if (groups.nameTakenCI(name, g.id)) return back(`权限组 ${name} 已存在。`);
   groups.update(g.id, { name, description });
   if (name !== g.name) {
     // 组名变更:同步引用旧组名的应用访问限制,避免授权悄悄失效
@@ -236,13 +245,17 @@ export function newUserForm(ctx) {
   sendHtml(ctx.res, 200, userFormPage({
     theme: ctx.theme, siteName: getRuntime().siteName, user: ctx.user,
     cur: ctx.url.pathname, target: null, isNew: true, err: ctx.query.get('err'),
-    allGroups: groups.list(),
+    allGroups: groups.list(), csrf: CSRF(ctx),
     values: { username: '', name: '', email: '', groupSet: new Set(), is_admin: false, disabled: false },
   }));
 }
 
 export async function createUser(ctx) {
   const b = ctx.body || {};
+  // 与 updateUser/deleteUser 一致的会话 CSRF 校验(表单隐藏字段由 userFormPage 下发)
+  if (b._csrf !== CSRF(ctx)) {
+    return redirect(ctx.res, '/admin/users/new?err=' + encodeURIComponent('页面已过期,请重试。'));
+  }
   const username = String(b.username || '').trim();
   if (!/^[a-zA-Z0-9_.@-]{2,64}$/.test(username)) {
     return redirect(ctx.res, '/admin/users/new?err=' + encodeURIComponent('用户名需为 2-64 位字母数字与 _.@-。'));
@@ -252,6 +265,11 @@ export async function createUser(ctx) {
   }
   if (users.byUsername(username)) {
     return redirect(ctx.res, '/admin/users/new?err=' + encodeURIComponent('用户名已存在。'));
+  }
+  // RFC 5321:邮箱地址路径最长 254 字符
+  const email = String(b.email || '').trim();
+  if (email.length > 254) {
+    return redirect(ctx.res, '/admin/users/new?err=' + encodeURIComponent('邮箱长度不能超过 254 字。'));
   }
   const groupNames = collectGroupNames(b);
   const created = users.create({
@@ -306,10 +324,14 @@ export async function updateUser(ctx) {
     users.clearTotp(target.id);
     recovery.clearFor(target.id);
   }
+  const email = String(b.email || '').trim();
+  if (email.length > 254) {
+    return redirect(ctx.res, `/admin/users/${target.id}?err=` + encodeURIComponent('邮箱长度不能超过 254 字。'));
+  }
   const groupNames = collectGroupNames(b);
   // user_groups 文本列保留为成员关系的镜像,便于人工排查;claims/授权一律读关系表
   users.update(target.id, {
-    name: String(b.name || '').trim(), email: String(b.email || '').trim(),
+    name: String(b.name || '').trim(), email,
     userGroups: groupNames.join(' '),
     passwordHash, isAdmin: willAdmin, disabled: willDisabled,
   });
@@ -405,7 +427,7 @@ export function listApps(ctx) {
 export function newAppForm(ctx, { err, values } = {}) {
   sendHtml(ctx.res, 200, appFormPage({
     theme: ctx.theme, siteName: getRuntime().siteName, user: ctx.user,
-    cur: ctx.url.pathname, err, allGroups: groups.list(),
+    cur: ctx.url.pathname, err, allGroups: groups.list(), csrf: CSRF(ctx),
     values: values || {
       name: '', client_type: 'confidential', redirect_uris: '',
       description: '', logo_url: '',
@@ -418,6 +440,10 @@ export function newAppForm(ctx, { err, values } = {}) {
 
 export async function createApp(ctx) {
   const b = ctx.body || {};
+  // 会话 CSRF 校验(表单隐藏字段由 appFormPage 下发),与 update/delete 等写操作保持一致
+  if (b._csrf !== CSRF(ctx)) {
+    return redirect(ctx.res, '/admin/apps/new?err=' + encodeURIComponent('页面已过期,请重试。'));
+  }
   const v = validateAppInput(b);
   const allowedGroups = collectAllowedGroups(b);
   if (v.error) {
@@ -464,6 +490,29 @@ export function appDetail(ctx) {
   }));
 }
 
+/** GET /admin/apps/:id/consents.csv —— 导出应用已授权用户 CSV
+ *  UTF-8 BOM 防 Excel 乱码;csvCell 复用审计导出的转义(公式注入中和 + 引号/逗号),无授权时仅表头。 */
+export function exportAppConsentsCsv(ctx) {
+  const app = clients.byId(ctx.params.id);
+  if (!app) return redirect(ctx.res, '/admin/apps?err=' + encodeURIComponent('应用不存在。'));
+  const rows = consents.listForClient(app.client_id);
+  const lines = ['用户名,姓名,授权范围,授权时间',
+    ...rows.map((row) => [row.username, row.name, row.scope, fmtTime(row.granted_at)]
+      .map(csvCell).join(','))];
+  const d = new Date();
+  const p2 = (n) => String(n).padStart(2, '0');
+  const stamp = `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}`
+    + `-${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}`;
+  const res = ctx.res;
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.writeHead(200, {
+    'Content-Type': 'text/csv; charset=utf-8',
+    'Content-Disposition': `attachment; filename="consents-${stamp}.csv"`,
+    'Cache-Control': 'no-store',
+  });
+  res.end('\uFEFF' + lines.join('\n') + '\n');
+}
+
 export function updateApp(ctx) {
   const b = ctx.body || {};
   const app = clients.byId(ctx.params.id);
@@ -471,6 +520,8 @@ export function updateApp(ctx) {
   if (b._csrf !== CSRF(ctx)) return redirect(ctx.res, `/admin/apps/${app.client_id}?err=` + encodeURIComponent('页面已过期,请重试。'));
   const v = validateAppInput(b);
   if (v.error) return redirect(ctx.res, `/admin/apps/${app.client_id}?err=` + encodeURIComponent(v.error));
+  // Logo 字段被清空且此前用的是本站上传文件时,同步清理磁盘文件,避免孤儿文件残留
+  if (!v.logoUrl && String(app.logo_url || '').startsWith('/uploads/')) removeLogoFile(app);
   clients.update(app.client_id, {
     name: v.name, redirectUris: JSON.stringify(v.uris), scopes: v.scopes.join(' '),
     pkceRequired: app.token_auth === 'none' ? true : b.pkce_required === '1',
@@ -576,9 +627,19 @@ export async function uploadAppLogo(ctx) {
     }));
   }
   ensureUploadsDir();
-  removeLogoFile(app); // 扩展名变化时清掉旧文件,避免残留
   const name = `${app.client_id}.${ext}`;
-  fs.writeFileSync(path.join(uploadsDir(), name), file.data);
+  // 原子化落盘:先写同盘临时文件再 rename 覆盖目标,并发读不会看到写了一半的文件
+  const target = path.join(uploadsDir(), name);
+  const tmp = `${target}.tmp-${randomToken(6)}`;
+  try {
+    await fs.promises.writeFile(tmp, file.data);
+    await fs.promises.rename(tmp, target);
+  } finally {
+    // rename 成功后临时文件已不存在,失败时清理残渣,不留 .tmp- 文件
+    await fs.promises.unlink(tmp).catch(() => {});
+  }
+  // rename 已原子覆盖同名旧文件;仅扩展名变化(或首次上传)时清理旧文件,避免残留
+  if (app.logo_url !== `/uploads/${name}`) removeLogoFile(app);
   clients.update(app.client_id, { logoUrl: `/uploads/${name}` });
   record(ctx, 'admin.app_logo_uploaded', app.name);
   logger.info('管理员上传应用 Logo', { client: app.client_id, file: name, size: file.data.length });
@@ -594,6 +655,94 @@ export function deleteAppLogo(ctx) {
   clients.update(app.client_id, { logoUrl: '' });
   record(ctx, 'admin.app_logo_deleted', app.name);
   redirect(ctx.res, `/admin/apps/${app.client_id}?msg=` + encodeURIComponent('应用 Logo 已删除,门户与授权页恢复首字母徽标。'));
+}
+
+/* ---------------- 站点品牌定制:Logo / 主题强调色 / 口号(全站即时生效) ---------------- */
+
+/** 站点 Logo 固定文件名前缀(覆盖式:site-logo.<ext>,扩展名随魔数判定) */
+const SITE_LOGO_PREFIX = 'site-logo.';
+
+/** 当前站点 Logo 文件名(brand_logo_url 形如 /uploads/site-logo.png)或空串 */
+function siteLogoFile() {
+  const url = getRuntime().brandLogoUrl || '';
+  return url.startsWith(`/uploads/${SITE_LOGO_PREFIX}`) ? url.slice('/uploads/'.length) : '';
+}
+
+/** POST /admin/branding —— 保存主题强调色与品牌口号(普通表单;留空 = 恢复各页默认)。
+ *  颜色仅接受 #RGB / #RRGGBB 并规范化为小写 #rrggbb,非法值拒绝且不落库(CSS 注入防线)。 */
+export function saveBranding(ctx) {
+  const b = ctx.body || {};
+  const back = (e) => redirect(ctx.res, '/admin?err=' + encodeURIComponent(e));
+  if (b._csrf !== CSRF(ctx)) return back('页面已过期,请重试。');
+  const accentRaw = String(b.accent || '').trim();
+  let accent = '';
+  if (accentRaw) {
+    accent = normalizeHexColor(accentRaw);
+    if (!accent) return back('主题强调色格式不合法,仅支持 #RGB / #RRGGBB 颜色值。');
+  }
+  const tagline = String(b.tagline || '').trim();
+  if (tagline.length > 80) return back('品牌口号不超过 80 字。');
+  updateRuntime({ brand_accent: accent, brand_tagline: tagline }, settingsApi.setSetting);
+  record(ctx, 'admin.branding_saved', `强调色 ${accent || '(默认)'} · 口号 ${tagline ? `「${tagline}」` : '(默认)'}`);
+  logger.info('管理员保存品牌设置', { accent, tagline: tagline ? `${tagline.length} 字` : '' });
+  redirect(ctx.res, '/admin?msg=' + encodeURIComponent('品牌设置已保存,全站即时生效。'));
+}
+
+/** POST /admin/branding/logo —— multipart 上传站点 Logo(魔数校验,固定名覆盖式,复用应用 Logo 上传安全基线) */
+export async function uploadSiteLogo(ctx) {
+  const back = (e) => redirect(ctx.res, '/admin?err=' + encodeURIComponent(e));
+  let fields, files;
+  try {
+    ({ fields, files } = await parseMultipart(ctx.req, { maxSize: MAX_LOGO_SIZE }));
+  } catch (err) {
+    if (err?.status === 413) throw err; // 管线统一渲染 413 页
+    if (err?.status === 400) return back('上传报文不完整,请重新提交。');
+    throw err;
+  }
+  // multipart 中 CSRF 位于文本字段 _csrf
+  if (fields._csrf !== CSRF(ctx)) return back('页面已过期,请重试。');
+  const file = files.logo;
+  if (!file || !file.data?.length) return back('请选择要上传的图片文件。');
+  const ext = sniffImageExt(file.data);
+  if (!ext) {
+    return sendHtml(ctx.res, 415, errorPage({
+      theme: ctx.theme, siteName: getRuntime().siteName,
+      title: '不支持的图片格式',
+      message: '站点 Logo 仅支持 PNG / JPEG / WebP / GIF 图片(按文件内容校验),且不超过 2MB。',
+    }));
+  }
+  ensureUploadsDir();
+  const name = `${SITE_LOGO_PREFIX}${ext}`;
+  // 原子化落盘:先写同盘临时文件再 rename 覆盖目标(与应用 Logo 上传同模式)
+  const target = path.join(uploadsDir(), name);
+  const tmp = `${target}.tmp-${randomToken(6)}`;
+  try {
+    await fs.promises.writeFile(tmp, file.data);
+    await fs.promises.rename(tmp, target);
+  } finally {
+    await fs.promises.unlink(tmp).catch(() => {});
+  }
+  // 仅扩展名变化时清理旧格式文件,避免 site-logo.png / site-logo.jpg 双份残留
+  const prev = siteLogoFile();
+  if (prev && prev !== name) {
+    try { fs.unlinkSync(path.join(uploadsDir(), prev)); } catch { /* 文件不存在视为已清理 */ }
+  }
+  updateRuntime({ brand_logo_url: `/uploads/${name}` }, settingsApi.setSetting);
+  record(ctx, 'admin.branding_logo_uploaded', name);
+  logger.info('管理员上传站点 Logo', { file: name, size: file.data.length });
+  redirect(ctx.res, '/admin?msg=' + encodeURIComponent('站点 Logo 已上传,全站即时生效。'));
+}
+
+/** POST /admin/branding/logo/delete —— 清理站点 Logo 文件并把 brand_logo_url 置空(恢复默认樱花标) */
+export function deleteSiteLogo(ctx) {
+  if (ctx.body?._csrf !== CSRF(ctx)) return redirect(ctx.res, '/admin?err=' + encodeURIComponent('页面已过期,请重试。'));
+  const prev = siteLogoFile();
+  if (prev) {
+    try { fs.unlinkSync(path.join(uploadsDir(), prev)); } catch { /* 文件不存在视为已清理 */ }
+  }
+  updateRuntime({ brand_logo_url: '' }, settingsApi.setSetting);
+  record(ctx, 'admin.branding_logo_deleted', prev || '(无)');
+  redirect(ctx.res, '/admin?msg=' + encodeURIComponent('站点 Logo 已删除,全站恢复默认樱花标。'));
 }
 
 /** GET /uploads/:file —— 上传文件静态服务(匿名;Logo 属公开品牌资产)。文件名严格白名单,防目录穿越 */

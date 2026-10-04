@@ -3,7 +3,7 @@
  * 配置向导 → 登录 → 授权码+PKCE → 令牌签发/刷新/内省/吊销 → 管理控制台权限 → 邮件找回密码。
  * 运行:npm run smoke
  */
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -59,6 +59,85 @@ const extractHidden = (html) => {
   return out;
 };
 const basic = (id, secret) => 'Basic ' + Buffer.from(`${id}:${secret}`).toString('base64');
+
+/* ---------- 模拟认证器:最小 CBOR 编码 + ES256 手造 attestation/assertion(WebAuthn 段用) ---------- */
+/** 最小 CBOR 编码器:仅 map / 数组 / 字节串 / 文本串 / 正负整数(足够构造测试凭据) */
+function cborEncode(value) {
+  const out = [];
+  const head = (mt, val) => {
+    if (val < 24) out.push((mt << 5) | val);
+    else if (val < 256) out.push((mt << 5) | 24, val);
+    else if (val < 65536) out.push((mt << 5) | 25, val >> 8, val & 255);
+    else out.push((mt << 5) | 26, (val >>> 24) & 255, (val >>> 16) & 255, (val >>> 8) & 255, val & 255);
+  };
+  const walk = (v) => {
+    if (typeof v === 'number' && v >= 0) head(0, v);
+    else if (typeof v === 'number' && v < 0) head(1, -1 - v);
+    else if (Buffer.isBuffer(v)) { head(2, v.length); out.push(...v); }
+    else if (typeof v === 'string') { const b = Buffer.from(v); head(3, b.length); out.push(...b); }
+    else if (Array.isArray(v)) { head(4, v.length); v.forEach(walk); }
+    else {
+      const ks = Object.keys(v);
+      head(5, ks.length);
+      for (const k of ks) { walk(/^-?\d+$/.test(k) ? Number(k) : k); walk(v[k]); }
+    }
+  };
+  walk(value);
+  return Buffer.from(out);
+}
+// 测试用 ES256 密钥对与 COSE 公钥(EC2/P-256/ES256,与真实认证器产物同构)
+const pkKeys = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
+const pkJwk = pkKeys.publicKey.export({ format: 'jwk' });
+const pkCose = cborEncode({
+  1: 2, 3: -7, [-1]: 1,
+  [-2]: Buffer.from(pkJwk.x, 'base64url'),
+  [-3]: Buffer.from(pkJwk.y, 'base64url'),
+});
+const PK_RP_ID = new URL(BASE).hostname; // 与服务端 rpId(issuer hostname)一致
+
+/** authenticatorData:rpIdHash + flags + signCount(+ attestedCredentialData:仅注册时) */
+const makeAuthData = ({ flags = 0x05, counter = 0, credId = null } = {}) => {
+  const head = Buffer.alloc(37);
+  crypto.createHash('sha256').update(PK_RP_ID).digest().copy(head, 0);
+  head[32] = flags;
+  head.writeUInt32BE(counter, 33);
+  if (!credId) return head;
+  const len = Buffer.alloc(2);
+  len.writeUInt16BE(credId.length);
+  return Buffer.concat([head, Buffer.alloc(16, 0xab), len, credId, pkCose]);
+};
+
+/** 注册 attestation(fmt 'none' 或 'packed' 自签):clientDataJSON + attestationObject */
+const makeAttestation = ({ challenge, credId, origin = BASE, fmt = 'none' } = {}) => {
+  const cd = Buffer.from(JSON.stringify({ type: 'webauthn.create', challenge, origin }));
+  const authData = makeAuthData({ flags: 0x45, credId });
+  let attStmt = {};
+  if (fmt === 'packed') {
+    attStmt = { alg: -7, sig: crypto.sign('sha256', Buffer.concat([authData, crypto.createHash('sha256').update(cd).digest()]), pkKeys.privateKey) };
+  }
+  return {
+    clientDataJSON: cd.toString('base64url'),
+    attestationObject: cborEncode({ fmt, attStmt, authData }).toString('base64url'),
+    transports: ['internal'],
+  };
+};
+
+/** 登录 assertion:对 authData ‖ SHA256(clientDataJSON) 做 ES256 签名 */
+const makeAssertion = ({ challenge, credIdB64, counter = 1, origin = BASE, userHandle = '', corrupt = false } = {}) => {
+  const cd = Buffer.from(JSON.stringify({ type: 'webauthn.get', challenge, origin }));
+  const authData = makeAuthData({ flags: 0x05, counter });
+  let sig = crypto.sign('sha256', Buffer.concat([authData, crypto.createHash('sha256').update(cd).digest()]), pkKeys.privateKey);
+  if (corrupt) { sig = Buffer.from(sig); sig[7] ^= 0xff; }
+  return {
+    id: credIdB64, rawId: credIdB64, type: 'public-key',
+    response: {
+      clientDataJSON: cd.toString('base64url'),
+      authenticatorData: authData.toString('base64url'),
+      signature: sig.toString('base64url'),
+      userHandle,
+    },
+  };
+};
 
 /* ---------- 本地 mock Microsoft(OIDC 提供方,与被测服务并行运行) ---------- */
 function startMockMs({ clientId = 'smoke-ms-client', sub = 'ms-sub-123', email = 'msuser@example.com', name = 'MS 测试用户' } = {}) {
@@ -185,6 +264,8 @@ async function main() {
     r = await call(new Jar(), '/health');
     ok('健康:未初始化时 /health 在白名单内可直接访问', r.status === 200
       && (await r.text()).includes('服务运行中'));
+    r = await call(new Jar(), '/about');
+    ok('关于:未初始化时 /about 在白名单内可直接访问', r.status === 200 && (await r.text()).includes('关于我们'));
     r = await call(wj, '/setup/step1', { method: 'POST', form: {} });
     ok('向导第 1 步通过', r.status === 302 && location(r) === '/setup');
     r = await call(wj, '/setup/step2', {
@@ -225,6 +306,12 @@ async function main() {
     const uj = new Jar();
     r = await call(uj, authUrl);
     ok('未登录访问 /authorize 跳登录页', r.status === 302 && location(r).startsWith('/login?next='));
+
+    // 加固(OIDC Core §3.1.2.1):prompt=none 未登录不跳登录页,直接回跳 login_required 并透传 state
+    const pnAnon = await call(new Jar(), authUrl + '&prompt=none');
+    ok('加固:prompt=none 未登录回跳 login_required 并透传 state', pnAnon.status === 302
+      && new URL(location(pnAnon), BASE).searchParams.get('error') === 'login_required'
+      && new URL(location(pnAnon), BASE).searchParams.get('state') === state, location(pnAnon));
 
     r = await call(uj, location(r));
     const loginHtml = await r.text();
@@ -302,8 +389,10 @@ async function main() {
     const { verifyJwt } = await import('../src/core/jwt.js');
     const idPayload = verifyJwt(tok.id_token);
     ok('id_token 验签通过且带 nonce/sub', !!idPayload && idPayload.nonce === nonce && idPayload.preferred_username === 'bob');
-    ok('id_token 的 RS256 at_hash 符合 OIDC', idPayload?.at_hash === crypto.createHash('sha256')
-      .update(tok.access_token).digest().subarray(0, 16).toString('base64url'));
+    // OIDC Core §3.1.3.6:at_hash = access token SHA-256 摘要左半(16 字节)的 base64url(22 字符)
+    const expectAtHash = crypto.createHash('sha256').update(tok.access_token).digest().subarray(0, 16).toString('base64url');
+    ok('id_token 的 at_hash 为 access token SHA-256 左半摘要', idPayload.at_hash === expectAtHash
+      && idPayload.at_hash.length === 22, `got=${idPayload.at_hash} want=${expectAtHash}`);
 
     const ui = await fetch(BASE + '/userinfo', { headers: { Authorization: `Bearer ${tok.access_token}` } });
     const uiBody = await ui.json();
@@ -345,6 +434,83 @@ async function main() {
     const tok3 = await r.json();
     ok('正确 verifier 再次换取成功', r.status === 200 && !!tok3.access_token);
 
+    // PKCE verifier 字符集校验(RFC 7636 §4.1):plain 模式下 challenge 含 unreserved 之外的字符,
+    // 换取时 verifier 必须被字符集校验拒绝
+    r = await call(uj, '/authorize?' + new URLSearchParams({
+      client_id: web.client_id, redirect_uri: 'http://127.0.0.1:8080/cb',
+      response_type: 'code', scope: 'openid profile', state: 'pkce-cs',
+      code_challenge: 'a'.repeat(42) + '+', code_challenge_method: 'plain',
+    }).toString());
+    const codeCs = new URL(location(r), BASE).searchParams.get('code');
+    r = await fetch(BASE + '/token', {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code', code: codeCs, redirect_uri: 'http://127.0.0.1:8080/cb',
+        client_id: web.client_id, code_verifier: 'a'.repeat(42) + '+',
+      }).toString(),
+    });
+    ok('PKCE:verifier 含 RFC 7636 之外的字符被拒绝', r.status === 400 && (await r.json()).error === 'invalid_grant');
+
+    /* ---------- 加固:code_challenge 前置格式校验 / prompt=none / verifier 回退边界 ---------- */
+    // RFC 7636 §4.1:challenge 须为 43-128 位 base64url;长度不足在 authorize 层直接 invalid_request 回跳
+    r = await call(uj, '/authorize?' + new URLSearchParams({
+      client_id: web.client_id, redirect_uri: 'http://127.0.0.1:8080/cb',
+      response_type: 'code', scope: 'openid profile', state: 'cc-short',
+      code_challenge: 'a'.repeat(42), code_challenge_method: 'S256',
+    }).toString());
+    ok('加固:code_challenge 长度不足 43 回跳 invalid_request 并透传 state', r.status === 302
+      && new URL(location(r), BASE).searchParams.get('error') === 'invalid_request'
+      && new URL(location(r), BASE).searchParams.get('state') === 'cc-short', location(r));
+    // base64url 字符集之外的 challenge 同样被前置拒绝(不再发码)
+    r = await call(uj, '/authorize?' + new URLSearchParams({
+      client_id: web.client_id, redirect_uri: 'http://127.0.0.1:8080/cb',
+      response_type: 'code', scope: 'openid profile', state: 'cc-charset',
+      code_challenge: 'a'.repeat(42) + '+', code_challenge_method: 'plain',
+    }).toString());
+    ok('加固:code_challenge 含 base64url 之外字符回跳 invalid_request(不发码)', r.status === 302
+      && new URL(location(r), BASE).searchParams.get('error') === 'invalid_request'
+      && !new URL(location(r), BASE).searchParams.get('code'), location(r));
+
+    // OIDC Core §3.1.2.1:已记住授权时 prompt=none 无需任何交互,直接发码
+    r = await call(uj, authUrl + '&prompt=none');
+    ok('加固:prompt=none 已记住授权正常发码(无交互)', r.status === 302
+      && !!new URL(location(r), BASE).searchParams.get('code') && !location(r).includes('error'), location(r));
+
+    // 未记住授权的新应用:prompt=none 需要同意确认 → consent_required 回跳
+    const hardApp = clients.create({
+      name: '加固 Consent', redirectUris: ['http://127.0.0.1:8080/hard'],
+      scopes: 'openid profile', isPublic: true, pkceRequired: true,
+    });
+    const hardVerifier = crypto.randomBytes(48).toString('base64url');
+    const hardUrl = '/authorize?' + new URLSearchParams({
+      client_id: hardApp.client_id, redirect_uri: 'http://127.0.0.1:8080/hard',
+      response_type: 'code', scope: 'openid profile', state: 'pn-consent',
+      code_challenge: b64urlSha256(hardVerifier), code_challenge_method: 'S256',
+    }).toString();
+    r = await call(uj, hardUrl + '&prompt=none');
+    ok('加固:prompt=none 需要同意(无记住授权)回跳 consent_required 并透传 state', r.status === 302
+      && new URL(location(r), BASE).searchParams.get('error') === 'consent_required'
+      && new URL(location(r), BASE).searchParams.get('state') === 'pn-consent', location(r));
+    // 正常走一次同意并记住授权,prompt=none 随即可静默发码
+    r = await call(uj, hardUrl);
+    const hardForm = extractHidden(await r.text());
+    r = await call(uj, '/authorize', { method: 'POST', form: { ...hardForm, decision: 'approve', remember: 'on' } });
+    ok('加固:记住授权后 prompt=none 可静默发码', r.status === 302
+      && !!new URL(location(r), BASE).searchParams.get('code') && !location(r).includes('error'), location(r));
+
+    // 门户代发 verifier 回退仅对门户启动生效(回归):直连授权码换令牌缺 verifier 必须被拒
+    r = await call(uj, authUrl);
+    const noVfCode = new URL(location(r), BASE).searchParams.get('code');
+    r = await fetch(BASE + '/token', {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code', code: noVfCode, redirect_uri: 'http://127.0.0.1:8080/cb',
+        client_id: web.client_id,
+      }).toString(),
+    });
+    ok('加固:launch_verifier 回退仅限门户代发,直连授权码缺 verifier 被拒', r.status === 400
+      && (await r.json()).error === 'invalid_grant');
+
     /* ---------- 刷新令牌轮换 ---------- */
     r = await fetch(BASE + '/token', {
       method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -379,6 +545,20 @@ async function main() {
     const intro = await r.json();
     ok('内省 access_token 活跃', r.status === 200 && intro.active === true && intro.username === 'bob');
 
+    // 加固(RFC 6750 §2.3):userinfo 收紧为只认 Bearer 头,查询参数/表单主体的 access_token 一律 401
+    r = await fetch(BASE + '/userinfo?access_token=' + encodeURIComponent(tok4.access_token));
+    ok('加固:userinfo 查询参数 access_token 被拒(401)', r.status === 401, `status=${r.status}`);
+    r = await fetch(BASE + '/userinfo', {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ access_token: tok4.access_token }).toString(),
+    });
+    ok('加固:userinfo 表单主体 access_token 被拒(401)', r.status === 401, `status=${r.status}`);
+    r = await fetch(BASE + '/userinfo', {
+      method: 'POST', headers: { Authorization: `Bearer ${tok4.access_token}` },
+    });
+    ok('加固:userinfo Bearer 头 POST 访问不受影响(回归)', r.status === 200
+      && (await r.json()).preferred_username === 'bob');
+
     r = await fetch(BASE + '/revoke', {
       method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       // RFC 7009:令牌只能由所属客户端吊销;公开客户端以 client_id 表明身份
@@ -391,6 +571,52 @@ async function main() {
       body: new URLSearchParams({ token: tok4.refresh_token }).toString(),
     });
     ok('吊销后内省 active=false', (await r.json()).active === false);
+
+    /* ---------- 加固:refresh 吊销级联撤销同链令牌(RFC 7009) ---------- */
+    // 造链:记住授权直接发码 → 换首对令牌(生成 chain_id)→ 刷新(沿用链)→ 吊销新 refresh → 链上旧 access 一并失效
+    r = await call(uj, authUrl);
+    const chainCode = new URL(location(r), BASE).searchParams.get('code');
+    r = await fetch(BASE + '/token', {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code', code: chainCode, redirect_uri: 'http://127.0.0.1:8080/cb',
+        client_id: web.client_id, code_verifier: verifier,
+      }).toString(),
+    });
+    const chainTok1 = await r.json();
+    r = await fetch(BASE + '/token', {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token', refresh_token: chainTok1.refresh_token, client_id: web.client_id,
+      }).toString(),
+    });
+    const chainTok2 = await r.json();
+    ok('加固:刷新成功取得同链新令牌对', r.status === 200 && !!chainTok2.access_token && !!chainTok2.refresh_token);
+    r = await fetch(BASE + '/introspect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Authorization: basic(svc.client_id, 'svc-secret-123') },
+      body: new URLSearchParams({ token: chainTok1.access_token }).toString(),
+    });
+    ok('加固:链上首对 access token 初始为活跃', r.status === 200 && (await r.json()).active === true);
+    r = await fetch(BASE + '/revoke', {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ token: chainTok2.refresh_token, client_id: web.client_id }).toString(),
+    });
+    ok('加固:所属客户端吊销刷新后的 refresh token 返回 200', r.status === 200);
+    r = await fetch(BASE + '/introspect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Authorization: basic(svc.client_id, 'svc-secret-123') },
+      body: new URLSearchParams({ token: chainTok1.access_token }).toString(),
+    });
+    ok('加固:吊销 refresh 后链上旧 access token 内省 active=false', r.status === 200
+      && (await r.json()).active === false);
+    r = await fetch(BASE + '/introspect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Authorization: basic(svc.client_id, 'svc-secret-123') },
+      body: new URLSearchParams({ token: chainTok2.access_token }).toString(),
+    });
+    ok('加固:吊销 refresh 后链上新 access token 同样级联失效', r.status === 200
+      && (await r.json()).active === false);
 
     /* ---------- client_credentials ---------- */
     r = await fetch(BASE + '/token', {
@@ -410,6 +636,32 @@ async function main() {
       body: new URLSearchParams({ grant_type: 'client_credentials' }).toString(),
     });
     ok('错误密钥返回 invalid_client', r.status === 401 && (await r.json()).error === 'invalid_client');
+    // RFC 6749 §5.2:经 Authorization 头认证失败,401 必须携带匹配方案的 WWW-Authenticate
+    ok('Basic 认证失败时 401 携带 WWW-Authenticate 挑战(RFC 6749 §5.2)',
+      (r.headers.get('www-authenticate') || '').startsWith('Basic'));
+
+    // RFC 6749 §2.3.1:Basic 的用户名/密码为 application/x-www-form-urlencoded 编码,
+    // 含特殊字符的 client_secret 以编码形式提交时必须被正确解码
+    const encApp = clients.create({
+      name: 'Smoke Encoded', redirectUris: ['http://127.0.0.1:8080/enc'],
+      scopes: 'openid', isPublic: false, pkceRequired: false,
+      secretHash: await hashPassword('svc%sec@123'),
+    });
+    r = await fetch(BASE + '/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Authorization: basic(encApp.client_id, encodeURIComponent('svc%sec@123')) },
+      body: new URLSearchParams({ grant_type: 'client_credentials' }).toString(),
+    });
+    ok('Basic 认证:client_secret 的表单编码(RFC 6749 §2.3.1)被正确解码', r.status === 200 && !!(await r.json()).access_token);
+
+    // 加固(RFC 6749 §2.3.1):同一请求混用 Basic 头与表单 client_secret 属于重复认证,必须拒绝
+    r = await fetch(BASE + '/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Authorization: basic(svc.client_id, 'svc-secret-123') },
+      body: new URLSearchParams({ grant_type: 'client_credentials', client_secret: 'svc-secret-123' }).toString(),
+    });
+    ok('加固:Basic 头与表单 client_secret 混用被拒(invalid_request)', r.status === 400
+      && (await r.json()).error === 'invalid_request', `status=${r.status}`);
 
     /* ---------- 登录流转:无 next 登录直达门户,登出回登录页带提示 ---------- */
     const qj = new Jar();
@@ -424,6 +676,16 @@ async function main() {
       && location(r) === '/login?msg=' + encodeURIComponent('已退出登录'));
     r = await call(qj, location(r));
     ok('流转:登录页渲染「已退出登录」提示横幅', r.status === 200 && (await r.text()).includes('已退出登录'));
+
+    /* ---------- 主题切换:back 参数防开放重定向 ---------- */
+    r = await call(new Jar(), '/-/theme/night?back=' + encodeURIComponent('/apps'));
+    ok('主题:正常 back 参数回到站内页面并写入主题 cookie', r.status === 302 && location(r) === '/apps'
+      && (r.headers.getSetCookie?.() || []).some((c) => c.startsWith('theme=night')));
+    // 反斜杠会被部分浏览器规范化为 /,使 /\evil.com 成为协议相对地址 → 必须落到首页
+    r = await call(new Jar(), '/-/theme/day?back=' + encodeURIComponent('/\\evil.com'));
+    ok('主题:反斜杠 back 参数被拒(防协议相对开放重定向)', r.status === 302 && location(r) === '/');
+    r = await call(new Jar(), '/-/theme/day?back=' + encodeURIComponent('//evil.com'));
+    ok('主题:协议相对 back 参数被拒', r.status === 302 && location(r) === '/');
 
     /* ---------- 两步验证(TOTP + 恢复代码) ---------- */
     const totp = await import('../src/core/totp.js');
@@ -485,9 +747,19 @@ async function main() {
     await call(aj, '/login', { method: 'POST', form: { username: 'admin', password: 'Wizard#12345', _csrf: f3._csrf } });
     r = await call(aj, '/admin');
     ok('管理员登录后可访问控制台', r.status === 200 && (await r.text()).includes('控制台'));
+    let adminCsrf = extractHidden(await (await call(aj, '/admin')).text())._csrf; // 管理员会话 CSRF(新建用户/应用等写表单共用;重登后需刷新)
+
+    // 缺少会话 CSRF 的新建请求一律拒绝(与其它管理端写操作同标准)
+    r = await call(aj, '/admin/users/create', { method: 'POST', form: { username: 'csrfless', password: 'Csrf#12345' } });
+    ok('管理端:新建用户缺 CSRF 被拒', r.status === 302 && location(r).startsWith('/admin/users/new?err=') && !users.byUsername('csrfless'));
+    r = await call(aj, '/admin/apps/create', { method: 'POST', form: { name: 'Csrfless App', redirect_uris: 'http://127.0.0.1:8080/x', scopes: 'openid' } });
+    ok('管理端:新建应用缺 CSRF 被拒', r.status === 302 && location(r).startsWith('/admin/apps/new?err='));
+    r = await call(aj, '/admin/users/new');
+    ok('管理端:新建用户表单携带 CSRF 隐藏字段', r.status === 200 && !!extractHidden(await r.text())._csrf);
+
     r = await call(aj, '/admin/users/create', {
       method: 'POST',
-      form: { username: 'alice', password: 'Alice#12345', name: '爱丽丝', email: 'alice@example.com', user_groups: 'dev', is_admin: '' },
+      form: { username: 'alice', password: 'Alice#12345', name: '爱丽丝', email: 'alice@example.com', user_groups: 'dev', is_admin: '', _csrf: adminCsrf },
     });
     r = await call(aj, '/admin/users');
     ok('管理员可在控制台创建用户', r.status === 200 && (await r.text()).includes('alice'));
@@ -502,6 +774,7 @@ async function main() {
     r = await call(aj, '/login');
     const f5 = extractHidden(await r.text());
     await call(aj, '/login', { method: 'POST', form: { username: 'admin', password: 'Wizard#12345', _csrf: f5._csrf } });
+    adminCsrf = extractHidden(await (await call(aj, '/admin')).text())._csrf; // 重登产生新会话,刷新会话 CSRF
     r = await call(aj, `/admin/users/${bob.id}`);
     const editHtml = await r.text();
     ok('编辑页提供两步验证重置项', editHtml.includes('重置两步验证'));
@@ -635,6 +908,15 @@ async function main() {
     });
     ok('自助注册:重复用户名注册被拒', r.status === 400 && (await r.text()).includes('用户名已存在'));
 
+    // 大小写变体同样视为重复(username 列 UNIQUE COLLATE NOCASE,查重走 COLLATE NOCASE)
+    r = await call(dj, '/register', {
+      method: 'POST',
+      form: { username: 'CAROL', password: 'Carol#12345', password2: 'Carol#12345', _csrf: dupForm._csrf },
+    });
+    ok('自助注册:大小写变体用户名同样被拒(COLLATE NOCASE)', r.status === 400
+      && (await r.text()).includes('用户名已存在')
+      && users.list().filter((u) => u.username === 'CAROL').length === 0);
+
     // 两次密码不一致被拒
     const mj = new Jar();
     r = await call(mj, '/register');
@@ -719,6 +1001,35 @@ async function main() {
     const gConsentHtml = await r.text();
     ok('权限组:组内用户(∈dev)进入同意页', r.status === 200 && gConsentHtml.includes('请求访问你的账号'));
     const gForm = extractHidden(gConsentHtml);
+    // POST /authorize 直发绕过:PKCE 必选应用缺少 code_challenge 时必须拒绝(与 GET 同约束)
+    r = await call(fj, '/authorize', {
+      method: 'POST',
+      form: {
+        _csrf: gForm._csrf, response_type: 'code', client_id: web.client_id,
+        redirect_uri: 'http://127.0.0.1:8080/cb', decision: 'approve', state: 'bypass-st',
+      },
+    });
+    ok('POST /authorize:PKCE 必选应用缺少 code_challenge 被拒', r.status === 302
+      && new URL(location(r), BASE).searchParams.get('error') === 'invalid_request', location(r));
+    // 错误重定向(RFC 6749 §4.1.2.1):拒绝授权必须 302 回跳并携带 error=access_denied 与 state
+    r = await call(fj, '/authorize', {
+      method: 'POST',
+      form: {
+        _csrf: gForm._csrf, response_type: 'code', client_id: svc.client_id,
+        redirect_uri: 'http://127.0.0.1:8080/any', decision: 'deny', state: 'deny-st',
+      },
+    });
+    ok('POST /authorize:拒绝授权回跳 error=access_denied 并透传 state', r.status === 302
+      && new URL(location(r), BASE).searchParams.get('error') === 'access_denied'
+      && new URL(location(r), BASE).searchParams.get('state') === 'deny-st', location(r));
+    // GET 侧错误重定向:response_type 非法时 302 携带 error 而非 500
+    r = await call(fj, '/authorize?' + new URLSearchParams({
+      client_id: web.client_id, redirect_uri: 'http://127.0.0.1:8080/cb',
+      response_type: 'token', state: 'bad-rt',
+    }).toString());
+    ok('GET /authorize:非法 response_type 回跳 error=unsupported_response_type', r.status === 302
+      && new URL(location(r), BASE).searchParams.get('error') === 'unsupported_response_type'
+      && new URL(location(r), BASE).searchParams.get('state') === 'bad-rt', location(r));
     r = await call(fj, '/authorize', { method: 'POST', form: { ...gForm, decision: 'approve', remember: 'on' } });
     const gCode = new URL(location(r), BASE).searchParams.get('code');
     ok('权限组:组内用户授权通过并签发 code', r.status === 302 && !!gCode && !location(r).includes('error'));
@@ -816,6 +1127,14 @@ async function main() {
     });
     ok('组详情:组重命名重名被拒', r.status === 302 && location(r).includes('err=') && !!groupsM.byName('dev'));
 
+    // 加固:组名大小写不敏感唯一('DEV' vs 'dev' 视为重名;重命名同理,自身大小写变更允许)
+    r = await call(aj, '/admin/groups/create', { method: 'POST', form: { name: 'DEV', description: '', _csrf: gf._csrf } });
+    ok('加固:新建组大小写变体重名被拒(DEV vs dev)', r.status === 302 && location(r).includes('err=')
+      && groupsM.list().filter((g) => g.name.toLowerCase() === 'dev').length === 1);
+    r = await call(aj, `/admin/groups/${devGroup.id}/update`, { method: 'POST', form: { name: 'OPS', description: '', _csrf: devForm._csrf } });
+    ok('加固:组重命名大小写变体被拒(OPS vs ops)', r.status === 302 && location(r).includes('err=')
+      && !!groupsM.byName('dev') && !groupsM.byName('OPS'));
+
     // 成员管理:ops 组为空组,先验证空状态,再批量添加与移除
     r = await call(aj, `/admin/groups/${opsGroup.id}`);
     const opsEmpty = await r.text();
@@ -894,10 +1213,22 @@ async function main() {
     r = await call(fj, '/account');
     ok('我的授权:账号页出现入口链接', (await r.text()).includes('/account/apps'));
 
+    // 链式吊销(RFC 7009)已使 tok4 所在链的令牌全部失效;签发一对新令牌作为撤销授权的对照样本
+    r = await call(fj, authUrl);
+    const cnsCode = new URL(location(r), BASE).searchParams.get('code');
+    r = await fetch(BASE + '/token', {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code', code: cnsCode, redirect_uri: 'http://127.0.0.1:8080/cb',
+        client_id: web.client_id, code_verifier: verifier,
+      }).toString(),
+    });
+    const cnsTok = await r.json();
+
     r = await fetch(BASE + '/introspect', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded', Authorization: basic(svc.client_id, 'svc-secret-123') },
-      body: new URLSearchParams({ token: tok4.access_token }).toString(),
+      body: new URLSearchParams({ token: cnsTok.access_token }).toString(),
     });
     ok('我的授权:撤销前应用令牌仍活跃', (await r.json()).active === true);
 
@@ -916,7 +1247,7 @@ async function main() {
     r = await fetch(BASE + '/introspect', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded', Authorization: basic(svc.client_id, 'svc-secret-123') },
-      body: new URLSearchParams({ token: tok4.access_token }).toString(),
+      body: new URLSearchParams({ token: cnsTok.access_token }).toString(),
     });
     ok('我的授权:撤销后该应用现有令牌级联失效', (await r.json()).active === false);
 
@@ -976,6 +1307,24 @@ async function main() {
     ok('门户:PKCE 应用经门户启动后可无 verifier 换取令牌', r.status === 200 && !!portalTok.access_token,
       JSON.stringify(portalTok).slice(0, 120));
 
+    // 连续启动:先后启动两个 PKCE 应用,先启动应用的 verifier 不应被后启动的覆盖
+    r = await call(fj, `/apps/launch/${web.client_id}`);
+    const firstLaunch = location(r);
+    r = await call(fj, `/apps/launch/${gApp.client_id}`);
+    ok('门户:连续启动第二个应用进入授权流程', r.status === 302 && location(r).startsWith('/authorize?'));
+    r = await call(fj, firstLaunch); // 已记住授权,直接发码
+    const firstCb = new URL(location(r), BASE);
+    r = await fetch(BASE + '/token', {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code', code: firstCb.searchParams.get('code'),
+        redirect_uri: 'http://127.0.0.1:8080/cb', client_id: web.client_id,
+      }).toString(),
+    });
+    const firstTok = await r.json();
+    ok('门户:连发两个应用后先启动的仍可无 verifier 换令牌(verifier 不被覆盖)',
+      r.status === 200 && !!firstTok.access_token, JSON.stringify(firstTok).slice(0, 120));
+
     r = await call(nj2, `/apps/launch/${gApp.client_id}`);
     const noahLaunch = await r.text();
     ok('门户:无权用户启动受限应用被拦截(403)', r.status === 403
@@ -999,6 +1348,7 @@ async function main() {
         ['description', '统一运维入口,一站聚合所有工具'],
         ['logo_url', 'https://cdn.example.com/logo.png'],
         ['require_consent', '1'],
+        ['_csrf', adminCsrf],
       ],
     });
     ok('应用信息:创建带描述与 Logo 的应用成功', r.status === 302
@@ -1017,7 +1367,7 @@ async function main() {
       form: {
         name: 'Bad Logo App', client_type: 'public',
         redirect_uris: 'http://127.0.0.1:8080/bad', scopes: 'openid',
-        logo_url: 'http://cdn.example.com/x.png',
+        logo_url: 'http://cdn.example.com/x.png', _csrf: adminCsrf,
       },
     });
     ok('应用信息:非 https Logo 地址被拒绝', r.status === 200 && (await r.text()).includes('Logo 图片地址不合法'));
@@ -1250,6 +1600,34 @@ async function main() {
       && msSaved.ms_client_id === 'smoke-ms-client' && msSaved.ms_client_secret === 'smoke-ms-secret'
       && msSaved.ms_authority === msMock.authority);
 
+    // 加固:ms_tenant 格式校验(拼进 authority URL 路径,非法值保存被拒并回显)
+    r = await call(aj, '/admin/ms-oauth', {
+      method: 'POST',
+      form: {
+        ms_enabled: '1', ms_client_id: 'smoke-ms-client', ms_client_secret: 'smoke-ms-secret',
+        ms_tenant: '../evil?x=1', ms_authority: msMock.authority, _csrf: msDashForm._csrf,
+      },
+    });
+    ok('加固:ms_tenant 非法值保存被拒并回显错误', r.status === 302 && location(r).startsWith('/admin?err=')
+      && settings.getMap().ms_tenant !== '../evil?x=1');
+    r = await call(aj, '/admin/ms-oauth', {
+      method: 'POST',
+      form: {
+        ms_enabled: '1', ms_client_id: 'smoke-ms-client', ms_client_secret: 'smoke-ms-secret',
+        ms_tenant: 'Tenant_01.example', ms_authority: msMock.authority, _csrf: msDashForm._csrf,
+      },
+    });
+    ok('加固:ms_tenant 合法值(含 . _ 与大小写)保存成功', r.status === 302 && location(r).startsWith('/admin?msg=')
+      && settings.getMap().ms_tenant === 'Tenant_01.example');
+    await call(aj, '/admin/ms-oauth', { // 还原 common,不影响后续 MS 链路用例
+      method: 'POST',
+      form: {
+        ms_enabled: '1', ms_client_id: 'smoke-ms-client', ms_client_secret: 'smoke-ms-secret',
+        ms_tenant: 'common', ms_authority: msMock.authority, _csrf: msDashForm._csrf,
+      },
+    });
+    ok('加固:ms_tenant 还原 common 成功', settings.getMap().ms_tenant === 'common');
+
     r = await call(new Jar(), '/login');
     ok('MS:启用后登录页出现 Microsoft 登录按钮', r.status === 200
       && (await r.text()).includes('使用 Microsoft 账号登录'));
@@ -1337,6 +1715,14 @@ async function main() {
       `loc=${location(r)}`);
     const boundAlice = users.byMicrosoftSub('ms-sub-123');
     ok('MS:bind=1 后 byMicrosoftSub 命中 alice', !!boundAlice && boundAlice.id === users.byUsername('alice').id);
+
+    // 已绑定账号再次发起 bind=1:拒绝静默换绑,提示先解绑(绑定仍保留)
+    r = await call(aj2, '/auth/microsoft?bind=1');
+    r = await call(aj2, location(r));
+    r = await call(aj2, location(r));
+    ok('MS:已绑定账号重复 bind=1 被拒(需先解绑,绑定不被覆盖)', r.status === 302
+      && location(r).startsWith('/account?err=') && users.byMicrosoftSub('ms-sub-123')?.id === users.byUsername('alice').id);
+
     if (boundAlice) users.unbindMicrosoft(boundAlice.id); // 清理绑定,供后续注册链路复用同一 mock 身份
 
     // 表单 B:自助注册开启时注册新号并绑定
@@ -1400,7 +1786,7 @@ async function main() {
       method: 'POST',
       // scopes 以重复键提交,服务端按数组收集(与表单复选框行为一致)
       form: [['name', '审计探针'], ['redirect_uris', 'http://127.0.0.1:8080/audit-cb'],
-        ['scopes', 'openid'], ['scopes', 'profile'], ['client_type', 'public']],
+        ['scopes', 'openid'], ['scopes', 'profile'], ['client_type', 'public'], ['_csrf', adminCsrf]],
     });
     const appCreatedRows = auditM.list({ action: 'admin.app_created', limit: 10 });
     ok('审计:新建应用产生 admin.app_created 记录', appCreatedRows.length > 0
@@ -1457,6 +1843,9 @@ async function main() {
       && pgF.includes('href="/admin/audit/export.csv?action=pagetest"'));
     r = await call(aj, '/admin/audit?page=999');
     ok('审计分页:页码越界自动收敛到末页', r.status === 200 && (await r.text()).includes('第 2 / 2 页 · 共 60 条'));
+    r = await call(aj, '/admin/audit?page=-3');
+    ok('审计分页:负数/非法页码收敛到第 1 页', r.status === 200
+      && (await r.text()).includes('第 1 / 2 页 · 共 60 条'));
 
     // CSV 导出:造一条中文操作者 + 逗号引号明细的记录,验证转义与计数
     auditM.log({ actor: 'csv测试员', action: 'csvtest', detail: '导出,含"引号"与,逗号', ip: '10.0.0.2' });
@@ -1487,6 +1876,21 @@ async function main() {
       && csvFLines[0] === '时间,操作者,动作,详情,IP');
     ok('审计导出:普通用户访问导出被拒(403)', (await call(rj, '/admin/audit/export.csv')).status === 403);
 
+    // 加固:CSV 公式注入中和(CWE-1236)—— = + - @ \t \r 开头的自由文本前置单引号
+    const auditSvc = await import('../src/services/audit.js');
+    ok('加固:csvCell 危险前缀全中和(= + - @ 制表符 回车)且普通值不受影响',
+      ['=1+1', '+2', '-3', '@x', '\tT'].every((p) => auditSvc.csvCell(p) === `'${p}`)
+      && auditSvc.csvCell('\rR') === '"\'\rR"'
+      && auditSvc.csvCell('普通值') === '普通值');
+    auditM.log({ actor: '=EvilActor', action: 'csvtest', detail: '=cmd|calc!A0', ip: '10.0.0.9' });
+    auditM.log({ actor: '@spoofed', action: 'csvtest', detail: '-2+3,危险前缀', ip: '10.0.0.9' });
+    r = await call(aj, '/admin/audit/export.csv');
+    const csvHard = await r.text();
+    ok('加固:CSV 导出 = 开头的 detail/actor 被中和(前置单引号)', csvHard.includes("'=cmd|calc!A0")
+      && csvHard.includes("'=EvilActor"));
+    ok('加固:CSV 导出 @/- 前缀被中和且既有引号转义不受影响', csvHard.includes("'@spoofed")
+      && csvHard.includes("'-2+3,危险前缀") && csvHard.includes('"导出,含""引号""与,逗号"'));
+
     // 清理本段测试数据(只删 pagetest/csvtest,不影响后续用例)
     getAuditDb().prepare("DELETE FROM audit_logs WHERE action IN ('pagetest','csvtest')").run();
     ok('审计分页:测试记录清理完毕(无 pagetest/csvtest 残留)',
@@ -1510,6 +1914,45 @@ async function main() {
       && !healthHtml.includes('用户数') && !healthHtml.includes('应用数'));
     r = await call(nj2, '/health');
     ok('健康:普通用户(已登录)也可访问状态页', r.status === 200 && (await r.text()).includes('服务运行中'));
+
+    /* ---------- 「关于我们」公开页与管理端内容配置(正文纯文本转义渲染) ---------- */
+    r = await call(new Jar(), '/about');
+    const aboutEmpty = await r.text();
+    ok('关于:匿名访问公开页 200,未配置时显示默认标题与占位说明', r.status === 200
+      && aboutEmpty.includes('关于我们 · 樱落统一认证') && aboutEmpty.includes('尚未填写'));
+    ok('关于:未配置内容时页脚不出现「关于本站」入口', !aboutEmpty.includes('href="/about"'));
+    ok('关于:普通用户不可访问内容管理页(403)', (await call(rj, '/admin/about')).status === 403);
+    r = await call(aj, '/admin/about');
+    const aboutForm = await r.text();
+    ok('关于:管理端内容表单可访问且含 CSRF/标题/正文字段', r.status === 200
+      && aboutForm.includes('action="/admin/about"') && aboutForm.includes('name="_csrf"')
+      && aboutForm.includes('name="title"') && aboutForm.includes('name="content"'));
+    // 提交含 HTML 的内容:公开页必须转义后显示,换行/分段保留
+    r = await call(aj, '/admin/about', {
+      method: 'POST',
+      form: {
+        _csrf: extractHidden(aboutForm)._csrf, title: '关于本站',
+        content: '我们做统一登录。<b>加粗</b><script>alert(1)</script>\n空行分段\n第二段。',
+      },
+    });
+    ok('关于:保存成功并重定向到管理页提示', r.status === 302 && location(r).startsWith('/admin/about?msg='));
+    r = await call(new Jar(), '/about');
+    const aboutHtml = await r.text();
+    ok('关于:公开页显示自定义标题与正文', r.status === 200
+      && aboutHtml.includes('<title>关于本站 · 樱落统一认证</title>') && aboutHtml.includes('我们做统一登录。'));
+    ok('关于:正文 HTML 被转义(无注入面)且换行/分段保留', aboutHtml.includes('&lt;b&gt;加粗&lt;/b&gt;')
+      && aboutHtml.includes('&lt;script&gt;alert(1)&lt;/script&gt;')
+      && aboutHtml.includes('空行分段<br>第二段。') && !aboutHtml.includes('<script>alert'));
+    ok('关于:配置内容后登录页与控制台页脚出现「关于本站」入口',
+      ((s) => s.includes('href="/about"'))(await (await call(new Jar(), '/login')).text())
+      && ((s) => s.includes('href="/about"'))(await (await call(aj, '/apps')).text()));
+    ok('关于:管理端表单回显已保存的标题与正文', ((s) => s.includes('>关于本站<') && s.includes('我们做统一登录。'))
+      (await (await call(aj, '/admin/about')).text()));
+    ok('关于:保存产生 admin.about_updated 审计记录',
+      auditM.list({ action: 'admin.about_updated', limit: 5 }).some((row) => row.detail === '关于本站'));
+    // 无效提交:CSRF 不匹配 → 重定向错误提示
+    r = await call(aj, '/admin/about', { method: 'POST', form: { _csrf: 'bad', title: 'x', content: 'y' } });
+    ok('关于:CSRF 校验失败被拒', r.status === 302 && location(r).startsWith('/admin/about?err='));
 
     // 应用详情页:管理员可见「模拟启动」卡片与权限组下拉(Groups Only 限 dev)
     r = await call(aj, `/admin/apps/${gApp.client_id}`);
@@ -1560,6 +2003,17 @@ async function main() {
     ok('模拟:普通用户带 sim_group 启动受限应用仍被拦截(403)', r.status === 403
       && (await r.text()).includes('仅对特定权限组开放'));
 
+    // 加固:管理员直连 /authorize 携带合法 sim_group(无门户 stash)同样补审计(2 条 launch 层 → 3 条)
+    r = await call(aj, '/authorize?' + new URLSearchParams({
+      client_id: gApp.client_id, redirect_uri: 'http://127.0.0.1:8080/gcb',
+      response_type: 'code', scope: 'openid profile groups', state: 'sim-direct',
+      code_challenge: b64urlSha256(crypto.randomBytes(48).toString('base64url')),
+      code_challenge_method: 'S256', sim_group: 'dev',
+    }).toString());
+    ok('加固:直连 /authorize 的 sim_group 旁路发码并补审计(仅一次)', r.status === 302
+      && !!new URL(location(r), BASE).searchParams.get('code') && !location(r).includes('error')
+      && auditM.list({ action: 'admin.simulate_launch', limit: 10 }).length === 3, location(r));
+
     /* ---------- 应用健康探测与注册表 API(向导重跑段之前;本地健康目标随用例启停) ---------- */
     let healthState = 200; // 探测目标的响应码,可切换 200/500
     const healthMock = http.createServer((req, res) => {
@@ -1595,7 +2049,7 @@ async function main() {
         method: 'POST',
         form: [['name', '健康探针'], ['client_type', 'public'],
           ['redirect_uris', 'http://127.0.0.1:8080/health-cb'],
-          ['scopes', 'openid'], ['health_url', healthUrl]],
+          ['scopes', 'openid'], ['health_url', healthUrl], ['_csrf', adminCsrf]],
       });
       ok('健康探测:创建带健康检查地址的应用成功', r.status === 302 && location(r).startsWith('/admin/apps/'));
       const healthAppId = new URL(location(r), BASE).pathname.split('/').pop();
@@ -1605,7 +2059,7 @@ async function main() {
       r = await call(aj, '/admin/apps/create', {
         method: 'POST',
         form: { name: 'Bad Health App', client_type: 'public', redirect_uris: 'http://127.0.0.1:8080/bh',
-          scopes: 'openid', health_url: 'ftp://example.com/x' },
+          scopes: 'openid', health_url: 'ftp://example.com/x', _csrf: adminCsrf },
       });
       ok('健康探测:非 http(s) 健康地址被拒绝', r.status === 200 && (await r.text()).includes('健康检查地址不合法'));
 
@@ -1829,7 +2283,7 @@ async function main() {
     r = await call(aj, '/admin/apps/create', {
       method: 'POST',
       form: [['name', 'Logo 演示'], ['client_type', 'public'],
-        ['redirect_uris', 'http://127.0.0.1:8080/logo-cb'], ['scopes', 'openid']],
+        ['redirect_uris', 'http://127.0.0.1:8080/logo-cb'], ['scopes', 'openid'], ['_csrf', adminCsrf]],
     });
     ok('Logo:创建测试应用成功', r.status === 302 && location(r).startsWith('/admin/apps/'));
     const logoAppId = new URL(location(r), BASE).pathname.split('/').pop();
@@ -1853,6 +2307,8 @@ async function main() {
     const logoPngPath = path.join(uploadsDirSmoke, `${logoAppId}.png`);
     ok('Logo:上传后 logo_url 指向 /uploads 且文件字节与上传一致', clients.byId(logoAppId).logo_url === `/uploads/${logoAppId}.png`
       && fs.existsSync(logoPngPath) && Buffer.compare(fs.readFileSync(logoPngPath), PNG_1PX) === 0);
+    ok('打磨:Logo 原子化上传(上传完成后 uploads 目录无 .tmp- 临时文件残留)', listUploads().length > 0
+      && listUploads().every((n) => !n.includes('.tmp-')), `dir=${JSON.stringify(listUploads())}`);
 
     // 静态服务:匿名 200 + image/png + 字节一致 + 公开缓存 + nosniff
     r = await fetch(BASE + `/uploads/${logoAppId}.png`);
@@ -1916,6 +2372,9 @@ async function main() {
       && clients.byId(logoAppId).logo_url === `/uploads/${logoAppId}.gif`
       && !fs.existsSync(logoPngPath)
       && fs.existsSync(path.join(uploadsDirSmoke, `${logoAppId}.gif`)));
+    ok('打磨:Logo 连传两种扩展后目录文件名集合精确(仅 *.gif,无旧 PNG 与 .tmp- 残留)',
+      JSON.stringify(listUploads().filter((n) => n.startsWith(logoAppId + '.'))) === JSON.stringify([`${logoAppId}.gif`])
+      && listUploads().every((n) => !n.includes('.tmp-')), `dir=${JSON.stringify(listUploads())}`);
 
     // 删除 Logo:文件删除 + logo_url 置空
     r = await call(aj, `/admin/apps/${logoAppId}/logo/delete`, { method: 'POST', form: { _csrf: logoCsrf } });
@@ -1936,6 +2395,446 @@ async function main() {
     ok('Logo:上传与删除计入审计', auditM.list({ action: 'admin.app_logo_uploaded', limit: 100 }).length === 2
       && auditM.list({ action: 'admin.app_logo_deleted', limit: 100 }).length === 1);
 
+    // 清空 Logo 字段(应用设置保存):此前上传的文件同步清理,不再残留孤儿文件
+    r = await postMultipart(aj, `/admin/apps/${logoAppId}/logo`, {
+      fields: { _csrf: logoCsrf },
+      file: { name: 'logo', filename: 'logo.png', contentType: 'image/png', data: PNG_1PX },
+    });
+    ok('Logo:重新上传 PNG 成功(供清理用例)', r.status === 302
+      && fs.existsSync(path.join(uploadsDirSmoke, `${logoAppId}.png`)));
+    r = await call(aj, `/admin/apps/${logoAppId}/update`, {
+      method: 'POST',
+      form: [['name', 'Logo 演示'], ['redirect_uris', 'http://127.0.0.1:8080/logo-cb'],
+        ['scopes', 'openid'], ['logo_url', ''], ['_csrf', logoCsrf]],
+    });
+    ok('Logo:清空 Logo 字段后上传文件同步清理(无孤儿文件)', r.status === 302 && location(r).includes('msg=')
+      && clients.byId(logoAppId).logo_url === '' && !fs.existsSync(path.join(uploadsDirSmoke, `${logoAppId}.png`)));
+
+
+
+    /* ---------- Passkey/WebAuthn:模拟真认证器(零依赖 CBOR + ES256 手造凭据) ---------- */
+    const webauthnModel = await import('../src/models/webauthn.js');
+    const pkUser = users.create({ username: 'passy', passwordHash: await hashPassword('Passy#12345'), name: '帕斯基' });
+    const pkHandle = Buffer.from(pkUser.id).toString('base64url');
+    const pkJar = new Jar();
+    const pkPreLogin = await call(pkJar, '/api/login', { method: 'POST', json: { username: 'passy', password: 'Passy#12345' } });
+    ok('Passkey:前置用户经 API 登录成功', pkPreLogin.status === 200 && (await pkPreLogin.json()).ok === true);
+
+    // JS 资产:匿名可访问且 Content-Type 正确
+    r = await fetch(BASE + '/assets/webauthn.js');
+    ok('Passkey:webauthn.js 资产匿名可访问且 Content-Type 正确', r.status === 200
+      && /javascript/.test(r.headers.get('content-type') || '')
+      && (await r.text()).includes('navigator.credentials'));
+
+    // 登录页埋点:按钮 / 状态行 / defer 脚本引用
+    r = await call(new Jar(), '/login');
+    const pkLoginHtml0 = await r.text();
+    ok('Passkey:登录页含按钮、状态行与脚本引用', pkLoginHtml0.includes('id="passkey-login-btn"')
+      && pkLoginHtml0.includes('id="passkey-status"')
+      && pkLoginHtml0.includes('<script src="/assets/webauthn.js" defer></script>'));
+
+    // 未登录 JSON 接口 401(api.js 风格,不重定向)
+    r = await call(new Jar(), '/webauthn/register/options');
+    ok('Passkey:未登录请求注册参数返回 401', r.status === 401 && (await r.json()).error === 'unauthenticated');
+
+    // 匿名登录参数:discoverable(allowCredentials 为空)
+    r = await call(new Jar(), '/webauthn/login/options');
+    const pkAnonOpt = await r.json();
+    ok('Passkey:匿名可取登录参数且 allowCredentials 为空(discoverable)', r.status === 200
+      && !!pkAnonOpt.challengeId && (pkAnonOpt.challenge || '').length >= 43
+      && Array.isArray(pkAnonOpt.allowCredentials) && pkAnonOpt.allowCredentials.length === 0
+      && pkAnonOpt.rpId === PK_RP_ID && pkAnonOpt.userVerification === 'preferred');
+
+    // 注册辅助:options → 手造 attestation → verify
+    const regOnce = async (jar, { name = '测试密钥', credId, challengeOverride, originOverride, noHeader = false } = {}) => {
+      const optRes = await call(jar, '/webauthn/register/options', { headers: { 'X-Requested-With': 'JSON' } });
+      if (optRes.status !== 200) return { status: optRes.status, body: await optRes.json() };
+      const opt = (await optRes.json()).publicKey;
+      const att = makeAttestation({
+        challenge: challengeOverride ?? opt.challenge,
+        credId,
+        origin: originOverride ?? BASE,
+      });
+      const vRes = await call(jar, '/webauthn/register/verify', {
+        method: 'POST',
+        json: { name, response: att },
+        headers: noHeader ? {} : { 'X-Requested-With': 'JSON' },
+      });
+      return { status: vRes.status, body: await vRes.json() };
+    };
+
+    // 登录辅助:options → 手造 assertion → verify(独立 jar 承接会话)
+    const loginOnce = async ({ challengeOverride, originOverride, challengeIdOverride, credIdB64, counter = 1, corrupt = false, noHeader = false } = {}) => {
+      const jar = new Jar();
+      const oRes = await call(jar, '/webauthn/login/options');
+      const o = await oRes.json();
+      const assertion = makeAssertion({
+        challenge: challengeOverride ?? o.challenge,
+        credIdB64,
+        counter,
+        origin: originOverride ?? BASE,
+        userHandle: pkHandle,
+        corrupt,
+      });
+      const vRes = await call(jar, '/webauthn/login/verify', {
+        method: 'POST',
+        json: { challengeId: challengeIdOverride ?? o.challengeId, response: assertion },
+        headers: noHeader ? {} : { 'X-Requested-With': 'JSON' },
+      });
+      return { jar, o, status: vRes.status, body: await vRes.json() };
+    };
+
+    // 注册(fmt=none):成功入库,计数器 0
+    const credA = crypto.randomBytes(32).toString('base64url');
+    let pkR = await regOnce(pkJar, { name: '主力密钥', credId: Buffer.from(credA, 'base64url') });
+    ok('Passkey:注册(fmt=none)成功且返回名称', pkR.status === 200 && pkR.body.ok === true && pkR.body.name === '主力密钥');
+    ok('Passkey:凭据已入库且计数器为 0', webauthnModel.countForUser(pkUser.id) === 1
+      && webauthnModel.byId(credA).counter === 0 && webauthnModel.byId(credA).name === '主力密钥');
+
+    // 重复凭据 ID
+    pkR = await regOnce(pkJar, { credId: Buffer.from(credA, 'base64url') });
+    ok('Passkey:重复凭据 ID 注册被拒', pkR.status === 400 && pkR.body.error === 'duplicate');
+
+    // attestation origin / challenge 错误;缺 Ajax 头
+    pkR = await regOnce(pkJar, { credId: crypto.randomBytes(32), originOverride: 'https://evil.com' });
+    ok('Passkey:attestation origin 错误被拒', pkR.status === 400 && pkR.body.error === 'origin_mismatch');
+    pkR = await regOnce(pkJar, { credId: crypto.randomBytes(32), challengeOverride: 'wrong-challenge' });
+    ok('Passkey:attestation challenge 错误被拒', pkR.status === 400 && pkR.body.error === 'challenge_mismatch');
+    r = await call(pkJar, '/webauthn/register/verify', {
+      method: 'POST', json: { name: 'x', response: { clientDataJSON: 'e30', attestationObject: 'e30' } },
+    });
+    ok('Passkey:注册校验缺 X-Requested-With 头被拒(403)', r.status === 403);
+
+    // packed 自证明:合法通过,签名篡改被拒
+    const pkPackedReg = async (corrupt = false) => {
+      const opt = (await (await call(pkJar, '/webauthn/register/options')).json()).publicKey;
+      const cd = Buffer.from(JSON.stringify({ type: 'webauthn.create', challenge: opt.challenge, origin: BASE }));
+      const credId = crypto.randomBytes(32);
+      const ad = makeAuthData({ flags: 0x45, credId });
+      let sig = crypto.sign('sha256', Buffer.concat([ad, crypto.createHash('sha256').update(cd).digest()]), pkKeys.privateKey);
+      if (corrupt) { sig = Buffer.from(sig); sig[9] ^= 0xff; }
+      return call(pkJar, '/webauthn/register/verify', {
+        method: 'POST',
+        json: { name: '自签密钥', response: {
+          clientDataJSON: cd.toString('base64url'),
+          attestationObject: cborEncode({ fmt: 'packed', attStmt: { alg: -7, sig }, authData: ad }).toString('base64url'),
+        } },
+        headers: { 'X-Requested-With': 'JSON' },
+      });
+    };
+    r = await pkPackedReg(false);
+    ok('Passkey:packed 自证明 attestation 注册成功', r.status === 200 && (await r.json()).ok === true);
+    r = await pkPackedReg(true);
+    ok('Passkey:packed 伪造签名被拒', r.status === 400 && (await r.json()).error === 'attestation_invalid');
+
+    // 补满 8 个上限,第 9 个被拒
+    for (let i = 0; i < 6 && webauthnModel.countForUser(pkUser.id) < 8; i++) {
+      pkR = await regOnce(pkJar, { name: `补充密钥 ${i + 1}`, credId: crypto.randomBytes(32) });
+    }
+    ok('Passkey:可注册至 8 个上限', webauthnModel.countForUser(pkUser.id) === 8);
+    pkR = await regOnce(pkJar, { credId: crypto.randomBytes(32) });
+    ok('Passkey:超过 8 个上限被拒', pkR.status === 400 && pkR.body.error === 'too_many');
+
+    // 登录参数带 username:列出该用户全部凭据 ID
+    r = await call(new Jar(), '/webauthn/login/options?username=passy');
+    const pkWithUser = await r.json();
+    ok('Passkey:登录参数带 username 时列出该用户凭据', pkWithUser.allowCredentials.length === 8
+      && pkWithUser.allowCredentials.some((c) => c.id === credA));
+
+    // assertion:未知凭据 → 404 no_credentials
+    let pkL = await loginOnce({ credIdB64: crypto.randomBytes(32).toString('base64url') });
+    ok('Passkey:未知凭据返回 404 no_credentials', pkL.status === 404 && pkL.body.error === 'no_credentials');
+
+    // 缺 Ajax 头;未知 challengeId
+    {
+      const jar = new Jar();
+      const o = await (await call(jar, '/webauthn/login/options')).json();
+      r = await call(jar, '/webauthn/login/verify', {
+        method: 'POST',
+        json: { challengeId: o.challengeId, response: makeAssertion({ challenge: o.challenge, credIdB64: credA, counter: 1, userHandle: pkHandle }) },
+      });
+      ok('Passkey:登录校验缺 X-Requested-With 头被拒(403)', r.status === 403);
+    }
+    pkL = await loginOnce({ challengeIdOverride: 'bogus-challenge-id' });
+    ok('Passkey:未知 challengeId 被拒', pkL.status === 400 && pkL.body.error === 'challenge_expired');
+
+    // 伪造签名 / origin 错 / challenge 错
+    pkL = await loginOnce({ credIdB64: credA, corrupt: true });
+    ok('Passkey:assertion 伪造签名被拒(401)', pkL.status === 401 && pkL.body.error === 'invalid_credentials');
+    pkL = await loginOnce({ credIdB64: credA, originOverride: 'https://evil.com' });
+    ok('Passkey:assertion origin 错误被拒', pkL.status === 401 && pkL.body.error === 'invalid_credentials');
+    pkL = await loginOnce({ credIdB64: credA, challengeOverride: 'wrong-challenge' });
+    ok('Passkey:assertion challenge 错误被拒', pkL.status === 401 && pkL.body.error === 'invalid_credentials');
+
+    // 正常登录(counter=1):200 + Set-Cookie sid + 会话生效 + 计数器更新
+    pkL = await loginOnce({ credIdB64: credA, counter: 1 });
+    ok('Passkey:正常 assertion 登录成功', pkL.status === 200 && pkL.body.ok === true && pkL.body.user?.username === 'passy');
+    ok('Passkey:登录响应 Set-Cookie 携带 sid', !!pkL.jar.map.get('sid'));
+    const pkSess = await (await call(pkL.jar, '/api/session')).json();
+    ok('Passkey:登录后 /api/session 为 authenticated', pkSess.authenticated === true && pkSess.user.username === 'passy');
+    ok('Passkey:登录后计数器更新为 1', webauthnModel.byId(credA).counter === 1);
+
+    // 计数器回退:按克隆拒绝并记审计
+    pkL = await loginOnce({ credIdB64: credA, counter: 0 });
+    ok('Passkey:计数器回退按克隆拒绝(409)', pkL.status === 409 && pkL.body.error === 'credential_cloned');
+    ok('Passkey:克隆嫌疑计入审计', auditM.list({ action: 'auth.passkey_clone_suspect', limit: 10 })
+      .some((row) => row.detail === credA));
+
+    // 计数器递增后可再次登录
+    pkL = await loginOnce({ credIdB64: credA, counter: 2 });
+    ok('Passkey:计数器递增后可再次登录', pkL.status === 200 && webauthnModel.byId(credA).counter === 2);
+
+    // 账号设置页:管理卡片、列表项与删除按钮
+    r = await call(pkJar, '/account');
+    const pkAcct = await r.text();
+    ok('Passkey:账号设置页渲染管理卡片与脚本引用', pkAcct.includes('id="passkey-register-btn"')
+      && pkAcct.includes('id="passkey-name"') && pkAcct.includes('id="passkey-list"')
+      && pkAcct.includes('<script src="/assets/webauthn.js" defer></script>'));
+    const pkAcctForm = extractHidden(pkAcct);
+    ok('Passkey:列表项带凭据 ID 的删除按钮', pkAcct.includes(`data-cred-id="${credA}"`)
+      && pkAcct.includes(`action="/account/webauthn/${credA}/delete"`));
+
+    // 越权:不能删除其它用户的凭据(双条件删除)
+    webauthnModel.create({ id: 'bob-pk-cred', userId: bob.id, name: 'Bob 密钥', publicKey: pkCose.toString('base64url') });
+    r = await call(pkJar, '/account/webauthn/bob-pk-cred/delete', { method: 'POST', form: { _csrf: pkAcctForm._csrf } });
+    ok('Passkey:不能删除其它用户的凭据(防越权)', r.status === 302 && location(r).startsWith('/account?err=')
+      && !!webauthnModel.byId('bob-pk-cred'));
+
+    // 删除自己的凭据
+    r = await call(pkJar, `/account/webauthn/${credA}/delete`, { method: 'POST', form: { _csrf: pkAcctForm._csrf } });
+    ok('Passkey:删除凭据成功回账号页且库中消失', r.status === 302 && location(r).startsWith('/account?msg=')
+      && !webauthnModel.byId(credA) && webauthnModel.countForUser(pkUser.id) === 7);
+
+    // 删除后凭据不可再登录
+    pkL = await loginOnce({ credIdB64: credA, counter: 3 });
+    ok('Passkey:删除后的凭据不可登录', pkL.status === 404 && pkL.body.error === 'no_credentials');
+
+    // 审计:注册/删除/登录留痕
+    ok('Passkey:注册计入审计(account.passkey_registered)', auditM.list({ action: 'account.passkey_registered', limit: 20 }).length === 8);
+    ok('Passkey:删除计入审计(account.passkey_deleted)', auditM.list({ action: 'account.passkey_deleted', limit: 10 }).length === 1);
+    ok('Passkey:登录计入审计(auth.passkey_login)', auditM.list({ action: 'auth.passkey_login', limit: 10 }).length === 2);
+    webauthnModel.remove('bob-pk-cred', bob.id); // 清理越权测试夹具
+
+    /* ---------- 运维:一键备份/恢复、新设备登录提醒、授权用户 CSV 导出(放在向导重跑段之前) ---------- */
+    const consentsOps = await import('../src/models/consents.js');
+    const { DatabaseSync } = await import('node:sqlite');
+
+    /* ---------- 备份与恢复(独立子进程跑脚本;restore 在临时 DATA_DIR 演练,不动 .smoke-data) ---------- */
+    const backupsDir = path.join(DATA, 'backups');
+    const BACKUP_DIR_RE = /^sakuraid-backup-\d{8}-\d{6}(-\d+)?$/;
+    const listBackupDirs = () => (fs.existsSync(backupsDir) ? fs.readdirSync(backupsDir).filter((n) => BACKUP_DIR_RE.test(n)).sort() : []);
+    const listBackupTars = () => (fs.existsSync(backupsDir) ? fs.readdirSync(backupsDir).filter((n) => /^sakuraid-backup-\d{8}-\d{6}(-\d+)?\.tar\.gz$/.test(n)).sort() : []);
+    const tarAvailable = spawnSync('tar', ['--version'], { encoding: 'utf8' }).status === 0;
+    const runBackup = () => spawnSync(process.execPath, ['scripts/backup.mjs'], {
+      cwd: ROOT, env: { ...process.env, DATA_DIR: DATA, BACKUP_KEEP: '2' }, encoding: 'utf8',
+    });
+    fs.mkdirSync(path.join(DATA, 'uploads'), { recursive: true });
+    fs.writeFileSync(path.join(DATA, 'uploads', 'backup-probe.txt'), 'backup-probe');
+
+    const b1 = runBackup();
+    let snapInfo = null;
+    if (b1.status === 0 && listBackupDirs().length === 1) {
+      const dir = path.join(backupsDir, listBackupDirs()[0]);
+      if (fs.existsSync(path.join(dir, 'idp.sqlite')) && fs.existsSync(path.join(dir, 'meta.txt'))) {
+        let snap = new DatabaseSync(path.join(dir, 'idp.sqlite'));
+        const userCount = snap.prepare('SELECT COUNT(*) AS n FROM users').get().n;
+        snap.close();
+        snapInfo = { userCount, meta: fs.readFileSync(path.join(dir, 'meta.txt'), 'utf8') };
+      }
+    }
+    ok('备份:backup 脚本退出 0 并生成备份目录(含 idp.sqlite 与 meta.txt)', b1.status === 0 && !!snapInfo,
+      `status=${b1.status} out=${(b1.stderr || b1.stdout || '').slice(-200)}`);
+    ok('备份:快照可被 DatabaseSync 打开查询(users>0)且 meta.txt 含版本/issuer/备份时间', !!snapInfo && snapInfo.userCount > 0
+      && snapInfo.meta.includes(pkgVersion) && snapInfo.meta.includes(BASE) && snapInfo.meta.includes('备份时间'),
+      `users=${snapInfo?.userCount}`);
+    ok('备份:生成同名 .tar.gz(系统 tar 可用时)', !tarAvailable || listBackupTars().length === 1,
+      `tars=${listBackupTars().length} tar=${tarAvailable}`);
+
+    const b2 = runBackup();
+    ok('备份:连跑两次生成两份备份', b2.status === 0 && listBackupDirs().length === 2, `dirs=${listBackupDirs().length}`);
+    const firstBackup = listBackupDirs()[0];
+    const b3 = runBackup();
+    ok('备份:BACKUP_KEEP=2 保留规则生效(仅留最近两份,目录与 tar 均删)', b3.status === 0
+      && listBackupDirs().length === 2 && !listBackupDirs().includes(firstBackup)
+      && (!tarAvailable || listBackupTars().length === 2), `dirs=${listBackupDirs().length} tars=${listBackupTars().length}`);
+
+    const restoreTarget = path.join(ROOT, '.smoke-restore-target');
+    const beforeDirs = () => fs.readdirSync(ROOT).filter((n) => n.startsWith('.smoke-restore-target-before-restore-'));
+    const runRestore = (...args) => spawnSync(process.execPath, ['scripts/restore.mjs', ...args], {
+      cwd: ROOT, env: { ...process.env, DATA_DIR: restoreTarget }, encoding: 'utf8',
+    });
+    fs.rmSync(restoreTarget, { recursive: true, force: true });
+    fs.mkdirSync(path.join(restoreTarget, 'uploads'), { recursive: true });
+    fs.writeFileSync(path.join(restoreTarget, 'idp.sqlite'), 'not-a-real-database');
+    fs.writeFileSync(path.join(restoreTarget, 'uploads', 'old-file.txt'), 'old');
+
+    const rRefuse = runRestore(path.join(backupsDir, listBackupDirs()[0]));
+    ok('备份:restore 未加 --force 时拒绝执行并提示先停止服务', rRefuse.status !== 0
+      && `${rRefuse.stdout}${rRefuse.stderr}`.includes('请先停止服务再恢复')
+      && fs.readFileSync(path.join(restoreTarget, 'idp.sqlite'), 'utf8') === 'not-a-real-database', `status=${rRefuse.status}`);
+
+    const rDir = runRestore(path.join(backupsDir, listBackupDirs()[0]), '--force');
+    let restoredUsers = -1;
+    try {
+      const rdb = new DatabaseSync(path.join(restoreTarget, 'idp.sqlite'));
+      restoredUsers = rdb.prepare('SELECT COUNT(*) AS n FROM users').get().n;
+      rdb.close();
+    } catch { /* 恢复失败时保持 -1 */ }
+    ok('备份:restore --force 对备份目录执行后 idp.sqlite 可查询(users>0)', rDir.status === 0 && restoredUsers > 0,
+      `status=${rDir.status} users=${restoredUsers} ${(rDir.stderr || '').slice(-200)}`);
+    ok('备份:恢复时 uploads 随备份恢复且旧数据整体改名为 data-before-restore-<ts>', rDir.status === 0
+      && fs.existsSync(path.join(restoreTarget, 'uploads', 'backup-probe.txt'))
+      && beforeDirs().length === 1 && fs.existsSync(path.join(ROOT, beforeDirs()[0] || '', 'idp.sqlite'))
+      && fs.existsSync(path.join(ROOT, beforeDirs()[0] || '', 'uploads', 'old-file.txt')),
+      `before=${beforeDirs().length}`);
+
+    let tarRestoreOk = true, tarUsers = 0;
+    if (tarAvailable) {
+      fs.rmSync(restoreTarget, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+      const rTar = runRestore(path.join(backupsDir, `${listBackupDirs()[0]}.tar.gz`), '--force');
+      try {
+        const tdb = new DatabaseSync(path.join(restoreTarget, 'idp.sqlite'));
+        tarUsers = tdb.prepare('SELECT COUNT(*) AS n FROM users').get().n;
+        tdb.close();
+      } catch { tarUsers = -1; }
+      tarRestoreOk = rTar.status === 0 && tarUsers > 0;
+    }
+    ok('备份:restore 支持直接恢复 .tar.gz(解包后 idp.sqlite 可查询)', !tarAvailable || tarRestoreOk, `users=${tarUsers}`);
+
+    // 清理恢复演练产物(临时目录 + 改名前的旧数据目录)
+    fs.rmSync(restoreTarget, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
+    for (const bd of beforeDirs()) fs.rmSync(path.join(ROOT, bd), { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
+
+    /* ---------- 新设备登录邮件提醒 ---------- */
+    const countInLog = (needle) => serverLog.split(needle).length - 1;
+    const ND_UA = 'smoke-new-device-agent/1.0', NOEMAIL_UA = 'smoke-noemail-agent/1.0';
+
+    // carol 有邮箱;该 IP+UA 组合从未出现过 → 新设备提醒(未配置 SMTP,dev 模式邮件全文进 serverLog)
+    const ndj = new Jar();
+    r = await call(ndj, '/login', { headers: { 'User-Agent': ND_UA } });
+    const ndForm = extractHidden(await r.text());
+    const ndBefore = countInLog('新设备登录提醒');
+    r = await call(ndj, '/login', { method: 'POST', form: { username: 'carol', password: 'Carol#12345', _csrf: ndForm._csrf }, headers: { 'User-Agent': ND_UA } });
+    ok('新设备:带新 UA 登录成功', r.status === 302, `status=${r.status} loc=${location(r)}`);
+    let ndSeen = 0;
+    for (let i = 0; i < 40 && !ndSeen; i++) { await sleep(150); ndSeen = countInLog('新设备登录提醒') - ndBefore; }
+    await sleep(300); // 邮件打日志后审计写入紧随其后,留出落库时间
+    ok('新设备:dev 模式提醒邮件进入 serverLog(主题「新设备登录提醒」)', ndSeen >= 1, `mails=${ndSeen}`);
+    ok('新设备:邮件正文含用户名与 IP/设备信息', serverLog.includes('用户名:carol') && serverLog.includes('IP:') && serverLog.includes(ND_UA));
+    ok('新设备:审计产生 auth.new_device(detail 含 ip 与 ua)', auditM.list({ action: 'auth.new_device', limit: 100 })
+      .some((row) => row.actor === 'carol' && row.detail.includes('ip=') && row.detail.includes('ua=smoke-new-device-agent/1.0')));
+
+    // 同 IP + 同 UA 二次登录:历史会话已出现过该组合 → 不再提醒
+    const ndj2 = new Jar();
+    r = await call(ndj2, '/login', { headers: { 'User-Agent': ND_UA } });
+    const ndForm2 = extractHidden(await r.text());
+    const nd2Before = countInLog('新设备登录提醒');
+    r = await call(ndj2, '/login', { method: 'POST', form: { username: 'carol', password: 'Carol#12345', _csrf: ndForm2._csrf }, headers: { 'User-Agent': ND_UA } });
+    await sleep(600);
+    ok('新设备:同 IP+UA 二次登录不再提醒', r.status === 302 && countInLog('新设备登录提醒') === nd2Before,
+      `count=${countInLog('新设备登录提醒')} before=${nd2Before}`);
+
+    // email 为空的用户(bob):直接跳过发送,登录不受影响
+    const bej = new Jar();
+    r = await call(bej, '/login', { headers: { 'User-Agent': NOEMAIL_UA } });
+    const beForm = extractHidden(await r.text());
+    const beBefore = countInLog('新设备登录提醒');
+    r = await call(bej, '/login', { method: 'POST', form: { username: 'bob', password: 'BobPassw0rd!', _csrf: beForm._csrf }, headers: { 'User-Agent': NOEMAIL_UA } });
+    await sleep(500);
+    const beSess = await (await call(bej, '/api/session')).json();
+    ok('新设备:email 为空用户不发送提醒且登录正常(无崩溃)', r.status === 302 && beSess.authenticated === true
+      && beSess.user?.username === 'bob' && countInLog('新设备登录提醒') === beBefore,
+      `mails=${countInLog('新设备登录提醒') - beBefore}`);
+
+    /* ---------- 应用授权用户 CSV 导出 ---------- */
+    const csvApp = clients.create({
+      name: 'CSV 导出演示', redirectUris: ['http://127.0.0.1:8080/csv-cb'],
+      scopes: 'openid profile', isPublic: true, pkceRequired: true,
+    });
+    consentsOps.grant(bob.id, csvApp.client_id, 'openid profile');
+    r = await call(aj, `/admin/apps/${csvApp.client_id}/consents.csv`);
+    ok('授权导出:响应头正确(text/csv + attachment 文件名 + no-store)', r.status === 200
+      && (r.headers.get('content-type') || '') === 'text/csv; charset=utf-8'
+      && /^attachment; filename="consents-\d{8}-\d{6}\.csv"$/.test(r.headers.get('content-disposition') || '')
+      && (r.headers.get('cache-control') || '') === 'no-store', `status=${r.status}`);
+    // fetch 的 text() 会剥除开头 BOM,用原始字节验证 BOM 真实存在
+    const consCsvRaw = Buffer.from(await (await fetch(BASE + `/admin/apps/${csvApp.client_id}/consents.csv`,
+      { headers: { Cookie: aj.header() } })).arrayBuffer());
+    ok('授权导出:BOM 开头且首行为中文表头', consCsvRaw[0] === 0xEF && consCsvRaw[1] === 0xBB && consCsvRaw[2] === 0xBF
+      && consCsvRaw.slice(3).toString('utf8').split('\n')[0] === '用户名,姓名,授权范围,授权时间');
+    const consCsvBody = await (await call(aj, `/admin/apps/${csvApp.client_id}/consents.csv`)).text();
+    ok('授权导出:数据行含用户名/姓名/授权范围与可读授权时间', consCsvBody.includes('bob,小明,openid profile,'), consCsvBody.slice(0, 200));
+
+    // csvCell 转义:公式前缀中和 + 逗号/引号字段包裹(CWE-1236)
+    const csvUser = users.create({ username: '+csvuser', passwordHash: await hashPassword('Csv#12345'), name: '姓名,含"引号"' });
+    consentsOps.grant(csvUser.id, csvApp.client_id, 'openid');
+    const csvEsc = await (await call(aj, `/admin/apps/${csvApp.client_id}/consents.csv`)).text();
+    ok('授权导出:csvCell 转义生效(公式前缀中和、逗号/引号字段包裹)', csvEsc.includes("'") && csvEsc.includes("'+csvuser")
+      && csvEsc.includes('"姓名,含""引号"""'), csvEsc.slice(0, 300));
+
+    consentsOps.revoke(bob.id, csvApp.client_id);
+    consentsOps.revoke(csvUser.id, csvApp.client_id);
+    const csvEmpty = await (await call(aj, `/admin/apps/${csvApp.client_id}/consents.csv`)).text();
+    ok('授权导出:无授权时仅导出表头', csvEmpty.replace(/^\uFEFF/, '').trim() === '用户名,姓名,授权范围,授权时间');
+
+    r = await call(aj, '/admin/apps/nonexistent-app/consents.csv');
+    ok('授权导出:应用不存在重定向回应用列表', r.status === 302 && location(r).startsWith('/admin/apps?err='));
+    ok('授权导出:普通用户访问被拒(403)', (await call(fj, `/admin/apps/${csvApp.client_id}/consents.csv`)).status === 403);
+
+    // 清理导出演示夹具(应用删除级联清理授权行)
+    users.remove(csvUser.id);
+    clients.remove(csvApp.client_id);
+
+
+
+    /* ---------- 界面语言切换:cookie + /-/lang/:code(默认中文零回归,显式 en 才出英文) ---------- */
+    r = await call(new Jar(), '/login');
+    const zhDefaultLogin = await r.text();
+    ok('语言:默认(无 cookie)登录页仍为简体中文且 lang=zh-CN', r.status === 200
+      && zhDefaultLogin.includes('<html lang="zh-CN"') && zhDefaultLogin.includes('欢迎回来')
+      && !zhDefaultLogin.includes('Welcome back'));
+
+    const langJ = new Jar();
+    r = await call(langJ, '/-/lang/en?back=' + encodeURIComponent('/login'));
+    ok('语言:GET /-/lang/en 写入 lang cookie 并回到 back 页面', r.status === 302 && location(r) === '/login'
+      && (r.headers.getSetCookie?.() || []).some((c) => c.startsWith('lang=en')));
+    r = await call(langJ, '/login');
+    const enLogin = await r.text();
+    ok('语言:英文登录页含英文口号/表单标签且 html lang=en', r.status === 200
+      && enLogin.includes('<html lang="en"') && enLogin.includes('Welcome back')
+      && enLogin.includes('>Username</label>') && enLogin.includes('One home for all your sign-ins.'));
+    ok('语言:英文登录页不再渲染中文欢迎语与中文标签', !enLogin.includes('欢迎回来')
+      && !enLogin.includes('>用户名</label>'));
+    r = await call(langJ, '/login');
+    ok('语言:lang cookie 持久化(再次访问 /login 仍为英文)', r.status === 200
+      && (await r.text()).includes('<html lang="en"'));
+    r = await call(langJ, '/-/lang/zh?back=/login');
+    r = await call(langJ, '/login');
+    const zhBack = await r.text();
+    ok('语言:切回 zh 恢复中文文案与 lang=zh-CN', r.status === 200
+      && zhBack.includes('<html lang="zh-CN"') && zhBack.includes('欢迎回来'));
+    r = await call(langJ, '/-/lang/en?back=' + encodeURIComponent('//evil.com'));
+    ok('语言:协议相对 back 参数被拒(与主题切换同防开放重定向)', r.status === 302 && location(r) === '/');
+
+    // 登录态下:侧栏切换链接 + en 导航/门户按钮 + 可逆恢复(fj 为 bob 会话)
+    r = await call(fj, '/account');
+    const sideHtml = await r.text();
+    ok('语言:侧栏底部提供语言切换链接(与主题切换并排)', sideHtml.includes('/-/lang/en?back=')
+      && sideHtml.includes('>English</a>'));
+    await call(fj, '/-/lang/en?back=/apps');
+    r = await call(fj, '/apps');
+    const enPortal = await r.text();
+    ok('语言:en 下门户页导航与按钮为英文', enPortal.includes('<html lang="en"')
+      && enPortal.includes('App portal') && enPortal.includes('Open app')
+      && enPortal.includes('Account settings'));
+    await call(fj, '/-/lang/zh?back=/apps');
+    r = await call(fj, '/apps');
+    ok('语言:切回 zh 后门户页恢复中文(切换可逆)', (await r.text()).includes('应用门户'));
+
+    // 默认中文下既有同意页关键断言回归抽查(nj2=noah,未授权过 Meta Portal,require_consent=1)
+    r = await call(nj2, metaAuthUrl);
+    ok('语言:中文同意页「请求访问你的账号」不受切换功能影响(回归抽查)', r.status === 200
+      && (await r.text()).includes('请求访问你的账号'));
 
     /* ---------- 配置向导增强:管理员重新运行向导(放在最后,尾部恢复 setup_done=1) ---------- */
     r = await call(aj, '/admin');
@@ -1946,36 +2845,352 @@ async function main() {
     ok('向导:管理员触发重跑后跳到 /setup', r.status === 302 && location(r) === '/setup');
     const gated = await call(new Jar(), '/');
     ok('向导:重跑期间普通页面重定向 /setup', gated.status === 302 && location(gated) === '/setup');
-    r = await call(wj, '/setup');
+    r = await call(aj, '/setup');
     ok('向导:重跑后 /setup 显示第 1 步环境检测', r.status === 200 && (await r.text()).includes('环境检测'));
 
-    await call(wj, '/setup/step1', { method: 'POST', form: {} });
-    r = await call(wj, '/setup');
+    await call(aj, '/setup/step1', { method: 'POST', form: {} });
+    r = await call(aj, '/setup');
     const wz2 = await r.text();
-    ok('向导:第 2 步页面含自助注册与 SMTP 主机', wz2.includes('自助注册') && wz2.includes('SMTP 主机'));
+    ok('向导:第 2 步页面含自助注册与 SMTP 主机(重跑时携带会话 CSRF)',
+      wz2.includes('自助注册') && wz2.includes('SMTP 主机') && !!extractHidden(wz2)._csrf);
+
+    // 重跑守卫:库中已有用户后,匿名请求不得在窗口期改写站点设置或抢注管理员
     r = await call(wj, '/setup/step2', {
+      method: 'POST',
+      form: { site_name: '匿名篡改站', issuer: BASE, access_ttl: '900', refresh_ttl: '2592000', allow_register: '1' },
+    });
+    ok('向导:重跑期间匿名提交第 2 步被拒且设置不被改写', r.status === 302 && location(r) === '/setup'
+      && settings.getMap().site_name === '樱落统一认证');
+    r = await call(wj, '/setup/step3', {
+      method: 'POST',
+      form: { username: 'hijacker', password: 'Hijack#12345', password2: 'Hijack#12345' },
+    });
+    ok('向导:重跑期间匿名创建管理员被拒', r.status === 302 && location(r) === '/setup'
+      && !users.list().some((u) => u.username === 'hijacker'));
+
+    // 管理员本人(会话 + CSRF)提交第 2 步正常生效
+    r = await call(aj, '/setup/step2', {
       method: 'POST',
       form: {
         site_name: '樱落统一认证', issuer: BASE, access_ttl: '900', refresh_ttl: '2592000',
         allow_register: '1', smtp_host: 'smtp.example.com', smtp_port: '587', smtp_from: 'noreply@example.com',
+        _csrf: adminCsrf,
       },
     });
     const wzSettings = settings.getMap();
-    ok('向导:第 2 步提交后注册开关与 SMTP 设置生效', r.status === 302
+    ok('向导:管理员提交第 2 步后注册开关与 SMTP 设置生效', r.status === 302
       && wzSettings.allow_register === '1'
       && wzSettings.smtp_host === 'smtp.example.com'
       && wzSettings.smtp_from === 'noreply@example.com');
 
-    r = await call(wj, '/setup');
+    r = await call(aj, '/setup');
     const wz3 = await r.text();
     ok('向导:已有账号时第 3 步显示跳过文案', wz3.includes('检测到已有账号'));
-    r = await call(wj, '/setup/step3', { method: 'POST', form: { skip: '1' } });
+    r = await call(aj, '/setup/step3', { method: 'POST', form: { skip: '1' } });
     const wz4 = await r.text();
-    ok('向导:跳过创建直接完成配置', r.status === 200 && wz4.includes('配置完成'));
+    ok('向导:跳过创建直接完成配置并解除重跑守卫', r.status === 200 && wz4.includes('配置完成')
+      && settings.getMap().setup_rerun === '');
     const homeAfter = await call(new Jar(), '/');
     const regAfter = await call(new Jar(), '/register');
     ok('向导:完成后首页未登录重定向登录页', homeAfter.status === 302 && location(homeAfter) === '/login');
     ok('向导:完成后注册开关生效且注册页可用', regAfter.status === 200 && (await regAfter.text()).includes('确认密码'));
+
+    /* ---------- 加固包:redirectUri 伪协议 / email 上限 / 限流 Map 清理 / 注册 next 续流 ---------- */
+    const utilM = await import('../src/core/util.js');
+    ok('加固:redirectUri 拒绝 javascript:/data:/vbscript: 伪协议', utilM.redirectUri('javascript:alert(1)') === null
+      && utilM.redirectUri('DATA:text/html;base64,PHNjcmlwdD4=') === null
+      && utilM.redirectUri('vbscript:MsgBox(1)') === null);
+    ok('加固:redirectUri 仍接受 http(s) 与自定义 app scheme', utilM.redirectUri('https://example.com/cb') === 'https://example.com/cb'
+      && utilM.redirectUri('http://127.0.0.1:8080/cb') !== null
+      && utilM.redirectUri('com.example.app://oauth/callback') === 'com.example.app://oauth/callback');
+    r = await call(aj, '/admin/apps/create', {
+      method: 'POST',
+      form: { name: 'Evil Scheme App', client_type: 'public', redirect_uris: 'javascript:alert(1)',
+        scopes: 'openid', _csrf: adminCsrf },
+    });
+    ok('加固:管理端创建应用 javascript: 回调被拒', r.status === 200 && (await r.text()).includes('重定向地址不合法'));
+
+    r = await call(aj, '/admin/users/create', {
+      method: 'POST',
+      form: { username: 'longmail', password: 'Long#12345', email: 'a'.repeat(250) + '@example.com', _csrf: adminCsrf },
+    });
+    ok('加固:email 超过 254 字被拒', r.status === 302 && location(r).startsWith('/admin/users/new?err=')
+      && !users.byUsername('longmail'));
+
+    // 限流 Map 清理:单元级驱动惰性过期清理与硬上限(测试进程内操作模块内部 Map)
+    const regSvc = await import('../src/services/auth/register.js');
+    const resetSvc = await import('../src/services/auth/reset.js');
+    const regRL = regSvc._rateLimitInternal, rstRL = resetSvc._rateLimitInternal;
+    regRL.map.clear();
+    for (let i = 0; i < 3000; i++) regRL.map.set(`reg-exp-${i}`, { count: 1, first: 0 });
+    for (let i = 0; i < 3000; i++) regRL.map.set(`reg-live-${i}`, { count: 1, first: Date.now() });
+    regRL.prune();
+    ok('加固:注册限流 Map 惰性清理过期项', regRL.map.size === 3000 && !regRL.map.has('reg-exp-0'));
+    for (let i = 0; i < 2500; i++) regRL.map.set(`reg-x-${i}`, { count: 1, first: Date.now() });
+    regRL.prune();
+    ok('加固:注册限流 Map 硬上限 5000(淘汰最旧)', regRL.map.size === 5000);
+    regRL.map.clear();
+    rstRL.map.clear();
+    for (let i = 0; i < 6000; i++) rstRL.map.set(`rst-${i}`, { count: 1, first: Date.now() });
+    rstRL.prune();
+    ok('加固:reset 限流 Map 硬上限 5000', rstRL.map.size === 5000);
+    for (let i = 0; i < 100; i++) rstRL.map.set(`rst-exp-${i}`, { count: 1, first: 0 });
+    rstRL.prune();
+    ok('加固:reset 限流 Map 惰性清理过期项', rstRL.map.size === 5000 && !rstRL.map.has('rst-exp-0'));
+    rstRL.map.clear();
+
+    // 注册 next 续流:授权链路未登录 → 登录页注册链接带 next → 注册页透传 → 注册成功跳回 /authorize
+    const chainVerifier = b64urlSha256('chain-verifier-0123456789abcdef');
+    const chainAuthUrl = '/authorize?' + new URLSearchParams({
+      client_id: web.client_id, redirect_uri: 'http://127.0.0.1:8080/cb',
+      response_type: 'code', scope: 'openid profile', state: 'chain-st',
+      code_challenge: chainVerifier, code_challenge_method: 'S256',
+    }).toString();
+    r = await call(new Jar(), '/login');
+    ok('加固:登录页无 next 时注册链接保持原样', (await r.text()).includes('href="/register"'));
+    const chainAnon = new Jar();
+    r = await call(chainAnon, chainAuthUrl);
+    const chainLoginLoc = location(r);
+    ok('加固:未登录授权链路 302 到登录页并带 next', r.status === 302 && chainLoginLoc.startsWith('/login?next=')
+      && new URL(chainLoginLoc, BASE).searchParams.get('next') === chainAuthUrl);
+    r = await call(chainAnon, chainLoginLoc);
+    const chainLoginHtml = await r.text();
+    ok('加固:登录页注册链接携带完整 next', chainLoginHtml.includes(`href="/register?next=${encodeURIComponent(chainAuthUrl)}"`));
+    r = await call(chainAnon, `/register?next=${encodeURIComponent(chainAuthUrl)}`);
+    const chainRegForm = extractHidden(await r.text());
+    ok('加固:注册页隐藏字段透传完整 next', chainRegForm.next.replaceAll('&amp;', '&') === chainAuthUrl);
+    r = await call(chainAnon, '/register?next=//evil.com');
+    ok('加固:注册页对协议相对 next 消毒为空', extractHidden(await r.text()).next === '');
+    r = await call(chainAnon, '/register', {
+      method: 'POST',
+      form: { username: 'chainuser', password: 'Chain#12345', password2: 'Chain#12345', _csrf: chainRegForm._csrf, next: chainAuthUrl },
+    });
+    ok('加固:注册成功后按 next 续流回 /authorize', r.status === 302 && location(r) === chainAuthUrl);
+    r = await call(chainAnon, location(r));
+    ok('加固:注册续流后直达同意授权页(链路闭环)', r.status === 200 && (await r.text()).includes('请求访问你的账号'));
+
+    // 行为验证:注册限流生效(计数先于 CSRF 校验;同 IP 窗口内超额提交被拒)
+    let sawLimit = false;
+    for (let i = 0; i < 6 && !sawLimit; i++) {
+      const rr = await call(new Jar(), '/register', {
+        method: 'POST',
+        form: { username: `rl${i}`, password: 'Rl#123456', password2: 'Rl#123456', _csrf: 'bad' },
+      });
+      if (rr.status === 400 && (await rr.text()).includes('注册尝试过于频繁')) sawLimit = true;
+    }
+    ok('加固:注册限流行为验证(同 IP 窗口内超额提交被拒)', sawLimit);
+
+    /* ---------- 模型层补充:consents 合并语义(重复授权按并集合并) ---------- */
+    const consentsM = await import('../src/models/consents.js');
+    const mergeApp = clients.create({
+      name: 'Merge Probe', redirectUris: ['http://127.0.0.1:8080/merge'],
+      scopes: 'openid profile email', isPublic: true, pkceRequired: false,
+    });
+    consentsM.grant(bob.id, mergeApp.client_id, 'openid profile');
+    consentsM.grant(bob.id, mergeApp.client_id, 'email');
+    ok('consents:重复授权按并集合并(既有 scope 不丢失)',
+      consentsM.get(bob.id, mergeApp.client_id).scope === 'openid profile email');
+    consentsM.revoke(bob.id, mergeApp.client_id);
+    clients.remove(mergeApp.client_id); // 清理探针应用
+
+    /* ---------- 品牌定制:站点 Logo / 主题强调色 / 口号(管理端可视化,全站即时生效) ---------- */
+    const BRAND_TAGLINE = '统一入口,尽在樱落。';
+
+    // 红线:未配置任何品牌定制时,登录页渲染与基线一字不差(樱花标 + 默认口号,无覆盖块/无 brand-logo)
+    r = await call(new Jar(), '/login');
+    const brandBaseLogin = await r.text();
+    ok('品牌:未配置时登录页保持默认渲染(樱花标/默认口号/无覆盖块)', r.status === 200
+      && brandBaseLogin.includes('viewBox="0 0 24 24"')
+      && brandBaseLogin.includes('管好你所有系统的登录')
+      && (brandBaseLogin.match(/--accent:/g) || []).length === 3
+      && !brandBaseLogin.includes('class="brand-logo"')
+      && !brandBaseLogin.includes('color-mix(in srgb,#fff,transparent 25%)'));
+
+    // 控制台品牌定制卡片
+    r = await call(aj, '/admin');
+    const brandDash0 = await r.text();
+    ok('品牌:控制台提供品牌定制卡片(Logo 上传/取色器/口号)', r.status === 200
+      && brandDash0.includes('品牌定制')
+      && brandDash0.includes('action="/admin/branding/logo"')
+      && brandDash0.includes('enctype="multipart/form-data"')
+      && brandDash0.includes('name="logo"') && brandDash0.includes('accept="image/*"')
+      && brandDash0.includes('name="accent"') && brandDash0.includes('type="color"')
+      && brandDash0.includes('name="tagline"')
+      && brandDash0.includes('当前使用默认樱花标'));
+
+    // 保存强调色与口号
+    r = await call(aj, '/admin/branding', {
+      method: 'POST', form: { accent: '#123456', tagline: BRAND_TAGLINE, _csrf: adminCsrf },
+    });
+    ok('品牌:保存强调色与口号成功且落库', r.status === 302 && location(r).includes('/admin?msg=')
+      && settings.getSetting('brand_accent') === '#123456'
+      && settings.getSetting('brand_tagline') === BRAND_TAGLINE);
+
+    // 登录页:覆盖块 + 派生色(加深 12% / 渐变混紫罗兰 / YIQ 选白字)+ 自定义口号
+    r = await call(new Jar(), '/login');
+    const brandLogin = await r.text();
+    ok('品牌:登录页注入强调色覆盖块(派生加深/渐变/on-accent)与自定义口号', brandLogin.includes('--accent:#123456')
+      && brandLogin.includes('--accent-strong:#102e4c')
+      && brandLogin.includes('--on-accent:#ffffff')
+      && brandLogin.includes('--login-grad-a:#123456')
+      && brandLogin.includes('--login-grad-b:#42379a')
+      && brandLogin.includes(BRAND_TAGLINE));
+
+    // 全站生效:健康页与控制台
+    const brandHealth = await (await fetch(BASE + '/health')).text();
+    const brandDash1 = await (await call(aj, '/admin')).text();
+    ok('品牌:健康页与控制台同样生效强调色覆盖', brandHealth.includes('--accent:#123456')
+      && brandDash1.includes('--accent:#123456'));
+
+    // 授权同意页:品牌口号与强调色生效(新公开应用 require_consent + PKCE,bob 已登录且未授权过)
+    r = await call(aj, '/admin/apps/create', {
+      method: 'POST',
+      form: [['name', '品牌演示'], ['client_type', 'public'],
+        ['redirect_uris', 'http://127.0.0.1:8080/brand-cb'], ['scopes', 'openid'],
+        ['require_consent', '1'], ['_csrf', adminCsrf]],
+    });
+    const brandAppId = new URL(location(r), BASE).pathname.split('/').pop();
+    ok('品牌:创建 consent 演示应用成功', r.status === 302 && location(r).startsWith('/admin/apps/') && !!brandAppId);
+    r = await call(uj, '/authorize?' + new URLSearchParams({
+      client_id: brandAppId, redirect_uri: 'http://127.0.0.1:8080/brand-cb',
+      response_type: 'code', scope: 'openid', state: 'brand-t',
+      code_challenge: b64urlSha256('brand-verifier-0123456789abcdef'), code_challenge_method: 'S256',
+    }));
+    const brandConsent = await r.text();
+    ok('品牌:授权同意页品牌面板口号与强调色生效', r.status === 200
+      && brandConsent.includes('class="login-brand"') && brandConsent.includes(BRAND_TAGLINE)
+      && brandConsent.includes('--accent:#123456'));
+    clients.remove(brandAppId); // 清理演示应用
+
+    // CSS 注入防护:非法色值被拒且不落库,注入内容不出现在页面
+    r = await call(aj, '/admin/branding', {
+      method: 'POST', form: { accent: 'red; } body{background:url(//evil)', tagline: BRAND_TAGLINE, _csrf: adminCsrf },
+    });
+    ok('品牌:CSS 注入形态的色值被拒(302 err 且不落库)', r.status === 302 && location(r).includes('/admin?err=')
+      && settings.getSetting('brand_accent') === '#123456');
+    ok('品牌:注入内容不出现在登录页样式', !((await (await call(new Jar(), '/login')).text()).includes('body{background')));
+
+    // 其它非法形态:无 # 前缀 / 非法字符
+    r = await call(aj, '/admin/branding', { method: 'POST', form: { accent: '123456', tagline: '', _csrf: adminCsrf } });
+    const brandBadNoHash = r.status === 302 && location(r).includes('/admin?err=');
+    r = await call(aj, '/admin/branding', { method: 'POST', form: { accent: '#12g45z', tagline: '', _csrf: adminCsrf } });
+    ok('品牌:无 # 前缀与非法字符色值均被拒', brandBadNoHash && r.status === 302 && location(r).includes('/admin?err=')
+      && settings.getSetting('brand_accent') === '#123456');
+
+    // #RGB 三位色值接受并规范化为小写六位
+    r = await call(aj, '/admin/branding', { method: 'POST', form: { accent: '#AbC', tagline: '', _csrf: adminCsrf } });
+    ok('品牌:#RGB 三位色值接受并规范化为小写 #RRGGBB', r.status === 302 && location(r).includes('/admin?msg=')
+      && settings.getSetting('brand_accent') === '#aabbcc');
+
+    // 浅色强调色:on-accent 依 YIQ 自动切深色文字
+    r = await call(aj, '/admin/branding', { method: 'POST', form: { accent: '#ffff00', tagline: '', _csrf: adminCsrf } });
+    const brandLightLogin = await (await call(new Jar(), '/login')).text();
+    ok('品牌:浅色强调色自动切深色文字(YIQ 分支)', brandLightLogin.includes('--accent:#ffff00')
+      && brandLightLogin.includes('--on-accent:#1f2330'));
+
+    // 权限:普通用户 403 / 未登录重定向
+    ok('品牌:普通用户保存品牌被拒(403)', (await call(fj, '/admin/branding', {
+      method: 'POST', form: { accent: '#123456', _csrf: 'x' },
+    })).status === 403);
+    const brandAnonRes = await call(new Jar(), '/admin/branding', {
+      method: 'POST', form: { accent: '#123456', _csrf: 'x' },
+    });
+    ok('品牌:未登录保存品牌重定向登录页', brandAnonRes.status === 302 && location(brandAnonRes).startsWith('/login'));
+
+    // 恢复强调色与口号供 Logo 用例
+    r = await call(aj, '/admin/branding', {
+      method: 'POST', form: { accent: '#123456', tagline: BRAND_TAGLINE, _csrf: adminCsrf },
+    });
+
+    // 上传站点 Logo(multipart,1x1 PNG):brand_logo_url 落库
+    r = await postMultipart(aj, '/admin/branding/logo', {
+      fields: { _csrf: adminCsrf },
+      file: { name: 'logo', filename: 'site.png', contentType: 'image/png', data: PNG_1PX },
+    });
+    ok('品牌:上传站点 Logo 成功且 brand_logo_url 落库', r.status === 302 && location(r).includes('/admin?msg=')
+      && settings.getSetting('brand_logo_url') === '/uploads/site-logo.png');
+
+    // 静态服务:匿名可取、字节一致
+    const siteLogoRes = await fetch(BASE + '/uploads/site-logo.png');
+    ok('品牌:站点 Logo 匿名可取且字节一致', siteLogoRes.status === 200
+      && siteLogoRes.headers.get('content-type') === 'image/png'
+      && Buffer.compare(Buffer.from(await siteLogoRes.arrayBuffer()), PNG_1PX) === 0);
+
+    // 登录页:brand-logo img 出现,樱花标回退消失
+    r = await call(new Jar(), '/login');
+    const brandLogoLogin = await r.text();
+    ok('品牌:登录页 brand-logo img 生效且樱花标回退消失', brandLogoLogin.includes('<img src="/uploads/site-logo.png"')
+      && brandLogoLogin.includes('class="brand-logo"')
+      && !brandLogoLogin.includes('viewBox="0 0 24 24"'));
+
+    // 换格式重传(JPG 魔数):旧 PNG 清理、URL 指向新扩展
+    const JPG_MAGIC = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(32, 0x11)]);
+    r = await postMultipart(aj, '/admin/branding/logo', {
+      fields: { _csrf: adminCsrf },
+      file: { name: 'logo', filename: 'site.jpg', contentType: 'image/jpeg', data: JPG_MAGIC },
+    });
+    ok('品牌:重传 JPG 成功且旧 PNG 清理、URL 指向新扩展', r.status === 302
+      && settings.getSetting('brand_logo_url') === '/uploads/site-logo.jpg'
+      && !fs.existsSync(path.join(uploadsDirSmoke, 'site-logo.png'))
+      && fs.existsSync(path.join(uploadsDirSmoke, 'site-logo.jpg')));
+
+    // 上传后控制台出现 Logo 预览 img 与删除按钮
+    r = await call(aj, '/admin');
+    const brandDash2 = await r.text();
+    ok('品牌:上传后控制台显示 Logo 预览与删除按钮', r.status === 200
+      && brandDash2.includes('<img src="/uploads/site-logo.jpg"') && brandDash2.includes('class="brand-logo"')
+      && brandDash2.includes('action="/admin/branding/logo/delete"'));
+
+    // 删除 Logo:文件清理 + 全站恢复樱花标
+    r = await call(aj, '/admin/branding/logo/delete', { method: 'POST', form: { _csrf: adminCsrf } });
+    const brandAfterDelete = await (await call(new Jar(), '/login')).text();
+    ok('品牌:删除 Logo 后恢复默认樱花标且文件已清理', r.status === 302 && location(r).includes('/admin?msg=')
+      && (settings.getSetting('brand_logo_url') || '') === ''
+      && !fs.existsSync(path.join(uploadsDirSmoke, 'site-logo.jpg'))
+      && brandAfterDelete.includes('viewBox="0 0 24 24"') && !brandAfterDelete.includes('class="brand-logo"'));
+
+    // CSRF 错误被拒(multipart 文本字段)/ 非图片字节 415
+    r = await postMultipart(aj, '/admin/branding/logo', {
+      fields: { _csrf: 'wrong-csrf-value' },
+      file: { name: 'logo', filename: 'x.png', contentType: 'image/png', data: PNG_1PX },
+    });
+    ok('品牌:CSRF 错误时 Logo 上传被拒', r.status === 302 && location(r).includes('err='));
+    r = await postMultipart(aj, '/admin/branding/logo', {
+      fields: { _csrf: adminCsrf },
+      file: { name: 'logo', filename: 'fake.png', contentType: 'image/png', data: Buffer.from('not-an-image-at-all') },
+    });
+    ok('品牌:非图片字节上传被拒(415)', r.status === 415);
+
+    // 审计留痕:成功保存 4 次(注入/非法被拒不计),上传 2 次,删除 1 次
+    ok('品牌:品牌保存/Logo 上传与删除计入审计',
+      auditM.list({ action: 'admin.branding_saved', limit: 100 }).length >= 4
+      && auditM.list({ action: 'admin.branding_logo_uploaded', limit: 100 }).length === 2
+      && auditM.list({ action: 'admin.branding_logo_deleted', limit: 100 }).length === 1);
+
+    // 重置品牌回默认(收尾恢复基线,后续段落回归默认态)
+    r = await call(aj, '/admin/branding', { method: 'POST', form: { accent: '', tagline: '', _csrf: adminCsrf } });
+    const brandResetLogin = await (await call(new Jar(), '/login')).text();
+    ok('品牌:重置后全站恢复默认(无覆盖块/无 brand-logo)', r.status === 302 && location(r).includes('/admin?msg=')
+      && (settings.getSetting('brand_accent') || '') === '' && (settings.getSetting('brand_tagline') || '') === ''
+      && !brandResetLogin.includes('--accent:#123456') && !brandResetLogin.includes('class="brand-logo"'));
+
+    /* ---------- 打磨项:LICENSE 文件 / truncateCodePoints 码点安全截断 ---------- */
+    const licenseText = fs.readFileSync(path.join(ROOT, 'LICENSE'), 'utf8');
+    // 项目采用固定许可文本 Sakura-License-1.2(详见 README 许可证节);校验标识与版权行存在
+    ok('打磨:LICENSE 文件存在且为 Sakura-License-1.2(含固定版本标识)',
+      licenseText.includes('Sakura-License-1.2') && licenseText.includes('Sakura-License v1.2'));
+
+    const { truncateCodePoints } = await import('../src/core/util.js');
+    const loneSurrogate = (s) => /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(s);
+    const emojiUA = '👍'.repeat(50); // 50 个码点 / 100 个 UTF-16 编码单元
+    ok('打磨:truncateCodePoints 码点安全截断(emoji 代理对不被拦腰截断,默认 max=40)',
+      truncateCodePoints(emojiUA) === '👍'.repeat(40) + '…'
+      && [...truncateCodePoints(emojiUA)].length === 41
+      && !loneSurrogate(truncateCodePoints(emojiUA))
+      && truncateCodePoints('a'.repeat(50), 40) === 'a'.repeat(40) + '…'
+      && truncateCodePoints('樱'.repeat(45), 40) === '樱'.repeat(40) + '…'
+      && truncateCodePoints('短的') === '短的' && truncateCodePoints('') === ''
+      && truncateCodePoints(null) === '');
 
     console.log(failed ? `\n${failed} 项失败` : '\n全部通过 ✔');
   } finally {

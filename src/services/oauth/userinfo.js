@@ -9,10 +9,10 @@ const unauthorized = (ctx) => {
 };
 
 function extractToken(ctx) {
+  // RFC 6750 §2.3:查询参数与编码体参数是 SHOULD NOT 的次要传递方式,统一收紧为只认
+  // Authorization: Bearer 头(避免令牌泄入 URL/日志/Referer);其余载体一律 401
   const header = ctx.req.headers['authorization'];
   if (header && header.startsWith('Bearer ')) return header.slice(7).trim();
-  if (ctx.body && ctx.body.access_token) return String(ctx.body.access_token);
-  if (ctx.query.get('access_token')) return ctx.query.get('access_token');
   return null;
 }
 

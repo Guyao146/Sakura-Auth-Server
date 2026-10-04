@@ -10,6 +10,7 @@ const KEYS = [
   'ms_enabled', 'ms_client_id', 'ms_client_secret', 'ms_tenant', 'ms_authority',
   'unilink_enabled', 'unilink_issuer', 'unilink_client_id', 'unilink_client_secret',
   'about_title', 'about_content',
+  'brand_logo_url', 'brand_accent', 'brand_tagline',
 ];
 
 let rt = null;
@@ -49,6 +50,10 @@ export function reloadRuntime() {
     setupStep: Number(s.setup_step || 1),
     setupDone: String(s.setup_done || '') === '1',
     allowRegister: String(s.allow_register || '') === '1',
+    // 品牌定制(空串 = 使用内置默认):logo 为 /uploads/site-logo.<ext>,accent 为规范化 #rrggbb
+    brandLogoUrl: s.brand_logo_url || '',
+    brandAccent: s.brand_accent || '',
+    brandTagline: s.brand_tagline || '',
     smtp: mergeSmtp(s),
     // 「关于我们」公开页(/about):管理端填写,空内容时不显示页脚入口
     about: {

@@ -5,6 +5,7 @@ import * as settingsApi from '../models/settings.js';
 import { escapeHtml as esc } from '../core/util.js';
 import { hiddenInputs } from '../views/components.js';
 import { authPage, adminPage } from '../views/layout.js';
+import { t, currentLang } from '../core/i18n.js';
 import { record } from './audit.js';
 
 const MAX_TITLE = 60, MAX_CONTENT = 5000;
@@ -20,9 +21,10 @@ function renderContent(text) {
 export function showAbout(ctx) {
   const rt = getRuntime();
   const about = rt.about;
+  const L = currentLang();
   const body = about.content
     ? `<p>${renderContent(about.content)}</p>`
-    : '<p class="muted">站长尚未填写内容。</p>';
+    : `<p class="muted">${esc(t(L, 'about.empty'))}</p>`;
   sendHtml(ctx.res, 200, authPage({
     theme: ctx.theme, siteName: rt.siteName, footer: false,
     title: `${about.title} · ${rt.siteName}`,

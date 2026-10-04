@@ -27,6 +27,10 @@ node server.js
 
 宝塔面板(PM2)部署见 `deploy/baotao.md`;环境变量完整清单见 `.env.example`。
 
+数据备份:`npm run backup` —— 一键备份到 `data/backups/sakuraid-backup-<时间戳>/`(idp.sqlite 用 VACUUM INTO 产生一致性快照 + uploads/ 整目录 + meta.txt,可选打包 .tar.gz),默认保留最近 14 份(`BACKUP_KEEP` 环境变量可调);可在服务运行中执行。
+
+数据恢复:`npm run restore -- <备份目录或 .tar.gz> --force` —— 恢复前请先停止服务;不加 `--force` 仅打印提示,恢复前脚本会自动把现有 data 目录改名为 `data-before-restore-<时间戳>/` 防误操作。
+
 ## 当前状态
 
 | 项 | 状态 |
@@ -54,6 +58,9 @@ node server.js
 | 会话安全 | 用户自助「登录会话」页:查看全部登录设备(IP/UA/时间),撤销单个或其它全部会话;/api/sessions 同能力 |
 | 审计 | 登录/2FA/授权同意与撤销/注册/管理操作全量留痕(滚动保留 5000 条),管理端「审计日志」页可按动作/关键词筛选、清空 |
 | 应用元数据 | 应用描述与 Logo(https)字段,门户磁贴/条状/同意页展示;应用详情「已授权用户」列表,可单独撤销某用户的授权与令牌 |
+| 品牌定制 | 管理端可视化配置:站点 Logo(上传/删除)、主题强调色(全站变量覆盖,防 CSS 注入)、品牌口号,保存即全站生效 |
+| 界面语言 | 简体中文 / English 切换(cookie + /-/lang/:code),登录/授权/门户/账号/控制台导航等高流量页面覆盖,缺词回退中文 |
+| Passkey | WebAuthn/Passkey 无密码登录:账号页注册凭据(上限 8 个),登录页一键登录;counter 防克隆、审计留痕;零依赖 CBOR/ES256 实现 |
 | 联邦登录 | Microsoft 账号 OIDC 登录与绑定:登录页一键登录、账号设置绑定/解绑、未绑定可关联本地账号或注册新号;管理端配置(client_id/secret/tenant) |
 | 流转 | 未登录访问首页跳登录页、登录后直达应用门户、已登录访问登录页跳门户 |
 | JSON API | /api/heartbeat 心跳(含版本/uptime/DB 探测)、/api/session 登录状态、/api/login 登录(支持 2FA)、/api/logout、/api/apps 可见应用、/api/sessions 会话列表与撤销、/api/registry 应用状态(令牌认证)。会话型写操作需带 `X-Requested-With: JSON` 头(防跨站纵深防御) |
@@ -112,7 +119,7 @@ curl -s http://localhost:9000/token -d grant_type=authorization_code -d code=<CO
 curl -s http://localhost:9000/userinfo -H "Authorization: Bearer <ACCESS_TOKEN>"
 ```
 
-测试工具链:`npm run smoke` 会自动拉起独立实例,端到端验证向导、登录、两步验证(TOTP/恢复代码/管理员重置)、找回密码、自助注册、权限组与应用访问控制、授权码 + PKCE、刷新轮换、内省/吊销、client_credentials 与控制台权限、我的授权管理、应用门户、JSON API 套件、Microsoft 账号登录绑定、审计日志、应用元数据、注册表 API、会话管理、Logo 上传、审计导出与双部署方式(312 项断言);另有 `node scripts/test-qr.mjs`(QR 编码器 46 项)与 `node scripts/test-smtp.mjs`(SMTP 对话 9 项)两个单元测试。
+测试工具链:`npm run smoke` 会自动拉起独立实例,端到端验证向导、登录、两步验证(TOTP/恢复代码/管理员重置)、找回密码、自助注册、权限组与应用访问控制、授权码 + PKCE、刷新轮换、内省/吊销、client_credentials 与控制台权限、我的授权管理、应用门户、JSON API 套件、Microsoft 账号登录绑定、审计日志、应用元数据、注册表 API、会话管理、Logo 上传、审计导出与双部署方式;协议合规加固、WebAuthn/Passkey 无密码登录、备份恢复与运维工具、「关于我们」公开页配置(485 项断言);另有 `node scripts/test-qr.mjs`(QR 编码器 46 项)与 `node scripts/test-smtp.mjs`(SMTP 对话 9 项)两个单元测试。
 
 独立协议回归:`npm run test:oauth` 使用系统临时目录,验证 GET/POST PKCE 校验、授权错误回跳、OIDC at_hash、刷新元数据与 scope、JWT 边界、禁用用户令牌检查、审计上限和旧库迁移。CI 同时运行该回归与冒烟测试。冒烟测试也使用独立临时目录;并行执行时仍需用 `SMOKE_PORT` 错开端口。
 
@@ -149,3 +156,5 @@ curl -s http://localhost:9000/userinfo -H "Authorization: Bearer <ACCESS_TOKEN>"
 - 反代部署时务必设置 `BASE_URL` 为 https 地址,会话 Cookie 会自动附加 `Secure`。
 
 > 文档基于对应项目源码整理。实现变更后,以项目仓库、版本文件和 CHANGELOG 为最终依据。
+
+License: [MIT](./LICENSE)

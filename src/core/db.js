@@ -74,6 +74,7 @@ CREATE TABLE IF NOT EXISTS tokens (
   auth_time  INTEGER,
   nonce      TEXT,
   replaced_by TEXT,
+  chain_id   TEXT,
   revoked    INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,
   expires_at INTEGER NOT NULL
@@ -118,6 +119,16 @@ CREATE TABLE IF NOT EXISTS group_members (
   PRIMARY KEY (group_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_group_members_user ON group_members(user_id);
+CREATE TABLE IF NOT EXISTS webauthn_credentials (
+  id          TEXT PRIMARY KEY,
+  user_id     TEXT NOT NULL,
+  name        TEXT NOT NULL DEFAULT 'Passkey',
+  public_key  TEXT NOT NULL,
+  counter     INTEGER NOT NULL DEFAULT 0,
+  transports  TEXT NOT NULL DEFAULT '',
+  created_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_webauthn_user ON webauthn_credentials(user_id);
 CREATE TABLE IF NOT EXISTS audit_logs (
   id     TEXT PRIMARY KEY,
   ts     INTEGER NOT NULL,
@@ -154,6 +165,12 @@ function migrate() {
   const acols = db.prepare('PRAGMA table_info(auth_codes)').all().map((c) => c.name);
   if (!acols.includes('launch_verifier')) {
     db.exec('ALTER TABLE auth_codes ADD COLUMN launch_verifier TEXT');
+  }
+  // tokens 表补链 ID 列:同一授权会话签发的令牌对共用 chain_id,
+  // refresh 吊销按链级联撤 access(RFC 7009);老库幂等补列,旧行 NULL = 无链(仅可单独撤销)
+  const tcols = db.prepare('PRAGMA table_info(tokens)').all().map((c) => c.name);
+  if (!tcols.includes('chain_id')) {
+    db.exec('ALTER TABLE tokens ADD COLUMN chain_id TEXT');
   }
   // 会话表补设备信息列(登录 IP / User-Agent),老库平滑迁移
   const scols = db.prepare('PRAGMA table_info(sessions)').all().map((c) => c.name);

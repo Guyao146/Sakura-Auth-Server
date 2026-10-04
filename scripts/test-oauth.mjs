@@ -57,6 +57,15 @@ try {
   const sessions = await import('../src/models/sessions.js');
   const resets = await import('../src/models/resets.js');
   const { verifyJwt, signJwt } = await import('../src/core/jwt.js');
+  const { privateKeyObject, getSigningKey } = await import('../src/core/keys.js');
+  /** 原始签名:保留调用方传入的 exp/nbf,用于构造结构非法的 JWT
+   *  (生产签发器 signJwt 会强制覆盖 iat/exp/kid,无法用来造这些边界样本) */
+  function signRaw(payload) {
+    const h = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT', kid: getSigningKey().kid })).toString('base64url');
+    const p = Buffer.from(JSON.stringify(payload)).toString('base64url');
+    const sig = crypto.createSign('RSA-SHA256').update(`${h}.${p}`).sign(privateKeyObject(), 'base64url');
+    return `${h}.${p}.${sig}`;
+  }
   const { authorizeGet, authorizePost } = await import('../src/services/oauth/authorize.js');
   const { tokenPost } = await import('../src/services/oauth/token.js');
   const { issueFull } = await import('../src/services/oauth/issue.js');
@@ -253,7 +262,7 @@ try {
   await check('JWT 必须恰好三段', () => assert.equal(verifyJwt(issued.body.access_token + '.extra'), null));
   for (const exp of [null, 'not-a-number']) {
     await check(`JWT 拒绝非法 exp (${exp}) 即使忽略过期`, () => {
-      assert.equal(verifyJwt(signJwt({ sub: user.id, exp }, 60), { ignoreExp: true }), null);
+      assert.equal(verifyJwt(signRaw({ sub: user.id, exp }), { ignoreExp: true }), null);
     });
   }
   await check('过期 JWT 常规拒绝但允许用于吊销查找', () => {
@@ -262,9 +271,10 @@ try {
     assert.equal(verifyJwt(expired, { ignoreExp: true }).sub, user.id);
   });
   await check('JWT 拒绝缺失 exp 及未来 nbf', () => {
-    assert.equal(verifyJwt(signJwt({ exp: undefined }, 60)), null);
-    assert.equal(verifyJwt(signJwt({ nbf: Math.floor(Date.now() / 1000) + 300 }, 600)), null);
-    assert.equal(verifyJwt(signJwt({ nbf: 'bad' }, 60)), null);
+    const nowS = Math.floor(Date.now() / 1000);
+    assert.equal(verifyJwt(signRaw({ sub: user.id })), null);
+    assert.equal(verifyJwt(signRaw({ sub: user.id, exp: nowS + 600, nbf: nowS + 300 })), null);
+    assert.equal(verifyJwt(signRaw({ sub: user.id, exp: nowS + 600, nbf: 'bad' })), null);
   });
   const intro = async (token) => {
     const c = ctx({ token, client_id: confidential.client_id, client_secret: 'test-client-secret' });

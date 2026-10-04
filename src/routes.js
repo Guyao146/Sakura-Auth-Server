@@ -18,8 +18,9 @@ import * as audit from './services/audit.js';
 import * as wizard from './services/setup/wizard.js';
 import * as portal from './services/portal.js';
 import * as api from './services/api.js';
+import * as webauthn from './services/webauthn.js';
 import { showLanding } from './services/home.js';
-import { setTheme } from './views/theme.js';
+import { setTheme, setLang } from './views/theme.js';
 import { showHealth } from './views/health.js';
 
 /** 路由表:URL → 服务函数;opts.cors 开放跨域,opts.auth 做会话/管理员校验 */
@@ -33,6 +34,8 @@ export function registerRoutes() {
   r('GET', '/favicon.ico', (ctx) => { ctx.res.writeHead(204); ctx.res.end(); });
   r('GET', '/', showLanding);
   r('GET', '/-/theme/:mode', setTheme);
+  // 界面语言切换(zh / en):写 lang cookie + 重定向回来源页,与主题切换同模式
+  r('GET', '/-/lang/:code', setLang);
   r('GET', '/about', about.showAbout);
 
   // JSON API 套件:处理器内部自行判定登录态(未登录返回 JSON 错误,不重定向)
@@ -65,6 +68,17 @@ export function registerRoutes() {
   r('POST', '/account/2fa/start', account.startTwoFa, { auth: 'user' });
   r('POST', '/account/2fa/confirm', account.confirmTwoFa, { auth: 'user' });
   r('POST', '/account/2fa/disable', account.disableTwoFa, { auth: 'user' });
+
+  // WebAuthn / Passkey(独立命名空间;JSON 接口按 api.js 风格由 handler 自行判定登录态,
+  // 未登录 401 而非重定向,便于前端 fetch 处理;写操作要求 X-Requested-With: JSON 头)
+  r('GET', '/webauthn/register/options', webauthn.registerOptions);
+  r('POST', '/webauthn/register/verify', webauthn.registerVerify);
+  r('GET', '/webauthn/login/options', webauthn.loginOptions);
+  r('POST', '/webauthn/login/verify', webauthn.loginVerify);
+  // 前端脚本资产(同源,CSP default-src 'self' 天然放行;全项目唯一页面 JS)
+  r('GET', '/assets/webauthn.js', webauthn.serveJs);
+  // 凭据删除:表单提交,走会话 CSRF 与登录态重定向(web 风格,区别于上面的 JSON 接口)
+  r('POST', '/account/webauthn/:id/delete', webauthn.deleteCredential, { auth: 'user' });
 
   // 邮件找回密码(匿名;防枚举由服务层保证)
   r('GET', '/forgot-password', reset.showForgot);
@@ -104,6 +118,10 @@ export function registerRoutes() {
   r('GET', '/admin', admin.showDashboard, { auth: 'admin' });
   r('POST', '/admin/register-toggle', admin.toggleRegister, { auth: 'admin' });
   r('POST', '/admin/ms-oauth', admin.saveMsOAuth, { auth: 'admin' });
+  // 站点品牌定制:强调色/口号保存(普通表单)、Logo 上传(multipart)与删除 —— 全站即时生效
+  r('POST', '/admin/branding', admin.saveBranding, { auth: 'admin' });
+  r('POST', '/admin/branding/logo', admin.uploadSiteLogo, { auth: 'admin' });
+  r('POST', '/admin/branding/logo/delete', admin.deleteSiteLogo, { auth: 'admin' });
   r('GET', '/admin/users', admin.listUsers, { auth: 'admin' });
   r('GET', '/admin/users/new', admin.newUserForm, { auth: 'admin' });
   r('POST', '/admin/users/create', admin.createUser, { auth: 'admin' });
@@ -122,6 +140,8 @@ export function registerRoutes() {
   r('GET', '/admin/apps/new', admin.newAppForm, { auth: 'admin' });
   r('POST', '/admin/apps/create', admin.createApp, { auth: 'admin' });
   r('GET', '/admin/apps/:id', admin.appDetail, { auth: 'admin' });
+  // 应用已授权用户 CSV 导出(BOM + csvCell 转义;与审计导出同模式)
+  r('GET', '/admin/apps/:id/consents.csv', admin.exportAppConsentsCsv, { auth: 'admin' });
   r('POST', '/admin/apps/:id/update', admin.updateApp, { auth: 'admin' });
   r('POST', '/admin/apps/:id/logo', admin.uploadAppLogo, { auth: 'admin' });
   r('POST', '/admin/apps/:id/logo/delete', admin.deleteAppLogo, { auth: 'admin' });
@@ -137,6 +157,10 @@ export function registerRoutes() {
   r('GET', '/admin/audit', audit.showAudit, { auth: 'admin' });
   r('GET', '/admin/audit/export.csv', audit.exportCsv, { auth: 'admin' });
   r('POST', '/admin/audit/clear', audit.clearAudit, { auth: 'admin' });
+
+  // 「关于我们」公开页内容管理
+  r('GET', '/admin/about', about.showAboutSettings, { auth: 'admin' });
+  r('POST', '/admin/about', about.saveAbout, { auth: 'admin' });
 
   return router;
 }

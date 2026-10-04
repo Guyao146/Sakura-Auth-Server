@@ -46,6 +46,9 @@ function pkceError(client, challenge, method) {
   return pattern.test(challenge) ? null : 'code_challenge 格式不正确';
 }
 
+/** prompt 参数是否包含 none(OIDC Core §3.1.2.1,空格分隔多值) */
+const promptNone = (prompt) => String(prompt || '').split(/\s+/).includes('none');
+
 /**
  * 应用按权限组限制访问:allowed_groups 非空且用户不属于其中任何组时,
  * 直接渲染 403 风格拒绝页(不重定向回 redirect_uri,避免向不可信方泄露)。
@@ -89,7 +92,12 @@ export function authorizeGet(ctx) {
   const challengeError = pkceError(client, challenge, challengeMethod);
   if (challengeError) return bad('invalid_request', challengeError);
 
+  const prompt = q.get('prompt') || '';
   if (!ctx.session) {
+    // OIDC Core §3.1.2.1:prompt=none 要求不得出现任何交互,未登录回跳 login_required
+    if (promptNone(prompt)) {
+      return bad('login_required', 'prompt=none 要求已有登录会话');
+    }
     const next = ctx.url.pathname + ctx.url.search;
     return redirect(ctx.res, '/login?next=' + encodeURIComponent(next));
   }
@@ -97,9 +105,12 @@ export function authorizeGet(ctx) {
   // 登录后、同意页之前:按应用可访问权限组拦截
   if (denyIfNotAllowed(ctx, client)) return;
 
-  const prompt = q.get('prompt') || '';
   const remembered = consents.covers(ctx.user.id, client.client_id, scopeList);
   if (client.require_consent && (!remembered || prompt.includes('consent'))) {
+    // prompt=none:需要用户确认授权但无记住授权时回跳 consent_required
+    if (promptNone(prompt)) {
+      return bad('consent_required', 'prompt=none 要求已完成授权确认');
+    }
     return sendHtml(ctx.res, 200, consentPage({
       theme: ctx.theme, siteName: ctx.runtime.siteName, user: ctx.user, client: clients.withUris(client),
       scopeList, csrf: ctx.session.csrf, replay: replayFromQuery(q), remember: true,
@@ -135,6 +146,7 @@ export function authorizePost(ctx) {
   const scopeList = filterScopes(body.scope, client.scopes);
   const challenge = body.code_challenge ?? '';
   const challengeMethod = body.code_challenge_method ?? '';
+  // 与 GET 统一的 PKCE 校验:pkceError 内含默认 plain(RFC 7636)、格式与 method 白名单、强制 PKCE
   const challengeError = pkceError(client, challenge, challengeMethod);
   if (challengeError) return bad('invalid_request', challengeError);
 
@@ -157,6 +169,13 @@ function issueCode(ctx, { client, redirectUri, scopeList, challenge, challengeMe
   try {
     launchVerifier = consumeLaunch(ctx.session.id_hash, client.client_id);
   } catch { /* 非门户启动,忽略 */ }
+  // 管理员 sim 旁路直连审计:launch 层发起的模拟启动已在 portal.launch 留痕且必有 stash 命中,
+  // 此处仅当无 stash(即直连 /authorize 携带合法 sim_group)时补一条,避免与 launch 层重复;
+  // 简单判定的已知边界:非 PKCE 应用的门户代发不产生 stash,会与 launch 层各记一条(去重交由读者)。
+  const simGroup = ctx.query.get('sim_group') || (ctx.body && ctx.body.sim_group) || '';
+  if (simGroup && ctx.user.is_admin && groups.byName(simGroup) && !launchVerifier) {
+    record(ctx, 'admin.simulate_launch', `应用「${client.name}」· 模拟组「${simGroup}」`);
+  }
   const code = codes.create({
     clientId: client.client_id,
     userId: ctx.user.id,

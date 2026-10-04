@@ -3,7 +3,7 @@ import * as users from '../../models/users.js';
 import * as sessions from '../../models/sessions.js';
 import * as recovery from '../../models/recovery.js';
 import { verifyUserPassword } from '../../core/password.js';
-import { randomToken, timingSafeEqStr, nowSec } from '../../core/crypto.js';
+import { randomToken, sha256hex, timingSafeEqStr, nowSec } from '../../core/crypto.js';
 import { verifyTotp } from '../../core/totp.js';
 import { getSigningKey } from '../../core/keys.js';
 import { setCookie, clearCookie, redirect, sendHtml } from '../../core/http.js';
@@ -15,10 +15,14 @@ import { safeNext } from '../../core/util.js';
 import { loginPage, twofaPage } from '../../views/auth.js';
 import { errorPage } from '../../views/error.js';
 import { record } from '../audit.js';
+import { sendMail } from '../../core/smtp.js';
+import { fmtTime, truncateCodePoints } from '../../core/util.js';
 
-/* 登录失败限流:同 IP+用户名 5 次失败锁定 60 秒 */
+/* 登录失败限流:同 IP+用户名 5 次失败锁定 60 秒;另设 IP 级总失败上限(防同 IP 换用户名绕过) */
 const MAX_FAILS = 5, LOCK_SEC = 60, MAX_ATTEMPT_KEYS = 5000;
+const MAX_IP_FAILS = 20, IP_WINDOW = 600; // IP 级:20 次失败 / 10 分钟
 const attempts = new Map();
+const ipFails = new Map();
 
 function failKey(ctx, username) {
   const ip = ctx.req.socket.remoteAddress || '?';
@@ -41,6 +45,10 @@ function pruneAttempts() {
 
 function isLocked(ctx, username) {
   pruneAttempts();
+  const ip = ctx.req.socket.remoteAddress || '?';
+  // 两级判定:用户名级(5 次/60s)+ IP 级(20 次失败/10 分钟,换用户名无法绕过)
+  const ipRec = ipFails.get(ip);
+  if (ipRec && ipRec.count >= MAX_IP_FAILS && Date.now() - ipRec.first < IP_WINDOW * 1000) return true;
   const rec = attempts.get(failKey(ctx, username));
   return rec && rec.count >= MAX_FAILS && Date.now() - rec.first < LOCK_SEC * 1000;
 }
@@ -48,6 +56,10 @@ function isLocked(ctx, username) {
 /** 记一次凭据失败(限流计数 + 审计;web 与 /api 登录共用,action 可区分两步验证失败) */
 function recordFail(ctx, username, action = 'auth.login_failed') {
   pruneAttempts();
+  const ip = ctx.req.socket.remoteAddress || '?';
+  const ipRec = ipFails.get(ip);
+  if (!ipRec || Date.now() - ipRec.first > IP_WINDOW * 1000) ipFails.set(ip, { count: 1, first: Date.now() });
+  else ipRec.count += 1;
   const key = failKey(ctx, username);
   const rec = attempts.get(key);
   if (!rec || Date.now() - rec.first > LOCK_SEC * 1000) attempts.set(key, { count: 1, first: Date.now() });
@@ -57,6 +69,7 @@ function recordFail(ctx, username, action = 'auth.login_failed') {
 
 function clearFails(ctx, username) {
   attempts.delete(failKey(ctx, username));
+  ipFails.delete(ctx.req.socket.remoteAddress || '?');
 }
 
 export { isLocked, recordFail, clearFails };
@@ -119,6 +132,7 @@ export async function handleLogin(ctx) {
   }
   // 用户名不存在时也对占位哈希做一次完整 scrypt,避免通过响应快慢枚举用户名
   const user = body.username ? users.byUsername(String(body.username)) : null;
+  // verifyUserPassword 内部对未知用户走占位哈希,消除存在性时序差异
   const passwordOk = await verifyUserPassword(user, body.password);
   if (!passwordOk || (user && user.disabled)) {
     recordFail(ctx, body.username);
@@ -178,6 +192,41 @@ export function sessionMeta(ctx) {
   };
 }
 
+/**
+ * 新设备登录提醒:历史会话中未出现过相同 IP + User-Agent 时视为新设备,
+ * 向用户邮箱 fire-and-forget 发送提醒(未配置邮箱则跳过;发信失败只记日志,不影响登录)。
+ * 独立函数 + startSession 末尾单行调用,便于并行改动共存;sid 用于排除本次刚建的会话。
+ */
+async function checkNewDevice(res, user, meta, sid) {
+  try {
+    const ip = String(meta.ip || '');
+    const ua = String(meta.ua || '');
+    if (!user.email) return; // 无邮箱无法通知,直接跳过
+    const idHash = sha256hex(sid); // 本次登录刚建的会话不算历史
+    const known = sessions.listForUser(user.id)
+      .some((s) => s.id_hash !== idHash && s.ip === ip && s.user_agent === ua);
+    if (known) return;
+    await sendMail({
+      to: user.email,
+      subject: '新设备登录提醒',
+      text: [
+        `您的账号 ${user.username} 刚刚在一台新设备上登录。`,
+        '',
+        `站点:${getRuntime().siteName}`,
+        `用户名:${user.username}`,
+        `时间:${fmtTime(nowSec())}`,
+        `IP:${ip || '(未知)'}`,
+        `设备:${ua || '(未知)'}`,
+        '',
+        '如非本人操作,请立即登录并修改密码,必要时联系管理员。',
+      ].join('\n'),
+    });
+    record({ req: res.req, user }, 'auth.new_device', `ip=${ip} ua=${truncateCodePoints(ua, 120)}`, { actor: user.username });
+  } catch (err) {
+    logger.warn('新设备登录提醒发送失败(不影响登录)', { username: user.username, error: err?.message });
+  }
+}
+
 /** 建立会话并写入 sid cookie(清除 csrf cookie);供 web 登录与 JSON API 共用,返回明文 sid。
  *  meta 可选 {ip, ua},用于会话管理页展示登录设备信息。 */
 export function startSession(res, user, secureCookies, meta = {}) {
@@ -189,6 +238,7 @@ export function startSession(res, user, secureCookies, meta = {}) {
   // 登录成功审计:web 表单、/api 登录与 Microsoft 登录都经此处,统一留痕一次
   record({ req: res.req, user }, 'auth.login', user.username, { actor: user.username });
   logger.info('登录成功', { username: user.username });
+  checkNewDevice(res, user, meta, sid).catch(() => {}); // 新设备登录提醒(fire-and-forget,失败不影响登录)
   return sid;
 }
 

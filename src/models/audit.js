@@ -4,7 +4,8 @@ import { nowSec, randomToken } from '../core/crypto.js';
 
 const MAX_ROWS = 5000;
 
-/** 写入一条审计记录;超过上限时删除最旧的溢出部分(保留最新 5000 条) */
+/** 写入一条审计记录;每次写入后按需收敛到上限 5000 条(不依赖进程内计数,
+ *  重启及其它连接写入后也能正确收敛;COUNT/DELETE 走同一索引,成本可控) */
 export function log({ actor = 'anonymous', action, detail = '', ip = '' }) {
   if (!action) return;
   const db = getDb();

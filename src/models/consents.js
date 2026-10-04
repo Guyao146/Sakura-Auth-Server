@@ -26,12 +26,17 @@ export function listForClient(clientId) {
 export const revoke = (userId, clientId) =>
   getDb().prepare('DELETE FROM consents WHERE user_id = ? AND client_id = ?').run(userId, clientId);
 
-/** 记录/合并已授权 scope */
+/** 记录/合并已授权 scope(按并集合并:重复授权不收回既有 scope,缩小范围需先撤销授权) */
 export function grant(userId, clientId, scope) {
+  const prev = get(userId, clientId);
+  const fresh = String(scope).split(/\s+/).filter(Boolean);
+  const merged = prev
+    ? [...new Set([...prev.scope.split(/\s+/).filter(Boolean), ...fresh])].join(' ')
+    : fresh.join(' ');
   getDb().prepare(
     `INSERT INTO consents (user_id, client_id, scope, granted_at) VALUES (?, ?, ?, ?)
      ON CONFLICT(user_id, client_id) DO UPDATE SET scope = excluded.scope, granted_at = excluded.granted_at`
-  ).run(userId, clientId, scope, nowSec());
+  ).run(userId, clientId, merged, nowSec());
 }
 
 /** 已授权 scope 是否覆盖本次请求的全部 scope */

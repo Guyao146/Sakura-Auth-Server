@@ -2,11 +2,11 @@ import crypto from 'node:crypto';
 import { privateKeyObject, publicKeyObject, getSigningKey } from './keys.js';
 import { nowSec } from './crypto.js';
 
-/** RS256 JWT 签发;自动补 iat/exp/kid */
+/** RS256 JWT 签发;iat/exp/kid 由服务端强制决定,调用方传入的同名键一律被覆盖(防时间与密钥选择伪造) */
 export function signJwt(payload, ttl) {
   const now = nowSec();
   const header = { alg: 'RS256', typ: 'JWT', kid: getSigningKey().kid };
-  const body = { iat: now, exp: now + ttl, ...payload };
+  const body = { ...payload, iat: now, exp: now + ttl };
   const h = Buffer.from(JSON.stringify(header)).toString('base64url');
   const p = Buffer.from(JSON.stringify(body)).toString('base64url');
   const sig = crypto.createSign('RSA-SHA256').update(`${h}.${p}`).sign(privateKeyObject(), 'base64url');

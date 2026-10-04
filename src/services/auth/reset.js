@@ -15,11 +15,26 @@ import { errorPage } from '../../views/error.js';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-/* 按 IP 简单限流:1 分钟最多 3 次申请(Map 即可,进程内) */
-const WINDOW_MS = 60 * 1000, MAX_PER_WINDOW = 3;
+/* 按 IP 简单限流:1 分钟最多 3 次申请(Map 即可,进程内;带惰性过期清理与硬上限) */
+const WINDOW_MS = 60 * 1000, MAX_PER_WINDOW = 3, MAX_KEYS = 5000;
 const hits = new Map();
 
+/** 惰性清理:删除已过窗口的计数,并对 Map 硬上限兜底(参照 login.js pruneAttempts 模式) */
+function pruneHits() {
+  if (hits.size === 0) return;
+  const now = Date.now();
+  if (hits.size > 64) {
+    for (const [k, v] of hits) {
+      if (now - v.first > WINDOW_MS) hits.delete(k);
+    }
+  }
+  while (hits.size > MAX_KEYS) {
+    hits.delete(hits.keys().next().value);
+  }
+}
+
 function rateLimited(ctx) {
+  pruneHits();
   const ip = ctx.req.socket.remoteAddress || '?';
   const rec = hits.get(ip);
   if (!rec || Date.now() - rec.first > WINDOW_MS) {
@@ -29,6 +44,9 @@ function rateLimited(ctx) {
   rec.count += 1;
   return rec.count > MAX_PER_WINDOW;
 }
+
+/** 仅供冒烟/单元测试观察与驱动限流状态;不参与业务流程 */
+export const _rateLimitInternal = { map: hits, prune: pruneHits, maxKeys: MAX_KEYS };
 
 /** 双提交 cookie 的 CSRF:没有则下发(与登录页同一枚 csrf cookie) */
 function ensureCsrf(ctx) {
