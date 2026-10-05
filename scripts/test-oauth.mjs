@@ -288,13 +288,14 @@ try {
     registry(c);
     return c.res.statusCode;
   };
+  const introToken = issueFull({ client, user, scope: ['openid'], withRefresh: false, withIdToken: false }).access_token;
   await check('启用用户令牌内省及 registry 可用', async () => {
-    assert.equal((await intro(issued.body.access_token)).active, true);
-    assert.equal(registryStatus(issued.body.access_token), 200);
+    assert.equal((await intro(introToken)).active, true);
+    assert.equal(registryStatus(introToken), 200);
   });
   users.update(user.id, { disabled: true });
-  await check('禁用用户令牌内省 inactive', async () => assert.equal((await intro(issued.body.access_token)).active, false));
-  await check('禁用用户不得用 Bearer 访问 registry', () => assert.equal(registryStatus(issued.body.access_token), 401));
+  await check('禁用用户令牌内省 inactive', async () => assert.equal((await intro(introToken)).active, false));
+  await check('禁用用户不得用 Bearer 访问 registry', () => assert.equal(registryStatus(introToken), 401));
   users.remove(user.id);
   const orphan = issueFull({ client, user, scope: ['openid'], withRefresh: false, withIdToken: false });
   await check('已删除用户的残留令牌内省 inactive', async () => assert.equal((await intro(orphan.access_token)).active, false));

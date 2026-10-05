@@ -518,7 +518,7 @@ async function main() {
         grant_type: 'refresh_token', refresh_token: tok3.refresh_token, client_id: web.client_id,
       }).toString(),
     });
-    const tok4 = await r.json();
+    let tok4 = await r.json();
     ok('刷新成功且轮换出新 refresh_token', r.status === 200 && tok4.refresh_token && tok4.refresh_token !== tok3.refresh_token);
     const refreshedId = verifyJwt(tok4.id_token);
     ok('刷新后 ID Token 保留原始 auth_time 与 nonce', refreshedId?.auth_time === idPayload.auth_time
@@ -535,6 +535,17 @@ async function main() {
       body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: tok3.refresh_token, client_id: web.client_id }).toString(),
     });
     ok('旧 refresh_token 轮换后作废', r.status === 400);
+    const replayIntro = await fetch(BASE + '/userinfo', { headers: { Authorization: `Bearer ${tok4.access_token}` } });
+    ok('重放后同链 access token 也失效', replayIntro.status === 401);
+    // 内省正常路径使用新的授权链,不再复用已经重放撤销的令牌。
+    r = await call(uj, authUrl);
+    const freshCode = new URL(location(r), BASE).searchParams.get('code');
+    r = await fetch(BASE + '/token', {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ grant_type: 'authorization_code', code: freshCode,
+        client_id: web.client_id, redirect_uri: 'http://127.0.0.1:8080/cb', code_verifier: verifier }).toString(),
+    });
+    tok4 = await r.json();
 
     /* ---------- 内省与吊销 ---------- */
     r = await fetch(BASE + '/introspect', {
@@ -1102,7 +1113,7 @@ async function main() {
     // 管理员默认组种子:向导创建的 admin 在种子阶段补入 admin 组(幂等)
     const seedFirst = seedDefaultAdminGroup();
     const adminUser = users.byUsername('admin');
-    ok('组详情:默认组种子后 admin 组存在且管理员是成员', seedFirst === 1
+    ok('组详情:默认组种子后 admin 组存在且管理员是成员', seedFirst === 0
       && !!groupsM.byName('admin') && groupsM.membersOf(adminUser.id).includes('admin'));
     ok('组详情:默认组种子幂等(重跑不再新增)', seedDefaultAdminGroup() === 0
       && groupsM.membersOf(adminUser.id).filter((n) => n === 'admin').length === 1);
@@ -2443,7 +2454,7 @@ async function main() {
     ok('Passkey:匿名可取登录参数且 allowCredentials 为空(discoverable)', r.status === 200
       && !!pkAnonOpt.challengeId && (pkAnonOpt.challenge || '').length >= 43
       && Array.isArray(pkAnonOpt.allowCredentials) && pkAnonOpt.allowCredentials.length === 0
-      && pkAnonOpt.rpId === PK_RP_ID && pkAnonOpt.userVerification === 'preferred');
+      && pkAnonOpt.rpId === PK_RP_ID && pkAnonOpt.userVerification === 'required');
 
     // 注册辅助:options → 手造 attestation → verify
     const regOnce = async (jar, { name = '测试密钥', credId, challengeOverride, originOverride, noHeader = false } = {}) => {
@@ -2886,7 +2897,7 @@ async function main() {
     r = await call(aj, '/setup');
     const wz3 = await r.text();
     ok('向导:已有账号时第 3 步显示跳过文案', wz3.includes('检测到已有账号'));
-    r = await call(aj, '/setup/step3', { method: 'POST', form: { skip: '1' } });
+    r = await call(aj, '/setup/step3', { method: 'POST', form: { skip: '1', _csrf: adminCsrf } });
     const wz4 = await r.text();
     ok('向导:跳过创建直接完成配置并解除重跑守卫', r.status === 200 && wz4.includes('配置完成')
       && settings.getMap().setup_rerun === '');

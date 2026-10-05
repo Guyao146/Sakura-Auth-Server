@@ -1,7 +1,8 @@
 /** 重置管理员/用户密码(直接操作数据库,不需要登录)。
  *  用法:node scripts/reset-admin-password.mjs [用户名] [新密码]
  *  不给新密码时自动生成并打印。仅允许重置管理员账号。 */
-import { initDb } from '../src/core/db.js';
+import { initDb, transaction } from '../src/core/db.js';
+import { invalidateUserCredentials } from '../src/services/auth/credentials.js';
 import { users } from '../src/models/index.js';
 import { hashPassword } from '../src/core/password.js';
 import { randomToken } from '../src/core/crypto.js';
@@ -25,6 +26,10 @@ if (explicitPassword && explicitPassword.length < 8) {
   console.error('密码至少 8 位。');
   process.exit(1);
 }
-users.update(user.id, { passwordHash: await hashPassword(password) });
+const passwordHash = await hashPassword(password);
+transaction(() => {
+  users.update(user.id, { passwordHash });
+  invalidateUserCredentials(user.id);
+});
 console.log(`已重置 ${username} 的密码:${password}`);
 console.log('请立即登录并妥善保存。');

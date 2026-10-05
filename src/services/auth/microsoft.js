@@ -1,3 +1,5 @@
+import { freshIdentity, requireCurrentSession } from './state.js';
+
 import * as users from '../../models/users.js';
 import { verifyUserPassword, hashPassword } from '../../core/password.js';
 import { randomToken, sha256b64url, nowSec } from '../../core/crypto.js';
@@ -102,6 +104,7 @@ export async function callback(ctx) {
     const identity = await verifyIdToken(tokenRes.id_token, {
       clientId: ms.clientId, tenant: ms.tenant, authority: ms.authority,
     });
+    if (ctx.session) requireCurrentSession(ctx);
     return finishCallback(ctx, entry, identity);
   } catch (err) {
     logger.warn('Microsoft 回调处理失败', { err: String(err.message || err) });
@@ -168,9 +171,10 @@ export async function link(ctx) {
     return rerender('页面已过期,请重新提交。', 400);
   }
   const username = String(b.username || '').trim();
-  const user = username ? users.byUsername(username) : null;
-  const okPwd = await verifyUserPassword(user, b.password) && !user?.disabled;
-  if (!okPwd) {
+  let user = username ? users.byUsername(username) : null;
+  const okPwd = await verifyUserPassword(user, b.password);
+  user = freshIdentity(user);
+  if (!okPwd || !user || stashPeek(linkTokens, stateVal) !== entry) {
     logger.warn('Microsoft 关联失败:密码校验未通过', { username });
     return rerender('用户名或密码不正确。');
   }
@@ -209,10 +213,14 @@ export async function registerNew(ctx) {
   if (b.password !== b.password2) return rerender('两次输入的密码不一致。');
   const holder = users.byMicrosoftSub(entry.sub);
   if (holder) return rerender('该 Microsoft 账号已绑定其他用户。');
+  const passwordHash = await hashPassword(b.password);
+  if (!getRuntime().allowRegister || !getRuntime().msOAuth.enabled) return rerender('注册已关闭。');
+  if (users.byUsername(username) || users.byMicrosoftSub(entry.sub)
+      || stashPeek(linkTokens, stateVal) !== entry) return rerender('关联状态已变化,请重新开始。');
   linkTokens.delete(stateVal);
   const user = users.create({
     username,
-    passwordHash: await hashPassword(b.password),
+    passwordHash,
     name: String(b.name || '').trim(),
     email: entry.email || '',
     isAdmin: false,

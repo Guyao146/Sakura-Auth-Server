@@ -32,14 +32,15 @@ export function create({ name, redirectUris, scopes, isPublic, pkceRequired, req
   return byId(clientId);
 }
 
-export function update(clientId, { name, redirectUris, scopes, pkceRequired, requireConsent, allowedGroups, description, logoUrl, healthUrl, secretHash = null }) {
+export function update(clientId, { name, redirectUris, scopes, pkceRequired, requireConsent, allowedGroups, accessMode, description, logoUrl, healthUrl, secretHash = null }) {
   const cur = byId(clientId);
   if (!cur) return;
   getDb().prepare(
-    `UPDATE clients SET name = ?, redirect_uris = ?, scopes = ?, pkce_required = ?, require_consent = ?, allowed_groups = ?,
+    `UPDATE clients SET access_mode = ?, name = ?, redirect_uris = ?, scopes = ?, pkce_required = ?, require_consent = ?, allowed_groups = ?,
      description = ?, logo_url = ?, health_url = ?
      ${secretHash ? ', secret_hash = ?' : ''} WHERE client_id = ?`
   ).run(
+    accessMode !== undefined ? normalizeAccessMode(accessMode) : (cur.access_mode || 'auto'),
     name ?? cur.name,
     redirectUris ?? cur.redirect_uris,
     scopes ?? cur.scopes,
@@ -63,12 +64,34 @@ export function remove(clientId) {
   // 客户端不产生组成员关系(组限制以 allowed_groups 内联存储),无需额外清理
 }
 
+const normalizeAccessMode = (mode) => {
+  if (!['auto', 'all', 'groups', 'deny'].includes(mode)) throw new Error('无效访问策略');
+  return mode;
+};
+
+/** auto 兼容旧客户端;显式 groups + 空组意味着拒绝所有用户。 */
+export function accessMode(client) {
+  const mode = client.access_mode || 'auto';
+  if (mode !== 'auto') return ['all', 'groups', 'deny'].includes(mode) ? mode : 'deny';
+  try {
+    const value = JSON.parse(client.allowed_groups || '[]');
+    if (!Array.isArray(value) || value.some((v) => typeof v !== 'string')) return 'deny';
+    return value.length ? 'groups' : 'all';
+  } catch { return 'deny'; }
+}
+
+export function canAccess(client, groupNames) {
+  const mode = accessMode(client);
+  return mode === 'all' || (mode === 'groups' && allowedGroupNames(client).some((g) => groupNames.includes(g)));
+}
+
 /** 解析后的视图字段(redirect_uris 数组) */
 export function withUris(client) {
   return {
     ...client,
     uriList: JSON.parse(client.redirect_uris || '[]'),
     scopeList: (client.scopes || '').split(/\s+/).filter(Boolean),
+    accessMode: accessMode(client),
     allowedGroupList: allowedGroupNames(client),
     description: client.description || '',
     logoUrl: client.logo_url || '',

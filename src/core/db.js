@@ -141,7 +141,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_logs(ts DESC);
 `;
 
 /** 老库平滑迁移:补列/补表,幂等 */
-function migrate() {
+function migrate(hadGroups) {
   const cols = db.prepare('PRAGMA table_info(users)').all().map((c) => c.name);
   if (!cols.includes('totp_secret')) db.exec('ALTER TABLE users ADD COLUMN totp_secret TEXT');
   if (!cols.includes('totp_enabled')) db.exec('ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0');
@@ -149,7 +149,18 @@ function migrate() {
   if (!cols.includes('ms_email')) db.exec('ALTER TABLE users ADD COLUMN ms_email TEXT');
   // ms_sub 索引须在列补齐之后建(老库 users 无该列);微软联邦登录按 ms_sub 查用户
   db.exec('CREATE INDEX IF NOT EXISTS idx_users_ms_sub ON users(ms_sub);');
+  if (!cols.includes('credential_version')) db.exec('ALTER TABLE users ADD COLUMN credential_version INTEGER NOT NULL DEFAULT 0');
+  // 数据库级递增也覆盖脚本/直接 SQL,避免同一秒内改密或禁用再启用的 ABA 竞态。
+  db.exec(`CREATE TRIGGER IF NOT EXISTS users_credential_version
+    AFTER UPDATE OF password_hash, disabled, is_admin, totp_secret, totp_enabled, ms_sub ON users
+    WHEN OLD.password_hash IS NOT NEW.password_hash OR OLD.disabled IS NOT NEW.disabled
+      OR OLD.is_admin IS NOT NEW.is_admin OR OLD.totp_secret IS NOT NEW.totp_secret
+      OR OLD.totp_enabled IS NOT NEW.totp_enabled OR OLD.ms_sub IS NOT NEW.ms_sub
+    BEGIN UPDATE users SET credential_version = credential_version + 1 WHERE id = NEW.id; END;`);
   const ccols = db.prepare('PRAGMA table_info(clients)').all().map((c) => c.name);
+  if (!ccols.includes('access_mode')) {
+    db.exec("ALTER TABLE clients ADD COLUMN access_mode TEXT NOT NULL DEFAULT 'auto'");
+  }
   if (!ccols.includes('allowed_groups')) {
     db.exec("ALTER TABLE clients ADD COLUMN allowed_groups TEXT NOT NULL DEFAULT '[]'");
   }
@@ -169,6 +180,9 @@ function migrate() {
   // tokens 表补链 ID 列:同一授权会话签发的令牌对共用 chain_id,
   // refresh 吊销按链级联撤 access(RFC 7009);老库幂等补列,旧行 NULL = 无链(仅可单独撤销)
   const tcols = db.prepare('PRAGMA table_info(tokens)').all().map((c) => c.name);
+  if (!tcols.includes('auth_time')) db.exec('ALTER TABLE tokens ADD COLUMN auth_time INTEGER');
+  if (!tcols.includes('nonce')) db.exec('ALTER TABLE tokens ADD COLUMN nonce TEXT');
+  if (!tcols.includes('replaced_by')) db.exec('ALTER TABLE tokens ADD COLUMN replaced_by TEXT');
   if (!tcols.includes('chain_id')) {
     db.exec('ALTER TABLE tokens ADD COLUMN chain_id TEXT');
   }
@@ -180,8 +194,16 @@ function migrate() {
   if (!scols.includes('user_agent')) {
     db.exec("ALTER TABLE sessions ADD COLUMN user_agent TEXT NOT NULL DEFAULT ''");
   }
-  seedGroupsFromUserGroups();
-  seedDefaultAdminGroup();
+  if (!db.prepare("SELECT 1 FROM settings WHERE key = 'groups_migrated_v2'").get()) {
+    // 已有关系表就是权威数据;只对尚无关系表的老库导入旧字段,不能复活已撤销成员。
+    transaction(() => {
+      if (!hadGroups) { seedGroupsFromUserGroups(); seedDefaultAdminGroup(); }
+      db.prepare("INSERT INTO settings (key, value) VALUES ('groups_migrated_v2', '1')").run();
+    });
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS idx_tokens_chain ON tokens(chain_id)');
+  // 修复旧版 counter | 0 遗留的负值,恢复为 WebAuthn uint32。
+  db.exec('UPDATE webauthn_credentials SET counter = counter + 4294967296 WHERE counter < 0');
 }
 
 /**
@@ -248,13 +270,27 @@ export function initDb() {
   db.exec('PRAGMA foreign_keys = ON;');
   // 并发写(smoke 多进程/双实例误配)时等待而非立即 SQLITE_BUSY 报错
   db.exec('PRAGMA busy_timeout = 5000;');
+  const hadGroups = !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'group_members'").get();
   db.exec(SCHEMA);
-  migrate();
+  migrate(hadGroups);
   logger.info('数据库已就绪', { file: config.dbFile, synchronous });
   return db;
 }
 
 export const getDb = () => db;
+
+/** 仅用于同步数据库操作,不要在事务内 await。 */
+export function transaction(fn) {
+  db.exec('SAVEPOINT sakura_write');
+  try {
+    const result = fn();
+    db.exec('RELEASE sakura_write');
+    return result;
+  } catch (err) {
+    db.exec('ROLLBACK TO sakura_write; RELEASE sakura_write');
+    throw err;
+  }
+}
 
 /** 定期清理过期会话/授权码/令牌 */
 export function purgeExpired() {

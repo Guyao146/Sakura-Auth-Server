@@ -1,6 +1,6 @@
 {
   "name": "oauth2-idp",
-  "version": "1.5.1",
+  "version": "1.6.0",
   "private": true,
   "license": "Sakura-License-1.2",
   "type": "module",
@@ -12,6 +12,8 @@
     "start": "node server.js",
     "smoke": "node scripts/smoke.mjs",
     "test:oauth": "node scripts/test-oauth.mjs",
+    "test:security": "node scripts/test-security.mjs",
+    "test:views": "node scripts/test-views.mjs",
     "seed-demo": "node scripts/seed-demo.mjs",
     "reset-admin": "node scripts/reset-admin-password.mjs",
     "backup": "node scripts/backup.mjs",

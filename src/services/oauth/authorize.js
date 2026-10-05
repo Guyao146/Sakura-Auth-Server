@@ -55,12 +55,11 @@ const promptNone = (prompt) => String(prompt || '').split(/\s+/).includes('none'
  */
 function denyIfNotAllowed(ctx, client) {
   const allowed = clients.allowedGroupNames(client);
-  if (!allowed.length) return false;
   const mine = groups.membersOf(ctx.user.id);
-  if (allowed.some((name) => mine.includes(name))) return false;
+  if (clients.canAccess(client, mine)) return false;
   // 管理员模拟:应用详情「模拟启动」携带 sim_group 时放行(launch 层已审计)
   const simGroup = ctx.query.get('sim_group') || (ctx.body && ctx.body.sim_group) || '';
-  if (simGroup && ctx.user.is_admin && groups.byName(simGroup)) return false;
+  if (clients.accessMode(client) !== 'deny' && allowed.length && simGroup && ctx.user.is_admin && groups.byName(simGroup)) return false;
   sendHtml(ctx.res, 403, accessDeniedPage({
     theme: ctx.theme, siteName: getRuntime().siteName, clientName: client.name, requiredGroups: allowed,
   }));

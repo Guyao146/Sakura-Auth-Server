@@ -23,7 +23,7 @@ export function revokeForClient(clientId) {
 
 /** 吊销某用户在某应用下的全部令牌(用户撤销授权时用) */
 export function revokeForClientUser(clientId, userId) {
-  getDb().prepare('UPDATE tokens SET revoked = 1 WHERE client_id = ? AND user_id = ?').run(clientId, userId);
+  return getDb().prepare('UPDATE tokens SET revoked = 1 WHERE client_id = ? AND user_id = ?').run(clientId, userId);
 }
 
 /** 吊销某用户的全部令牌(改密/重置/禁用账号时用) */

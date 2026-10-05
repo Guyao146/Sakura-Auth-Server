@@ -3,4 +3,14 @@ data/
 node_modules/
 *.log
 .git/
+.wt/
+.debug*-data/
+.env
+.env.*
+!.env.example
+*.sqlite*
+*.pem
+*.key
+*.tar
+*.tar.gz
 deploy/

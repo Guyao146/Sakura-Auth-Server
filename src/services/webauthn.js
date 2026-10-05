@@ -71,7 +71,7 @@ export function registerOptions(ctx) {
       pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
       // 已注册凭据作为 exclude,提示认证器避免重复注册同名凭据
       excludeCredentials: creds.listForUser(ctx.user.id).map((c) => ({ type: 'public-key', id: c.id })),
-      authenticatorSelection: { residentKey: 'preferred', userVerification: 'preferred' },
+      authenticatorSelection: { residentKey: 'preferred', userVerification: 'required' },
       timeout: 60000,
     },
   }, NO_STORE);
@@ -94,7 +94,7 @@ export function registerVerify(ctx) {
   try {
     att = parseAttestation({
       attestationObject, clientDataJSON,
-      expectedChallenge: challenge, expectedOrigin: rt.issuer, rpId: rpId(),
+      expectedChallenge: challenge, expectedOrigin: new URL(rt.issuer).origin, rpId: rpId(),
     });
   } catch (e) {
     logger.warn('Passkey 注册校验失败', { code: e.code, err: e.message });
@@ -135,7 +135,7 @@ export function loginOptions(ctx) {
     challengeId,
     challenge,
     rpId: rpId(),
-    userVerification: 'preferred',
+    userVerification: 'required',
     timeout: 60000,
     allowCredentials: allow,
   }, NO_STORE);
@@ -174,7 +174,7 @@ export function loginVerify(ctx) {
       signature,
     }, {
       expectedChallenge: challenge,
-      expectedOrigin: rt.issuer,
+      expectedOrigin: new URL(rt.issuer).origin,
       rpId: rpId(),
       expectedType: 'webauthn.get',
     });
@@ -182,9 +182,8 @@ export function loginVerify(ctx) {
     logger.warn('Passkey 登录校验失败', { id: cred.id, code: e.code, err: e.message });
     return sendJson(ctx.res, 401, { error: 'invalid_credentials' }, NO_STORE);
   }
-  // 计数器必须严格递增:回退/持平视为凭据被克隆(WebAuthn L2 §6.1.1),拒绝并留痕。
-  // 注:不支持计数器的认证器恒发 0,将被拒绝 —— 本服务按强校验策略执行。
-  if (result.signCount <= cred.counter) {
+  // 两端均为 0 表示认证器不支持计数器;其余情况必须严格递增。
+  if ((result.signCount !== 0 || cred.counter !== 0) && result.signCount <= cred.counter) {
     record(ctx, 'auth.passkey_clone_suspect', cred.id, { actor: user.username });
     logger.warn('Passkey 计数器回退,疑似克隆', { id: cred.id, stored: cred.counter, got: result.signCount });
     return sendJson(ctx.res, 409, { error: 'credential_cloned' }, NO_STORE);

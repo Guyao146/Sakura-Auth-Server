@@ -1,3 +1,5 @@
+import { setUserGroups } from './groups.js';
+
 import { getDb } from '../core/db.js';
 import { randomToken } from '../core/crypto.js';
 import { nowSec } from '../core/crypto.js';
@@ -20,6 +22,7 @@ export function create({ username, passwordHash, name = '', email = '', userGrou
     `INSERT INTO users (id, username, name, email, user_groups, password_hash, is_admin, disabled, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`
   ).run(id, username, name, email, userGroups, passwordHash, isAdmin ? 1 : 0, now, now);
+  setUserGroups(id, [...String(userGroups).split(/[\s,]+/).filter(Boolean), ...(isAdmin ? ['admin'] : [])]);
   return byId(id);
 }
 

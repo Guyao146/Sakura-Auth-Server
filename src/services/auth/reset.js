@@ -1,3 +1,6 @@
+import { freshIdentity } from './state.js';
+import { transaction } from '../../core/db.js';
+
 /** 邮件找回密码:申请重置链接 + 凭 token 设置新密码(防枚举、防 CSRF) */
 import * as users from '../../models/users.js';
 import * as resets from '../../models/resets.js';
@@ -149,8 +152,8 @@ export async function handleReset(ctx) {
     return showReset(ctx, { token, err: '两次输入的新密码不一致。' });
   }
 
-  const userId = resets.consume(token); // 一次性:先消费,防止重放
-  const user = userId ? users.byId(userId) : null;
+  const row = resets.lookup(token);
+  const user = row ? users.byId(row.user_id) : null;
   if (!user || user.disabled) {
     return sendHtml(ctx.res, 400, errorPage({
       theme: ctx.theme, siteName: ctx.runtime.siteName,
@@ -159,9 +162,14 @@ export async function handleReset(ctx) {
     }));
   }
 
-  users.update(user.id, { passwordHash: await hashPassword(password) });
-  // 统一凭据失效:全部会话、令牌与未使用授权码;重置后必须重新登录
-  invalidateUserCredentials(user.id);
+  const passwordHash = await hashPassword(password);
+  const changed = transaction(() => {
+    if (!freshIdentity(user) || resets.consume(token) !== user.id) return false;
+    users.update(user.id, { passwordHash });
+    invalidateUserCredentials(user.id);
+    return true;
+  });
+  if (!changed) return showReset(ctx, { token, err: '认证状态已变化,请重新申请重置链接。' });
   record(ctx, 'auth.password_reset', user.username, { actor: user.username });
   logger.info('密码已通过邮件重置,全部会话与令牌已清除', { username: user.username });
   sendHtml(ctx.res, 200, resetDonePage({ theme: ctx.theme, siteName: ctx.runtime.siteName }));

@@ -1,3 +1,5 @@
+import { requireCurrentSession } from '../auth/state.js';
+
 import fs from 'node:fs';
 import path from 'node:path';
 import * as users from '../../models/users.js';
@@ -130,7 +132,7 @@ export function showGroupDetail(ctx) {
       client_id: c.client_id,
       name: c.name,
       // open = 未限制(所有用户可访问);granted/denied = 已限制且含/不含本组
-      state: !allowed.length ? 'open' : allowed.includes(g.name) ? 'granted' : 'denied',
+      state: clients.accessMode(c) === 'all' ? 'open' : allowed.includes(g.name) && clients.accessMode(c) !== 'deny' ? 'granted' : 'denied',
     };
   });
   sendHtml(ctx.res, 200, groupDetailPage({
@@ -214,16 +216,16 @@ export function grantGroupApp(ctx) {
   const allowed = clients.allowedGroupNames(app);
   if (b.action === 'grant') {
     // 不受限应用(空 allowed_groups = 所有用户可访问)无需也无法在此授权
-    if (!allowed.length) return back('该应用未限制访问,所有用户均可访问,无需授权。');
+    if (clients.accessMode(app) === 'all') return back('该应用未限制访问,所有用户均可访问,无需授权。');
     if (!allowed.includes(g.name)) allowed.push(g.name);
-    clients.update(app.client_id, { allowedGroups: allowed });
+    clients.update(app.client_id, { allowedGroups: allowed, accessMode: 'groups' });
     record(ctx, 'admin.group_app_granted', `${g.name} 授权 ${app.name}`);
     return redirect(ctx.res, `/admin/groups/${g.id}?msg=` + encodeURIComponent(`已授权组 ${g.name} 访问应用 ${app.name}。`));
   }
   if (b.action === 'revoke') {
     if (!allowed.includes(g.name)) return back('该应用尚未授权本组。');
-    // 移除后列表为空则保留为空,应用回到不受限状态
-    clients.update(app.client_id, { allowedGroups: allowed.filter((n) => n !== g.name) });
+    // 最后一个组被撤销后继续受限(无人可访问),绝不自动放开。
+    clients.update(app.client_id, { allowedGroups: allowed.filter((n) => n !== g.name), accessMode: 'groups' });
     record(ctx, 'admin.group_app_revoked', `${g.name} 取消授权 ${app.name}`);
     return redirect(ctx.res, `/admin/groups/${g.id}?msg=` + encodeURIComponent(`已移除组 ${g.name} 对应用 ${app.name} 的授权。`));
   }
@@ -272,8 +274,11 @@ export async function createUser(ctx) {
     return redirect(ctx.res, '/admin/users/new?err=' + encodeURIComponent('邮箱长度不能超过 254 字。'));
   }
   const groupNames = collectGroupNames(b);
+  const passwordHash = await hashPassword(b.password);
+  requireCurrentSession(ctx, true);
+  if (users.byUsername(username)) return redirect(ctx.res, '/admin/users?err=' + encodeURIComponent('用户名已存在。'));
   const created = users.create({
-    username, passwordHash: await hashPassword(b.password),
+    username, passwordHash,
     name: String(b.name || '').trim(), email: String(b.email || '').trim(),
     userGroups: groupNames.join(' '), isAdmin: b.is_admin === '1',
   });
@@ -319,6 +324,13 @@ export async function updateUser(ctx) {
       return redirect(ctx.res, `/admin/users/${target.id}?err=` + encodeURIComponent('新密码至少 8 位。'));
     }
     passwordHash = await hashPassword(b.password);
+  }
+  requireCurrentSession(ctx, true);
+  if (users.byId(target.id)?.credential_version !== target.credential_version) {
+    return redirect(ctx.res, '/admin/users?err=' + encodeURIComponent('用户状态已变化,请刷新重试。'));
+  }
+  if ((willDisabled || !willAdmin) && target.is_admin && !target.disabled && users.adminCount() <= 1) {
+    return redirect(ctx.res, '/admin/users?err=' + encodeURIComponent('系统至少保留一名可用管理员。'));
   }
   if (b.totp_reset === '1' && target.totp_enabled) {
     users.clearTotp(target.id);
@@ -459,6 +471,7 @@ export async function createApp(ctx) {
     secret = randomToken(24);
     secretHash = await hashPassword(secret);
   }
+  requireCurrentSession(ctx, true);
   const app = clients.create({
     name: v.name, redirectUris: v.uris, scopes: v.scopes.join(' '),
     isPublic, pkceRequired: pkce, requireConsent: b.require_consent === '1',
@@ -527,6 +540,7 @@ export function updateApp(ctx) {
     pkceRequired: app.token_auth === 'none' ? true : b.pkce_required === '1',
     requireConsent: b.require_consent === '1',
     allowedGroups: collectAllowedGroups(b),
+    accessMode: ['auto', 'all', 'groups', 'deny'].includes(b.access_mode) ? b.access_mode : (app.access_mode || 'auto'),
     description: v.description, logoUrl: v.logoUrl, healthUrl: v.healthUrl,
   });
   appHealth.probeSoon(clients.byId(app.client_id)); // 健康检查地址变更后立即复探
@@ -558,7 +572,12 @@ export async function regenerateSecret(ctx) {
     return redirect(ctx.res, `/admin/apps/${app.client_id}?err=` + encodeURIComponent('公开客户端没有密钥。'));
   }
   const secret = randomToken(24);
-  clients.update(app.client_id, { secretHash: await hashPassword(secret) });
+  const secretHash = await hashPassword(secret);
+  requireCurrentSession(ctx, true);
+  if (clients.byId(app.client_id)?.secret_hash !== app.secret_hash) {
+    return redirect(ctx.res, '/admin/apps?err=' + encodeURIComponent('应用凭据已变化,请刷新重试。'));
+  }
+  clients.update(app.client_id, { secretHash });
   record(ctx, 'admin.app_secret_rotated', app.name);
   sendHtml(ctx.res, 200, secretRevealPage({
     theme: ctx.theme, siteName: getRuntime().siteName, user: ctx.user,

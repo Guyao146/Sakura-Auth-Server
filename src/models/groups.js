@@ -1,5 +1,5 @@
 /** 权限组与组成员关系:groups claim 与应用访问控制的唯一数据源 */
-import { getDb } from '../core/db.js';
+import { getDb, transaction } from '../core/db.js';
 import { randomToken, nowSec } from '../core/crypto.js';
 
 export const byId = (id) => getDb().prepare('SELECT * FROM groups WHERE id = ?').get(id);
@@ -104,12 +104,26 @@ export const listMembers = (groupId) =>
   ).all(groupId);
 
 /** 加入单个成员(幂等:已存在不重复写入) */
-export const addMember = (groupId, userId) =>
-  getDb().prepare('INSERT OR IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)').run(groupId, userId);
+export function addMember(groupId, userId) {
+  return transaction(() => {
+    const result = getDb().prepare('INSERT OR IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)').run(groupId, userId);
+    syncMirror(userId);
+    return result;
+  });
+}
 
 /** 移除单个成员(幂等:不存在时无操作) */
-export const removeMember = (groupId, userId) =>
-  getDb().prepare('DELETE FROM group_members WHERE group_id = ? AND user_id = ?').run(groupId, userId);
+export function removeMember(groupId, userId) {
+  return transaction(() => {
+    const result = getDb().prepare('DELETE FROM group_members WHERE group_id = ? AND user_id = ?').run(groupId, userId);
+    syncMirror(userId);
+    return result;
+  });
+}
+
+function syncMirror(userId) {
+  getDb().prepare('UPDATE users SET user_groups = ? WHERE id = ?').run(membersOf(userId).join(' '), userId);
+}
 
 /** 规整输入:数组或字符串均可,按空白/逗号再拆分并去重 */
 const cleanNames = (names) =>
@@ -125,5 +139,6 @@ export function setUserGroups(userId, names = []) {
     const g = ensureByName(name);
     if (g) ins.run(g.id, userId);
   }
+  syncMirror(userId);
   return clean;
 }

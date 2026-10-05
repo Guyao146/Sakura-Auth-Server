@@ -55,7 +55,12 @@ export async function authenticateClient(ctx) {
     bad(ctx, 'invalid_client', '客户端认证失败', 401, challenge);
     return null;
   }
-  return client;
+  const fresh = clients.byId(client.client_id);
+  if (!fresh || fresh.secret_hash !== client.secret_hash || fresh.token_auth !== client.token_auth) {
+    bad(ctx, 'invalid_client', '客户端凭据已变化', 401, challenge);
+    return null;
+  }
+  return fresh;
 }
 
 /** PKCE 校验:verifier 长度/字符集受限(RFC 7636 §4.1);S256=sha256(verifier) base64url;plain=原文 */
@@ -110,7 +115,6 @@ function grantAuthorizationCode(ctx, client, body) {
     }
   }
 
-  codes.markUsed(row.code_hash);
   const user = users.byId(row.user_id);
   if (!user || user.disabled) return fail('用户不可用');
 
@@ -120,6 +124,7 @@ function grantAuthorizationCode(ctx, client, body) {
   let res;
   db.exec('BEGIN');
   try {
+    codes.markUsed(row.code_hash);
     res = issueFull({
       client, user, scope,
       authTime: row.auth_time,
@@ -140,15 +145,17 @@ function grantRefreshToken(ctx, client, body) {
   if (!body.refresh_token) return fail('缺少 refresh_token');
   const row = tokens.byId(tokens.refreshKey(body.refresh_token));
   if (!row || row.kind !== 'refresh') return fail('refresh_token 无效');
+  if (row.client_id !== client.client_id) return fail('refresh_token 不属于该客户端');
   if (row.revoked) {
     // 轮换链重放:已作废的刷新令牌再次出现,按令牌泄漏处理,作废其下游整条轮换链
-    const revoked = revokeRotationChain(row.id);
-    record(ctx, 'oauth.refresh_replay', `${row.client_id} revoked=${revoked.length}`);
-    logger.warn('刷新令牌重放:已作废整条轮换链', { client_id: row.client_id, revoked: revoked.length });
+    // 无 chain_id 的遗留令牌无法准确关联 access,保守撤销该客户端/用户的全部令牌。
+    const revoked = row.chain_id ? tokens.revokeByChain(row.chain_id).changes
+      : tokens.revokeForClientUser(row.client_id, row.user_id).changes;
+    record(ctx, 'oauth.refresh_replay', `${row.client_id} revoked=${revoked}`);
+    logger.warn('刷新令牌重放:已作废整条轮换链', { client_id: row.client_id, revoked });
     return fail('refresh_token 已失效');
   }
   if (row.expires_at <= nowSec()) return fail('refresh_token 已失效');
-  if (row.client_id !== client.client_id) return fail('refresh_token 不属于该客户端');
 
   const user = row.user_id ? users.byId(row.user_id) : null;
   if (row.user_id && (!user || user.disabled)) return fail('用户不可用');
@@ -166,11 +173,12 @@ function grantRefreshToken(ctx, client, body) {
   const authTime = row.auth_time;
 
   // 轮换:新 refresh 立即签发,旧的标记作废并记录 replaced_by 轮换链;两者同事务
-  // 新令牌沿用旧令牌的 chain_id(旧令牌无链则保持 NULL,向后兼容仅可单独撤销)
+  // 新令牌沿用旧令牌的 chain_id;遗留 NULL 链重放时按客户端/用户保守撤销。
   const chainId = row.chain_id || null;
   const newRefresh = tokens.newRefreshToken();
   const newHash = tokens.refreshKey(newRefresh);
   const db = getDb();
+  let res;
   db.exec('BEGIN');
   try {
     tokens.insert({
@@ -179,35 +187,20 @@ function grantRefreshToken(ctx, client, body) {
       expiresAt: nowSec() + ctx.runtime.refreshTokenTtl, chainId,
     });
     db.prepare('UPDATE tokens SET revoked = 1, replaced_by = ? WHERE id = ?').run(newHash, row.id);
+    const { access_token, expiresIn } = issueAccessToken({ client, user, scope, authTime, chainId });
+    res = {
+      access_token, token_type: 'Bearer', expires_in: expiresIn,
+      scope: scope.join(' '), refresh_token: newRefresh,
+    };
+    const idToken = mintIdToken({ client, user, scope, authTime, nonce: row.nonce, accessToken: access_token });
+    if (idToken) res.id_token = idToken;
     db.exec('COMMIT');
   } catch (err) {
     try { db.exec('ROLLBACK'); } catch { /* 连接异常时保留原始错误 */ }
     throw err;
   }
 
-  const { access_token, expiresIn } = issueAccessToken({ client, user, scope, authTime, chainId });
-  const res = {
-    access_token, token_type: 'Bearer', expires_in: expiresIn,
-    scope: scope.join(' '), refresh_token: newRefresh,
-  };
-  const idToken = mintIdToken({ client, user, scope, authTime, nonce: row.nonce, accessToken: access_token });
-  if (idToken) res.id_token = idToken;
   return sendJson(ctx.res, 200, res);
-}
-
-/** 沿 replaced_by 链作废全部下游令牌(重放检测:旧令牌再次出现视为泄漏,全链作废强制重新登录) */
-function revokeRotationChain(startId) {
-  const db = getDb();
-  const mark = db.prepare('UPDATE tokens SET revoked = 1 WHERE id = ? AND revoked = 0');
-  const next = db.prepare('SELECT replaced_by FROM tokens WHERE id = ?');
-  const revoked = [];
-  const seen = new Set();
-  for (let cur = startId; cur && !seen.has(cur) && revoked.length < 64;) {
-    seen.add(cur);
-    if (mark.run(cur).changes > 0) revoked.push(cur);
-    cur = next.get(cur)?.replaced_by || null;
-  }
-  return revoked;
 }
 
 function grantClientCredentials(ctx, client, body) {

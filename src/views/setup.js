@@ -88,6 +88,7 @@ export function setupStep3({ theme, siteName, values, err, hasUsers, csrf = '' }
       ${hasUsers ? `
       <form method="post" action="/setup/step3">
         <input type="hidden" name="skip" value="1">
+        ${csrfField(csrf)}
         <div class="actions" style="margin-top:0">
           <button class="btn btn-primary" type="submit">跳过创建,直接完成配置</button>
         </div>

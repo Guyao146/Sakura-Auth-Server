@@ -15,6 +15,7 @@ import { getRuntime } from '../core/runtime.js';
 import { sendJson, clearCookie } from '../core/http.js';
 import { verifyJwt } from '../core/jwt.js';
 import { verifyTotp } from '../core/totp.js';
+import { freshIdentity } from './auth/state.js';
 import { verifyUserPassword } from '../core/password.js';
 import { isLocked, recordFail, clearFails, startSession, sessionMeta } from './auth/login.js';
 
@@ -68,10 +69,10 @@ export async function login(ctx) {
 
   if (isLocked(ctx, username)) return sendJson(ctx.res, 401, { error: 'rate_limited' }, NO_STORE);
 
-  const user = users.byUsername(username);
-  // 占位哈希保证用户名不存在时也做完整 scrypt(防枚举)
+  let user = users.byUsername(username);
   const passwordOk = await verifyUserPassword(user, password);
-  if (!passwordOk || (user && user.disabled)) {
+  user = freshIdentity(user);
+  if (!passwordOk || !user) {
     recordFail(ctx, username);
     return sendJson(ctx.res, 401, { error: 'invalid_credentials' }, NO_STORE);
   }

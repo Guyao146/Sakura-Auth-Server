@@ -121,7 +121,7 @@ export async function callback(ctx) {
     if (!user || user.disabled) return fail(ctx, '用户不存在或已禁用', 403);
     if (user.totp_enabled) {
       const id = randomToken(32), csrf = randomToken(24);
-      put(factors, id, { uid: user.id, csrf, next: entry.next, config: entry.config });
+      put(factors, id, { uid: user.id, version: user.credential_version, csrf, next: entry.next, config: entry.config });
       cookie(ctx, FACTOR_COOKIE, id);
       return factorPage(ctx, csrf);
     }
@@ -146,7 +146,7 @@ export function secondFactor(ctx) {
   if (!entry || entry.exp <= nowSec() || entry.config !== fingerprint(ctx.runtime.unilink) ||
       !timingSafeEqStr(String(ctx.body?._csrf || ''), entry.csrf)) return fail(ctx, '验证会话已失效');
   const user = users.byId(entry.uid);
-  if (!user || user.disabled || !user.totp_enabled || !user.totp_secret) return fail(ctx, '账号状态变化，请重新登录');
+  if (!user || user.disabled || !user.totp_enabled || !user.totp_secret || user.credential_version !== entry.version) return fail(ctx, '账号状态变化，请重新登录');
   if (isLocked(ctx, user.username)) return fail(ctx, '失败次数过多，请稍后重试', 429);
   const code = String(ctx.body?.code || '').trim();
   if (!verifyTotp(user.totp_secret, code) && !recovery.consume(user.id, code)) {

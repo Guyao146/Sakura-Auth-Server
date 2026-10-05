@@ -122,7 +122,7 @@ export function groupDetailPage({ theme, siteName, user, cur, group, members = [
           <thead><tr><th>应用</th><th>状态</th><th>操作</th></tr></thead>
           <tbody>${appRows || '<tr><td colspan="3" class="muted">还没有应用,先在「应用」页创建。</td></tr>'}</tbody>
         </table></div>
-        <p class="muted small">「不受限」应用对所有用户开放,需先在应用侧配置可访问的权限组后,才能在此授权;「移除授权」后若应用不再引用任何组,将回到不受限状态。</p>
+        <p class="muted small">「不受限」应用对所有用户开放,需先在应用侧配置可访问的权限组后,才能在此授权;「移除授权」后若应用不再引用任何组,将保持受限,禁止所有用户访问;需要公开时请在应用设置中选择「所有用户」。</p>
       </div>
       <div class="card">
         <h3 style="margin-top:0">编辑组信息</h3>
@@ -449,7 +449,7 @@ export function appDetailPage({ theme, siteName, user, cur, app, allGroups = [],
         ${kvRow('client_id', esc(a.client_id))}
         ${a.token_auth === 'none' ? '' : kvRow('client_secret', '<span class="muted">已加密存储,仅创建/重置时展示一次</span>')}
         ${kvRow('发现文档', esc(issuer + '/.well-known/openid-configuration'))}
-        ${kvRow('访问限制', allowed.length ? allowed.map(esc).join('、') : '<span class="muted">不限制(所有用户可访问)</span>')}
+        ${kvRow('访问限制', a.accessMode === 'all' ? '<span class="muted">不限制(所有用户可访问)</span>' : a.accessMode === 'deny' || !allowed.length ? '禁止访问(无授权用户)' : allowed.map(esc).join('、'))}
         ${kvRow('应用描述', a.description ? esc(a.description) : '<span class="muted">未设置</span>')}
         ${kvRow('Logo 地址', a.logoUrl ? esc(a.logoUrl) : '<span class="muted">未设置(门户与授权页用首字母徽标)</span>')}
         ${kvRow('健康检查地址', a.healthUrl ? esc(a.healthUrl) : '<span class="muted">未设置(可在下方应用设置中填写)</span>')}
@@ -500,8 +500,12 @@ export function appDetailPage({ theme, siteName, user, cur, app, allGroups = [],
             placeholder="https://app.example.com/healthz" spellcheck="false">
           <label>允许的 scope</label>
           ${scopeList(scopeItemsFor(null, new Set(a.scopeList)))}
+          <label>访问策略</label>
+          <select name="access_mode">
+            ${[['auto', '兼容模式(按勾选组决定)'], ['all', '所有用户'], ['groups', '仅指定组(空组禁止访问)'], ['deny', '禁止访问']].map(([value, label]) => `<option value="${value}"${(a.access_mode || 'auto') === value ? ' selected' : ''}>${label}</option>`).join('')}
+          </select>
           <label>可访问的权限组</label>
-          <p class="muted small" style="margin:0 0 var(--s1)">不勾选 = 不限制,所有用户都可访问;勾选后仅所属组被勾选的用户能发起授权。</p>
+          <p class="muted small" style="margin:0 0 var(--s1)">仅指定组模式下,不勾选任何组表示禁止访问;需要公开时请显式选择「所有用户」。</p>
           ${groupCheckboxList(allGroups, new Set(allowed), 'allowed_groups')}
           <label class="checkline"><input type="checkbox" name="pkce_required" value="1"${a.pkce_required ? ' checked' : ''}>
             <span>强制 PKCE</span></label>

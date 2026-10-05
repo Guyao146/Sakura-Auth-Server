@@ -1,6 +1,8 @@
 # SakuraID —— 类 authentik 的轻量 OAuth2 / OIDC 认证后台
 
-> 版本:`v0.7.0` · 零 npm 依赖 · Node.js ≥ 22.5 · SQLite 存储
+> 版本:`v1.6.0` · 零 npm 依赖 · Node.js ≥ 22.5 · SQLite 存储
+
+更新内容与升级注意事项见 [CHANGELOG](CHANGELOG.md)。
 
 SakuraID 是一个自托管的统一身份认证服务(IdP):业务系统统一跳转到这里登录,通过 OAuth 2.0 / OpenID Connect 拿回令牌访问各自的接口。定位对标 authentik 的核心子集——不过超大而全,只把「发令牌」这一件事做对。
 
@@ -29,7 +31,7 @@ node server.js
 
 数据备份:`npm run backup` —— 一键备份到 `data/backups/sakuraid-backup-<时间戳>/`(idp.sqlite 用 VACUUM INTO 产生一致性快照 + uploads/ 整目录 + meta.txt,可选打包 .tar.gz),默认保留最近 14 份(`BACKUP_KEEP` 环境变量可调);可在服务运行中执行。
 
-数据恢复:`npm run restore -- <备份目录或 .tar.gz> --force` —— 恢复前请先停止服务;不加 `--force` 仅打印提示,恢复前脚本会自动把现有 data 目录改名为 `data-before-restore-<时间戳>/` 防误操作。
+数据恢复:`npm run restore -- <备份目录或 .tar.gz> --force` —— 恢复前请先停止服务;不加 `--force` 不替换数据。脚本先复制到同文件系统的暂存目录并检查 SQLite 完整性,再将现有 data 目录改名为 `data-before-restore-<时间戳>/` 后切换;切换失败会尝试复位旧目录。支持恢复位于当前数据目录内的备份。仅恢复可信备份,旧数据及历史备份保留在改名后的目录中。
 
 ## 当前状态
 
@@ -65,7 +67,7 @@ node server.js
 | 流转 | 未登录访问首页跳登录页、登录后直达应用门户、已登录访问登录页跳门户 |
 | JSON API | /api/heartbeat 心跳(含版本/uptime/DB 探测)、/api/session 登录状态、/api/login 登录(支持 2FA)、/api/logout、/api/apps 可见应用、/api/sessions 会话列表与撤销、/api/registry 应用状态(令牌认证)。会话型写操作需带 `X-Requested-With: JSON` 头(防跨站纵深防御) |
 | 安全 | scrypt 口令哈希(异步并发限流)、CSRF 双提交、登录限流、授权码/刷新令牌哈希落库、授权码一次性、刷新令牌轮换与重放检测(全链作废)、改密/重置/禁用后统一凭据失效、防用户枚举(含登录耗时一致) |
-| 界面 | 配置向导、明暗双主题(跟随系统 + 手动切换)、樱落生态设计语言 |
+| 界面 | 配置向导、明暗双主题(跟随系统 + 手动切换)、樱落生态设计语言;无脚本手机菜单、键盘焦点与跳转正文、减少动画偏好、响应式登录及应用门户 |
 
 ## 架构
 
@@ -119,11 +121,17 @@ curl -s http://localhost:9000/token -d grant_type=authorization_code -d code=<CO
 curl -s http://localhost:9000/userinfo -H "Authorization: Bearer <ACCESS_TOKEN>"
 ```
 
-测试工具链:`npm run smoke` 会自动拉起独立实例,端到端验证向导、登录、两步验证(TOTP/恢复代码/管理员重置)、找回密码、自助注册、权限组与应用访问控制、授权码 + PKCE、刷新轮换、内省/吊销、client_credentials 与控制台权限、我的授权管理、应用门户、JSON API 套件、Microsoft 账号登录绑定、审计日志、应用元数据、注册表 API、会话管理、Logo 上传、审计导出与双部署方式;协议合规加固、WebAuthn/Passkey 无密码登录、备份恢复与运维工具、「关于我们」公开页配置(485 项断言);另有 `node scripts/test-qr.mjs`(QR 编码器 46 项)与 `node scripts/test-smtp.mjs`(SMTP 对话 9 项)两个单元测试。
+测试工具链:`npm run smoke` 会自动拉起独立实例,端到端验证向导、登录、两步验证(TOTP/恢复代码/管理员重置)、找回密码、自助注册、权限组与应用访问控制、授权码 + PKCE、刷新轮换、内省/吊销、client_credentials 与控制台权限、我的授权管理、应用门户、JSON API 套件、Microsoft 账号登录绑定、审计日志、应用元数据、注册表 API、会话管理、Logo 上传、审计导出与双部署方式;协议合规加固、WebAuthn/Passkey 无密码登录、备份恢复与运维工具、「关于我们」公开页配置(486 项断言);另有 `node scripts/test-qr.mjs`(QR 编码器 46 项)与 `node scripts/test-smtp.mjs`(SMTP 对话 9 项)两个单元测试。
 
 独立协议回归:`npm run test:oauth` 使用系统临时目录,验证 GET/POST PKCE 校验、授权错误回跳、OIDC at_hash、刷新元数据与 scope、JWT 边界、禁用用户令牌检查、审计上限和旧库迁移。CI 同时运行该回归与冒烟测试。冒烟测试也使用独立临时目录;并行执行时仍需用 `SMOKE_PORT` 错开端口。
 
-运维脚本:`npm run reset-admin -- <用户名> [新密码]`(直接重置管理员密码,用于忘记密码);`npm run seed-demo`(灌入演示用户与一个 PKCE 公开客户端)。首次部署自动进入配置向导(环境检测 → 站点/注册/SMTP → 管理员 → 完成);已初始化的实例可在控制台「配置向导」卡片重新运行,不影响已有用户与应用数据。
+独立安全回归:`npm run test:security` 使用临时数据库及独立 HTTP 子进程,覆盖异步认证竞态、MFA 中间态、会话撤销、刷新重放与签发事务回滚、权限组迁移、Passkey 用户验证/计数器、畸形 Cookie、CLI 改密与备份恢复。CI 同时运行协议、安全及冒烟测试。
+
+独立页面回归:`npm run test:views` 零依赖检查服务端生成的导航、权限入口、表单字段、Passkey 挂钩、多语言及可访问性标记,已纳入 CI。可选浏览器检查使用本机 Edge/Chrome(Chromium),通过 `BROWSER_PATH` 指定浏览器可执行文件的绝对路径,运行 `npm run test:views -- --browser`。它会启动仅监听本机随机端口的演示页面服务和临时浏览器配置,检查 320/390/768/1024/1440px 布局、明暗/自动主题及键盘操作,完成后清理;不会使用实际数据库或个人浏览器配置。设置 `UI_SCREENSHOT_DIR` 为绝对目录可保存截图。浏览器检查需要另行运行,不包含在默认 CI 中;这些检查不等同于完整的读屏器或跨浏览器可访问性审计。
+
+安全行为说明:撤销应用最后一个授权组后保持受限,不会自动向所有用户开放;Passkey 注册和登录要求认证器完成用户验证(PIN/生物识别等),仅支持用户在场、不支持 UV 的旧认证器将不能继续使用无密码登录。
+
+运维脚本:`npm run reset-admin -- <用户名> [新密码]`(直接重置管理员密码,并使该用户的会话、令牌、授权码和密码重置链接失效);`npm run seed-demo`(灌入演示用户与一个 PKCE 公开客户端)。首次部署自动进入配置向导(环境检测 → 站点/注册/SMTP → 管理员 → 完成);已初始化的实例可在控制台「配置向导」卡片重新运行,不影响已有用户与应用数据。
 
 ## 与生态其他项目的关系
 
@@ -157,4 +165,4 @@ curl -s http://localhost:9000/userinfo -H "Authorization: Bearer <ACCESS_TOKEN>"
 
 > 文档基于对应项目源码整理。实现变更后,以项目仓库、版本文件和 CHANGELOG 为最终依据。
 
-License: [MIT](./LICENSE)
+License: [Sakura-License-1.2](./LICENSE)

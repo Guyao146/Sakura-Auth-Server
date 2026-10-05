@@ -45,12 +45,8 @@ export function loginPage({ theme, siteName, csrf, next, err, username = '', all
   const L = normalizeLang(lang || currentLang());
   const rt = getRuntime();
   const showMs = msEnabled !== undefined ? !!msEnabled : !!(rt && rt.msOAuth && rt.msOAuth.enabled);
-  const divider = `
-      <div style="display:flex;align-items:center;gap:var(--s3);margin:var(--s4) 0 0">
-        <span style="flex:1;border-top:1px solid var(--border)"></span>
-        <span class="muted small">${esc(t(L, 'login.or'))}</span>
-        <span style="flex:1;border-top:1px solid var(--border)"></span>
-      </div>`;
+  const showUniLink = !!rt?.unilink?.enabled;
+  const divider = `<div class="login-divider">${esc(t(L, 'login.alternatives'))}</div>`;
   return brandPage({
     theme, siteName, lang: L, title: `${t(L, 'page.login')} · ${siteName}`,
     // 管理端配置了品牌口号时两页(登录/授权)统一使用;留空回退各页默认
@@ -66,27 +62,20 @@ export function loginPage({ theme, siteName, csrf, next, err, username = '', all
         ${hiddenInputs({ _csrf: csrf, next: next || '' })}
         <label for="username">${esc(t(L, 'login.username'))}</label>
         <input type="text" id="username" name="username" value="${esc(username)}" required autofocus autocomplete="username">
-        <label for="password">${esc(t(L, 'login.password'))}</label>
+        <div class="field-heading"><label for="password">${esc(t(L, 'login.password'))}</label>
+          <a href="/forgot-password">${esc(t(L, 'login.forgot'))}</a></div>
         <input type="password" id="password" name="password" required autocomplete="current-password">
         <div class="actions">
           <button class="btn btn-primary" type="submit">${esc(t(L, 'login.submit'))}</button>
         </div>
       </form>
-      ${showMs ? `${divider}
-      <div class="actions" style="margin-top:var(--s3)">
-        <a class="btn" href="/auth/microsoft" style="flex:1;justify-content:center;padding:var(--s3) var(--s4);font-size:15px">${MS_LOGO}${esc(t(L, 'login.ms'))}</a>
+      ${showMs || showPasskey || showUniLink ? `${divider}<div class="login-methods">
+        ${showPasskey ? `<button class="btn" type="button" id="passkey-login-btn" aria-describedby="passkey-status">${featIcon('<circle cx="5.5" cy="6" r="3"/><path d="m8 8 5 5m-2-2 2-2"/>')}${esc(t(L, 'login.passkey'))}</button>` : ''}
+        ${showMs ? `<a class="btn" href="/auth/microsoft">${MS_LOGO}${esc(t(L, 'login.ms'))}</a>` : ''}
+        ${showUniLink ? `<a class="btn" href="/auth/unilink?next=${encodeURIComponent(next || '/apps')}">${esc(t(L, 'login.unilink'))}</a>` : ''}
       </div>` : ''}
-      ${showPasskey ? `${divider}
-      <div class="actions" style="margin-top:var(--s3)">
-        <button class="btn" type="button" id="passkey-login-btn" style="flex:1;justify-content:center;padding:var(--s3) var(--s4);font-size:15px">${esc(t(L, 'login.passkey'))}</button>
-      </div>
-      <p class="muted small" id="passkey-status" role="status" style="margin:var(--s2) 0 0;min-height:1.4em"></p>` : ''}
-      ${rt?.unilink?.enabled ? `${divider}
-      <div class="actions" style="margin-top:var(--s3)">
-        <a class="btn" href="/auth/unilink?next=${encodeURIComponent(next || '/apps')}" style="flex:1;justify-content:center;padding:var(--s3) var(--s4);font-size:15px">使用 UniLink 手机扫码登录</a>
-      </div>` : ''}
-      <p class="muted small" style="margin:var(--s3) 0 0"><a href="/forgot-password">${esc(t(L, 'login.forgot'))}</a></p>
-      ${allowRegister ? `<p class="muted small" style="text-align:center;margin:var(--s4) 0 0">${esc(t(L, 'login.noAccount'))}<a href="/register${next ? `?next=${encodeURIComponent(next)}` : ''}">${esc(t(L, 'login.register'))}</a></p>` : ''}`,
+      ${showPasskey ? '<p class="login-status" id="passkey-status" role="status" aria-live="polite"></p>' : ''}
+      ${allowRegister ? `<p class="login-register">${esc(t(L, 'login.noAccount'))}<a href="/register${next ? `?next=${encodeURIComponent(next)}` : ''}">${esc(t(L, 'login.register'))}</a></p>` : ''}`,
   });
 }
 
@@ -101,6 +90,8 @@ export function registerPage({ theme, siteName, csrf, err, values = {}, next = '
     features: loginFeatures(L),
     content: `
       ${banner(err ? esc(err) : '', 'err')}
+      <h2 class="login-form-title">${esc(t(L, 'login.register'))}</h2>
+      <p class="login-form-sub muted small">${esc(t(L, 'register.sub'))}</p>
       <form method="post" action="/register">
         ${hiddenInputs({ _csrf: csrf, next: next || '' })}
         <label for="username">用户名</label>

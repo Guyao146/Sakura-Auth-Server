@@ -6,7 +6,7 @@ export const scopeItems = (scopeList) =>
   scopeList.map((id) => ({ id, desc: SCOPES[id] || id }));
 
 export const banner = (msg, type = '') =>
-  msg ? `<div class="banner ${type}">${msg}</div>` : '';
+  msg ? `<div class="banner ${type}" role="${type === 'err' ? 'alert' : 'status'}">${msg}</div>` : '';
 
 export const badge = (text, cls = '') => `<span class="badge ${cls}">${esc(text)}</span>`;
 

@@ -17,6 +17,7 @@ import { matchRoute, parseCookies, readBody, parseBody, sendHtml, sendJson, redi
 import { sha256hex, nowSec } from './src/core/crypto.js';
 import { registerRoutes } from './src/routes.js';
 import { setupGate } from './src/services/setup/wizard.js';
+import { requireCurrentSession } from './src/services/auth/state.js';
 import { forbidden } from './src/services/auth/login.js';
 import { themeFromCookies, langFromCookies } from './src/views/theme.js';
 import { errorPage } from './src/views/error.js';
@@ -127,6 +128,7 @@ const handleRequest = async (req, res) => {
         ctx.body = parseBody(raw, contentType);
       }
     }
+    if (ctx.session) requireCurrentSession(ctx, m.route.opts.auth === 'admin');
     await m.route.handler(ctx);
   } catch (err) {
     logger.error('请求处理异常', { path: url ? url.pathname : req.url, err: err.stack || String(err) });
@@ -153,8 +155,14 @@ const handleRequest = async (req, res) => {
 
 // 语言上下文:请求入口按 lang cookie 固定到整个请求生命周期(AsyncLocalStorage,zh 默认),
 // 视图函数经 currentLang() 读取,服务层无需逐层透传;保证默认语言下既有文案零回归。
-const server = (useTls ? https : http).createServer(serverOptions, (req, res) =>
-  runWithLang(langFromCookies(parseCookies(req.headers.cookie)), () => handleRequest(req, res)));
+const server = (useTls ? https : http).createServer(serverOptions, (req, res) => {
+  Promise.resolve().then(() => runWithLang(langFromCookies(parseCookies(req.headers.cookie)),
+    () => handleRequest(req, res))).catch((err) => {
+    logger.error('请求入口异常', { err: String(err) });
+    if (!res.headersSent) res.writeHead(500, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' });
+    res.end('Internal server error');
+  });
+});
 
 setInterval(() => {
   try { purgeExpired(); } catch (e) { logger.error('过期数据清理失败', { err: String(e) }); }

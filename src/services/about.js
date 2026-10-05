@@ -33,9 +33,9 @@ export function showAbout(ctx) {
 }
 
 /** GET /admin/about —— 内容编辑表单 */
-export function showAboutSettings(ctx, { err, msg } = {}) {
+export function showAboutSettings(ctx, { err = ctx.query.get('err'), msg = ctx.query.get('msg'), values } = {}) {
   const rt = getRuntime();
-  const about = rt.about;
+  const about = values || rt.about;
   const notice = msg ? `<div class="banner ok">${esc(msg)}</div>`
     : err ? `<div class="banner err">${esc(err)}</div>` : '';
   sendHtml(ctx.res, 200, adminPage({
@@ -61,8 +61,11 @@ export function saveAbout(ctx) {
   if (b._csrf !== ctx.session.csrf) {
     return redirect(ctx.res, '/admin/about?err=' + encodeURIComponent('页面已过期,请重试。'));
   }
-  const title = String(b.title || '').trim().slice(0, MAX_TITLE);
-  const content = String(b.content ?? '').slice(0, MAX_CONTENT);
+  const title = typeof b.title === 'string' ? b.title.trim() : '';
+  const content = typeof b.content === 'string' ? b.content.trim() : '';
+  if (title.length > MAX_TITLE || content.length > MAX_CONTENT) {
+    return showAboutSettings(ctx, { err: '标题或正文超出长度限制,未保存。', values: { title, content } });
+  }
   if (!title) {
     return redirect(ctx.res, '/admin/about?err=' + encodeURIComponent('标题不能为空。'));
   }

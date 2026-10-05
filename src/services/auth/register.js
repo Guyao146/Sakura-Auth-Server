@@ -92,10 +92,13 @@ export async function handleRegister(ctx) {
   if (b.password !== b.password2) {
     return rerender('两次输入的密码不一致。');
   }
+  const passwordHash = await hashPassword(b.password);
+  if (!getRuntime().allowRegister) return redirect(ctx.res, '/login');
+  if (users.byUsername(username)) return rerender('用户名已存在。');
   // 自助注册的账号永远不是管理员
   const user = users.create({
     username,
-    passwordHash: await hashPassword(b.password),
+    passwordHash,
     name: String(b.name || '').trim(),
     email: String(b.email || '').trim(),
     isAdmin: false,

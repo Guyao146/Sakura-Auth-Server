@@ -29,6 +29,7 @@ export async function probeOne(client) {
   const started = Date.now();
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(TIMEOUT_MS) });
+    if (res.body) await res.body.cancel();
     const entry = makeSnapshot(res.ok ? 'up' : 'down', { code: res.status, latencyMs: Date.now() - started });
     snapshots.set(client.client_id, entry);
     return entry;
@@ -39,7 +40,7 @@ export async function probeOne(client) {
   }
 }
 
-/** 探测全部应用(串行,单次 5s 超时),并清理已删除应用的快照条目。返回快照 Map。
+/** 探测全部应用(最多 4 路并发,单次 5s 超时),并清理已删除应用的快照条目。返回快照 Map。
  *  带运行守卫:应用多且大量离线时单轮可能超过 60s 间隔,防止轮次重叠堆积。 */
 let probing = false;
 
@@ -59,7 +60,10 @@ async function probeAllInner() {
   for (const id of [...snapshots.keys()]) {
     if (!alive.has(id)) snapshots.delete(id);
   }
-  for (const app of apps) await probeOne(app);
+  let cursor = 0;
+  await Promise.all(Array.from({ length: Math.min(4, apps.length) }, async () => {
+    while (cursor < apps.length) await probeOne(apps[cursor++]);
+  }));
   return snapshots;
 }
 

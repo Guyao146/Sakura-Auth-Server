@@ -4,6 +4,8 @@ import * as consents from '../../models/consents.js';
 import * as tokens from '../../models/tokens.js';
 import * as sessions from '../../models/sessions.js';
 import { hashPassword, verifyPassword } from '../../core/password.js';
+import { requireCurrentSession } from './state.js';
+import { transaction } from '../../core/db.js';
 import { invalidateUserCredentials } from './credentials.js';
 import { generateSecret, otpauthUri, verifyTotp } from '../../core/totp.js';
 import { qrSvg } from '../../core/qr.js';
@@ -59,9 +61,13 @@ export async function handleChangePassword(ctx) {
   if (password !== password2) {
     return showAccount(ctx, { err: '两次输入的新密码不一致。' });
   }
-  users.update(ctx.user.id, { passwordHash: await hashPassword(password) });
-  // 统一凭据失效:吊销令牌、删除未使用授权码、清除其它设备会话(保留当前会话)
-  invalidateUserCredentials(ctx.user.id, { keepSession: ctx.session.id_hash });
+  const passwordHash = await hashPassword(password);
+  transaction(() => {
+    requireCurrentSession(ctx);
+    users.update(ctx.user.id, { passwordHash });
+    invalidateUserCredentials(ctx.user.id, { keepSession: ctx.session.id_hash });
+  });
+  ctx.user = users.byId(ctx.user.id);
   record(ctx, 'account.password_changed');
   logger.info('用户修改了密码', { username: ctx.user.username });
   showAccount(ctx, { msg: '密码已修改,其它设备需要重新登录。' });
@@ -77,6 +83,7 @@ export async function startTwoFa(ctx) {
   if (typeof b.password !== 'string' || !(await verifyPassword(b.password, ctx.user.password_hash))) {
     return showAccount(ctx, { err: '当前密码不正确。' });
   }
+  requireCurrentSession(ctx);
   users.setTotpSecret(ctx.user.id, generateSecret());
   logger.info('开始设置两步验证', { username: ctx.user.username });
   ctx.user = users.byId(ctx.user.id); // 重读,让页面拿到刚生成的待确认密钥
@@ -108,6 +115,7 @@ export async function disableTwoFa(ctx) {
   if (typeof b.password !== 'string' || !(await verifyPassword(b.password, ctx.user.password_hash))) {
     return showAccount(ctx, { err: '当前密码不正确。' });
   }
+  requireCurrentSession(ctx);
   users.clearTotp(ctx.user.id);
   recovery.clearFor(ctx.user.id);
   record(ctx, 'account.2fa_disabled');

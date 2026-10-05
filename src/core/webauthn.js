@@ -5,7 +5,7 @@
  * - COSE EC2(P-256)公钥 → JWK,经 crypto.createPublicKey/crypto.verify 验签
  *
  * 旗标位按规范:UP=0x01(用户在场)、UV=0x04(已验证)、AT=0x40(带凭据数据)、ED=0x80(带扩展)。
- * authenticatorSelection.userVerification='preferred' 时认证器可跳过 UV,故服务端只强制 UP。
+ * 无密码登录必须由认证器完成用户验证(UV),注册与登录均强制 UP + UV。
  */
 import crypto from 'node:crypto';
 import { timingSafeEqStr } from './crypto.js';
@@ -125,6 +125,7 @@ export function parseAuthData(authData) {
     const { size } = cborDecodePrefix(buf.subarray(off)); // 扩展内容本服务不消费,仅按 CBOR 跳过
     off += size;
   }
+  if (off !== buf.length) throw fail('auth_data_invalid');
   return { rpIdHash, flags, signCount, attestedCredential, hasED: !!(flags & FLAG_ED) };
 }
 
@@ -158,7 +159,7 @@ function checkClientData(clientDataJSON, { expectedType, expectedChallenge, expe
   if (typeof cd.challenge !== 'string' || !timingSafeEqStr(cd.challenge, String(expectedChallenge || ''))) {
     throw fail('challenge_mismatch');
   }
-  if (cd.origin !== expectedOrigin) throw fail('origin_mismatch');
+  if (cd.origin !== expectedOrigin || cd.crossOrigin === true) throw fail('origin_mismatch');
   return cd;
 }
 
@@ -174,6 +175,7 @@ export function verifyAssertion({ credentialPublicKey, authenticatorData, client
   const authData = toBuf(authenticatorData);
   const parsed = parseAuthData(authData);
   if (!(parsed.flags & FLAG_UP)) throw fail('user_presence_required');
+  if (!(parsed.flags & FLAG_UV)) throw fail('user_verification_required');
   if (!parsed.rpIdHash.equals(crypto.createHash('sha256').update(rpId).digest())) {
     throw fail('rp_id_mismatch');
   }
@@ -199,6 +201,9 @@ export function parseAttestation({ attestationObject, clientDataJSON, expectedCh
   const att = cborDecode(toBuf(attestationObject));
   if (!att || typeof att !== 'object' || !Buffer.isBuffer(att.authData)) throw fail('attestation_invalid');
   const parsed = parseAuthData(att.authData);
+  if (!(parsed.flags & FLAG_UP)) throw fail('user_presence_required');
+  if (!(parsed.flags & FLAG_UV)) throw fail('user_verification_required');
+  if (!parsed.rpIdHash.equals(crypto.createHash('sha256').update(rpId).digest())) throw fail('rp_id_mismatch');
   if (!parsed.attestedCredential) throw fail('attested_credential_missing');
   const { attestedCredential: { credentialId, cosePublicKey, aaguid } } = parsed;
   const clientHash = crypto.createHash('sha256').update(cdBuf).digest();
@@ -232,5 +237,7 @@ export function parseAttestation({ attestationObject, clientDataJSON, expectedCh
   } else {
     throw fail('attestation_fmt_unsupported');
   }
+  coseToKeyObject(cosePublicKey);
+  if (!credentialId.length) throw fail('attested_credential_missing');
   return { credentialId, cosePublicKey, signCount: parsed.signCount, aaguid };
 }

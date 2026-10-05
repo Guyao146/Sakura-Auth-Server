@@ -1,3 +1,5 @@
+import { requireCurrentSession } from '../auth/state.js';
+
 import fs from 'node:fs';
 import * as users from '../../models/users.js';
 import * as settingsApi from '../../models/settings.js';
@@ -142,6 +144,7 @@ export function step2(ctx) {
 /** POST /setup/step3 —— 创建管理员并完成安装(库中已有账号时可跳过创建) */
 export async function step3(ctx) {
   const b = ctx.body || {};
+  if (!rerunGuardOk(ctx, b)) return redirect(ctx.res, '/setup');
   if (String(b.skip || '') === '1' && users.count() > 0) {
     updateRuntime({ setup_done: 1 }, settingsApi.setSetting);
     settingsApi.setSetting('setup_rerun', ''); // 向导完成,解除重跑守卫
@@ -160,7 +163,11 @@ export async function step3(ctx) {
   if (b.password !== b.password2) return showSetup(ctx, { err: '两次输入的密码不一致。', values });
   if (users.byUsername(username)) return showSetup(ctx, { err: '该用户名已存在。', values });
 
-  users.create({ username, passwordHash: await hashPassword(b.password), name: values.name, isAdmin: true });
+  const passwordHash = await hashPassword(b.password);
+  if (ctx.session) requireCurrentSession(ctx, true);
+  if (getRuntime().setupDone || !rerunGuardOk(ctx, b)) return redirect(ctx.res, '/');
+  if (users.byUsername(username)) return showSetup(ctx, { err: '该用户名已存在。', values });
+  users.create({ username, passwordHash, name: values.name, isAdmin: true });
   updateRuntime({ setup_done: 1 }, settingsApi.setSetting);
   settingsApi.setSetting('setup_rerun', ''); // 向导完成,解除重跑守卫
   logger.info('向导:初始化完成,管理员已创建', { username });

@@ -1,5 +1,9 @@
 data/
 .smoke-data/
+.debug*-data/
+.env
+.env.*
+!.env.example
 node_modules/
 *.log
 .wt/

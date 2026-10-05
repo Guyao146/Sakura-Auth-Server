@@ -4,9 +4,16 @@ import * as sessions from '../../models/sessions.js';
 import * as tokens from '../../models/tokens.js';
 import * as codes from '../../models/codes.js';
 
+import { getDb, transaction } from '../../core/db.js';
+import * as resets from '../../models/resets.js';
+
 export function invalidateUserCredentials(userId, { keepSession = null } = {}) {
-  if (keepSession) sessions.removeAllOther(userId, keepSession);
-  else sessions.removeByUser(userId);
-  tokens.revokeForUser(userId);
-  codes.removeForUser(userId);
+  transaction(() => {
+    getDb().prepare('UPDATE users SET credential_version = credential_version + 1 WHERE id = ?').run(userId);
+    if (keepSession) sessions.removeAllOther(userId, keepSession);
+    else sessions.removeByUser(userId);
+    tokens.revokeForUser(userId);
+    codes.removeForUser(userId);
+    resets.clearFor(userId);
+  });
 }

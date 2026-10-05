@@ -16,7 +16,7 @@ const launchStash = new Map();
 export function visibleApps(user) {
   const mine = new Set(groups.membersOf(user.id));
   return clients.list().map((c) => clients.withUris(c))
-    .filter((c) => !c.allowedGroupList.length || c.allowedGroupList.some((g) => mine.has(g)));
+    .filter((c) => clients.canAccess(c, [...mine]));
 }
 
 /** GET /apps */
@@ -56,12 +56,12 @@ export function launch(ctx) {
   // 普通用户或组名不存在时忽略该参数,照常执行组限制。
   let simGroup = '';
   const requested = ctx.query.get('sim_group');
-  if (requested && ctx.user.is_admin) simGroup = groups.byName(requested)?.name || '';
+  if (requested && ctx.user.is_admin && app.accessMode !== 'deny' && (app.accessMode === 'all' || app.allowedGroupList.length)) simGroup = groups.byName(requested)?.name || '';
   if (simGroup) {
     record(ctx, 'admin.simulate_launch', `应用「${app.name}」· 模拟组「${simGroup}」`);
   } else {
     const mine = groups.membersOf(ctx.user.id);
-    if (app.allowedGroupList.length && !app.allowedGroupList.some((g) => mine.includes(g))) {
+    if (!clients.canAccess(app, mine)) {
       return forbidden({ res: ctx.res, theme: ctx.theme, runtime: ctx.runtime, session: ctx.session, user: ctx.user },
         `应用「${app.name}」仅对特定权限组开放,你不在所需组内。`);
     }

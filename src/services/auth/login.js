@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import * as users from '../../models/users.js';
 import * as sessions from '../../models/sessions.js';
 import * as recovery from '../../models/recovery.js';
+import { freshIdentity } from './state.js';
 import { verifyUserPassword } from '../../core/password.js';
 import { randomToken, sha256hex, timingSafeEqStr, nowSec } from '../../core/crypto.js';
 import { verifyTotp } from '../../core/totp.js';
@@ -31,6 +32,9 @@ function failKey(ctx, username) {
 
 /** 惰性清理:删除已过锁定期的计数,并对 Map 硬上限兜底(防内存无限增长) */
 function pruneAttempts() {
+  const nowSecMs = Date.now();
+  for (const [ip, rec] of ipFails) if (nowSecMs - rec.first >= IP_WINDOW * 1000) ipFails.delete(ip);
+  while (ipFails.size > MAX_ATTEMPT_KEYS) ipFails.delete(ipFails.keys().next().value);
   if (attempts.size === 0) return;
   const now = Date.now();
   if (attempts.size > 64) {
@@ -82,21 +86,23 @@ const hmacKey = () => {
 };
 const b64u = (buf) => Buffer.from(buf).toString('base64url');
 
-function signPending(userId, ttl = 300) {
-  const payload = b64u(JSON.stringify({ uid: userId, exp: nowSec() + ttl }));
+function signPending(user, csrf, ttl = 300) {
+  const payload = b64u(JSON.stringify({ uid: user.id, version: user.credential_version, csrf, exp: nowSec() + ttl }));
   const sig = b64u(crypto.createHmac('sha256', hmacKey()).update(payload).digest());
   return `${payload}.${sig}`;
 }
 
 function verifyPending(token) {
   try {
-    const [payload, sig] = String(token || '').split('.');
+    const parts = String(token || '').split('.');
+    if (parts.length !== 2) return null;
+    const [payload, sig] = parts;
     if (!payload || !sig) return null;
     const expected = b64u(crypto.createHmac('sha256', hmacKey()).update(payload).digest());
     if (!timingSafeEqStr(sig, expected)) return null;
-    const { uid, exp } = JSON.parse(Buffer.from(payload, 'base64url').toString());
-    if (!uid || exp <= nowSec()) return null;
-    return uid;
+    const data = JSON.parse(Buffer.from(payload, 'base64url').toString());
+    if (!data.uid || !Number.isFinite(data.exp) || data.exp <= nowSec()) return null;
+    return data;
   } catch {
     return null;
   }
@@ -131,10 +137,10 @@ export async function handleLogin(ctx) {
     return showLogin(ctx, { err: '失败次数过多,请 1 分钟后再试。', username: body.username });
   }
   // 用户名不存在时也对占位哈希做一次完整 scrypt,避免通过响应快慢枚举用户名
-  const user = body.username ? users.byUsername(String(body.username)) : null;
-  // verifyUserPassword 内部对未知用户走占位哈希,消除存在性时序差异
+  let user = body.username ? users.byUsername(String(body.username)) : null;
   const passwordOk = await verifyUserPassword(user, body.password);
-  if (!passwordOk || (user && user.disabled)) {
+  user = freshIdentity(user);
+  if (!passwordOk || !user) {
     recordFail(ctx, body.username);
     logger.warn('登录失败', { username: String(body.username || '') });
     return showLogin(ctx, { err: '用户名或密码不正确。', username: body.username });
@@ -144,7 +150,7 @@ export async function handleLogin(ctx) {
   if (user.totp_enabled && user.totp_secret) {
     return sendHtml(ctx.res, 200, twofaPage({
       theme: ctx.theme, siteName: ctx.runtime.siteName,
-      csrf: cookieCsrf, pending: signPending(user.id), next,
+      csrf: cookieCsrf, pending: signPending(user, cookieCsrf), next,
       username: user.username,
     }));
   }
@@ -158,9 +164,10 @@ export function handleTwoFa(ctx) {
   if (!cookieCsrf || typeof b._csrf !== 'string' || b._csrf !== cookieCsrf) {
     return redirect(ctx.res, '/login');
   }
-  const uid = verifyPending(b.pending);
-  const user = uid ? users.byId(uid) : null;
-  if (!user || user.disabled || !user.totp_enabled || !user.totp_secret) {
+  const pending = verifyPending(b.pending);
+  const user = pending ? users.byId(pending.uid) : null;
+  if (!user || user.disabled || !user.totp_enabled || !user.totp_secret
+      || user.credential_version !== pending.version || pending.csrf !== cookieCsrf) {
     return redirect(ctx.res, '/login');
   }
   const next = safeNext(b.next, '');
@@ -175,7 +182,7 @@ export function handleTwoFa(ctx) {
     logger.warn('两步验证失败', { username: user.username });
     return sendHtml(ctx.res, 401, twofaPage({
       theme: ctx.theme, siteName: ctx.runtime.siteName,
-      csrf: cookieCsrf, pending: signPending(user.id), next,
+      csrf: cookieCsrf, pending: b.pending, next,
       username: user.username, err: '验证码不正确,请重试。',
     }));
   }

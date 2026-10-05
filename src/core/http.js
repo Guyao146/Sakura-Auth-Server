@@ -37,11 +37,14 @@ export function matchRoute(router, method, pathname) {
 /* ---------- 请求/响应原语 ---------- */
 
 export function parseCookies(header) {
-  const out = {};
-  if (!header) return out;
+  const out = Object.create(null);
+  if (typeof header !== 'string') return out;
   for (const part of header.split(';')) {
     const i = part.indexOf('=');
-    if (i > 0) out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+    if (i <= 0) continue;
+    const name = part.slice(0, i).trim();
+    try { out[name] = decodeURIComponent(part.slice(i + 1).trim()); }
+    catch { /* 非法百分号/UTF-8 cookie 单独丢弃,不得使整个服务退出 */ }
   }
   return out;
 }
