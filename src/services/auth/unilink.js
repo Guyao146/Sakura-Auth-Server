@@ -116,7 +116,7 @@ export async function callback(ctx) {
         code: ctx.query.get('code'), code_verifier: entry.verifier }) });
     const claims = verifyToken(tokens.id_token, await jsonRequest(`${c.issuer}/jwks`), c, entry.nonce);
     if (fingerprint(getRuntime().unilink) !== entry.config) return fail(ctx, '配置已变化，请重新扫码');
-    // sub 必须来自同一 SakuraID 实例的 /userinfo；无匹配则拒绝，绝不按邮箱猜测。
+    // sub 必须来自同一 Sakura-Auth-Server 实例的 /userinfo；无匹配则拒绝，绝不按邮箱猜测。
     const user = users.byId(claims.sub);
     if (!user || user.disabled) return fail(ctx, '用户不存在或已禁用', 403);
     if (user.totp_enabled) {
@@ -166,7 +166,7 @@ export function settingsPage(ctx, error = '') {
   return sendHtml(ctx.res, 200, adminPage({ theme: ctx.theme, siteName: ctx.runtime.siteName,
     user: ctx.user, cur: '/admin/unilink', title: 'UniLink 扫码登录', content: `
     <h2>UniLink 扫码登录</h2><p>${esc(error)}</p>
-    <p>仅连接使用本 SakuraID 作为身份服务的 UniLink 实例。二维码服务具有认证权限，请只配可信地址。</p>
+    <p>仅连接使用本 Sakura-Auth-Server 作为身份服务的 UniLink 实例。二维码服务具有认证权限，请只配可信地址。</p>
     <form method="post" action="/admin/unilink">${hiddenInputs({ _csrf: ctx.session.csrf })}
     <label><input type="checkbox" name="enabled" value="1"${c.enabled ? ' checked' : ''}>启用扫码登录</label>
     <label>UniLink 服务地址</label><input name="issuer" value="${esc(c.issuer)}" placeholder="https://gateway.example.com">

@@ -13,4 +13,5 @@ node_modules/
 *.key
 *.tar
 *.tar.gz
+*.tgz
 deploy/

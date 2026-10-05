@@ -1,6 +1,6 @@
 {
-  "name": "oauth2-idp",
-  "version": "1.6.0",
+  "name": "sakura-auth-server",
+  "version": "1.6.1",
   "private": true,
   "license": "Sakura-License-1.2",
   "type": "module",

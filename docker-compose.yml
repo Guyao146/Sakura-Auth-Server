@@ -1,4 +1,4 @@
-# SakuraID Docker Compose 部署
+# Sakura-Auth-Server Docker Compose 部署
 # 默认拉取官方镜像(路径 A);需要本地构建时见文件中部的 build 注释(路径 B)。
 # 环境变量完整清单与中文注释见项目根目录 .env.example(复制为 .env 后 compose 自动读取)。
 services:
@@ -40,7 +40,7 @@ services:
       # SMTP_PORT: 465
       # SMTP_USER: no-reply@example.com
       # SMTP_PASS: change-me
-      # SMTP_FROM: SakuraID <no-reply@example.com>
+      # SMTP_FROM: Sakura-Auth-Server <no-reply@example.com>
     volumes:
       # SQLite 数据、签名密钥都在这里,务必持久化;TLS 证书也可放 ./data/tls
       - ./data:/data

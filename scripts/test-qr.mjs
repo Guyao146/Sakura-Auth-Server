@@ -184,7 +184,7 @@ ok('V10 版本信息两份一致', vbits === readVersionBL(m10));
 ok('V10 版本信息 BCH 余数 0 且版本号 = 10', bch18Rem(vbits) === 0 && (vbits >>> 12) === 10);
 
 /* ---------- 确定性与区分度 ---------- */
-const URI = 'otpauth://totp/SakuraID:demo?secret=ABCDEF234567';
+const URI = 'otpauth://totp/Sakura-Auth-Server:demo?secret=ABCDEF234567';
 const again = qrMatrix(URI);
 ok('同输入两次生成矩阵完全一致(确定性)', eq(qrMatrix(URI).matrix, again.matrix));
 ok('不同输入矩阵不同', !eq(qrMatrix('SAKURA-A').matrix, qrMatrix('SAKURA-B').matrix));

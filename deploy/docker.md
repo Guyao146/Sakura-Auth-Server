@@ -1,6 +1,6 @@
 # Docker 部署(Docker Compose)
 
-> Wiki 文档版本:`v1.1.0` · 更新日期:`2026-10-01`(SakuraID 独立版本)
+> 适用版本:`v1.6.1` · 镜像平台:`linux/amd64` · Node 24 Alpine
 
 两条路径:优先**拉取官方镜像**(不依赖源码,升级只换镜像),拉不到镜像时用**本地构建**兜底。
 
@@ -23,8 +23,9 @@ docker compose pull && docker compose up -d
 | 项 | 说明 |
 | --- | --- |
 | 官方镜像 | `ghcr.io/guyao146/sakura-auth-server:latest` |
-| 自托管 registry / 锁定版本 | `.env` 里设 `SAKURAID_IMAGE=registry.example.com/sakuraid:v0.8.0` |
-| 拉取策略 | `pull_policy: missing`:本地已有该标签就不再拉取;要每次检查远端改为 `always` |
+| 锁定本次版本 | `.env` 里设 `SAKURAID_IMAGE=ghcr.io/guyao146/sakura-auth-server:1.6.1`(镜像标签不带 `v`) |
+| 构建平台 | `linux/amd64`;ARM64 尚未提供,请勿当作多架构镜像使用 |
+| 拉取策略 | `pull_policy: missing`:本地已有该标签就不再拉取;升级前显式执行 `docker compose pull` |
 
 ## 路径 B:本地构建(兜底)
 
@@ -93,19 +94,24 @@ ports:
 
 ## 升级与备份
 
-拉取部署的升级(数据在 `./data` 卷,不受影响):
+升级前先备份数据和部署配置。当前镜像不包含 `scripts/`,不能直接用 `docker compose exec` 运行 npm 备份脚本。对于默认的宿主机目录挂载,可在 Linux 宿主机的部署目录执行以下停服备份:
+
+```bash
+docker compose stop && tar -czf "sakuraid-data-$(date +%Y%m%d-%H%M%S).tgz" data/ && docker compose start
+```
+
+备份失败时命令不会继续启动服务;检查错误,确认旧数据完好后可执行 `docker compose start` 恢复服务。不要从运行中的 SQLite 只复制 `idp.sqlite`:未合并的 WAL 可能包含最新事务。另行安全备份 `.env`、Compose 文件及外部 TLS 证书,所有备份均按敏感数据保管。
+
+将 `.env` 的 `SAKURAID_IMAGE` 改为目标版本后升级:
 
 ```bash
 docker compose pull && docker compose up -d
+docker compose ps
 ```
 
-看到容器以新镜像重建并回到 `(healthy)` 即成功;本地构建部署则改用 `git pull && docker compose up -d --build`。备份只需打包数据目录:
+确认容器恢复 `(healthy)`,并通过 `/api/heartbeat` 核对版本;本地构建部署则使用更新后的源码重建。回滚时先评估数据库兼容性,不兼容迁移需要停服并恢复升级前数据;恢复会丢失备份后的数据,也可能回退密码和凭据撤销状态。
 
-```bash
-tar czf sakuraid-data-$(date +%F).tgz data/
-```
-
-看到压缩包里含 `idp.sqlite` 与密钥文件即完整。若容器日志报 `/data` 无写入权限,说明宿主机目录属主不对,执行 `chown -R 1000:1000 ./data`(容器内 node 用户 uid 1000)后 `docker compose restart`;也可改用命名卷 `sakuraid-data:/data` 规避属主问题。
+停服备份应包含完整 `data/`,其中 `idp.sqlite` 包含用户和签名密钥,`uploads/` 包含上传资源。若容器日志报 `/data` 无写入权限,在 Linux 宿主机执行 `chown -R 1000:1000 ./data`(容器内 node 用户 uid 1000)后 `docker compose restart`;也可改用命名卷 `sakuraid-data:/data`,但备份时必须针对该命名卷,不能套用上面的目录打包命令。
 
 ## 环境变量
 

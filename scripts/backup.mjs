@@ -82,7 +82,7 @@ const version = (() => {
   catch { return 'unknown'; }
 })();
 fs.writeFileSync(path.join(dest, 'meta.txt'), [
-  'SakuraID 备份',
+  'Sakura-Auth-Server 备份',
   `备份时间:${d.toISOString()}(本地 ${d.toLocaleString('zh-CN', { hour12: false })})`,
   `版本:${version}`,
   `Issuer:${issuer}`,

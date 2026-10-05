@@ -387,7 +387,7 @@ export function authPage({ theme, siteName, title, content, footer = true, wide 
     <div class="auth-brand">${brandMark(logoUrl, 30)}<div><h1>${esc(siteName)}</h1><div class="muted">${esc(t(L, 'brand.subtitle'))}</div></div></div>
     ${content}
   </div>
-  ${footer ? `<p class="auth-foot">SakuraID · ${esc(t(L, 'footer.powered'))}${aboutLink(L)}</p>` : ''}
+  ${footer ? `<p class="auth-foot">Sakura-Auth-Server · ${esc(t(L, 'footer.powered'))}${aboutLink(L)}</p>` : ''}
 </div></main>
 ${scriptTags(scripts)}
 </body></html>`;
@@ -423,7 +423,7 @@ export function brandPage({
   <main class="login-form" id="main-content" tabindex="-1"><div class="login-form-col${wide ? ' login-form-col-wide' : ''}">
     <div class="login-form-brand">${brandMark(logoUrl, 24)}<b>${esc(siteName)}</b></div>
     ${content}
-    ${footer ? `<p class="login-form-foot">SakuraID · ${themeToggle(theme, cur, L)} · ${langToggle(L, cur)}${aboutLink(L)}</p>` : ''}
+    ${footer ? `<p class="login-form-foot">Sakura-Auth-Server · ${themeToggle(theme, cur, L)} · ${langToggle(L, cur)}${aboutLink(L)}</p>` : ''}
   </div></main>
 </div>
 ${scriptTags(scripts)}

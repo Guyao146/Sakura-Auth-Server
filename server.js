@@ -1,5 +1,5 @@
 /**
- * SakuraID —— 类 authentik 的轻量 OAuth2 / OpenID Connect 认证服务。
+ * Sakura-Auth-Server —— 类 authentik 的轻量 OAuth2 / OpenID Connect 认证服务。
  * 入口:初始化(数据库 → 签名密钥 → 运行时配置)→ 组装请求管线 → 监听。
  */
 import http from 'node:http';

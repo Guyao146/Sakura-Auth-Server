@@ -2,9 +2,9 @@
 FROM node:24-alpine
 
 # OCI 标准标签:便于镜像仓库展示与来源追溯
-LABEL org.opencontainers.image.title="SakuraID" \
+LABEL org.opencontainers.image.title="Sakura-Auth-Server" \
       org.opencontainers.image.description="类 authentik 的轻量 OAuth2 / OpenID Connect 认证服务(零 npm 依赖)" \
-      org.opencontainers.image.source="https://github.com/sakura-eco/oauth2-idp" \
+      org.opencontainers.image.source="https://github.com/Guyao146/Sakura-Auth-Server" \
       org.opencontainers.image.licenses="Sakura-License-1.2" \
       org.opencontainers.image.vendor="Sakura Eco" \
       org.opencontainers.image.base.name="docker.io/library/node:24-alpine"

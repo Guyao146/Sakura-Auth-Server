@@ -1,10 +1,10 @@
-# SakuraID —— 类 authentik 的轻量 OAuth2 / OIDC 认证后台
+# Sakura-Auth-Server —— 类 authentik 的轻量 OAuth2 / OIDC 认证后台
 
-> 版本:`v1.6.0` · 零 npm 依赖 · Node.js ≥ 22.5 · SQLite 存储
+> 版本:`v1.6.1` · 零 npm 依赖 · Node.js ≥ 22.5(推荐 24 LTS) · SQLite 存储
 
-更新内容与升级注意事项见 [CHANGELOG](CHANGELOG.md)。
+[CI 状态](https://github.com/Guyao146/Sakura-Auth-Server/actions/workflows/ci.yml) · [GHCR 镜像](https://github.com/Guyao146/Sakura-Auth-Server/pkgs/container/sakura-auth-server) · [更新记录与升级注意事项](CHANGELOG.md)
 
-SakuraID 是一个自托管的统一身份认证服务(IdP):业务系统统一跳转到这里登录,通过 OAuth 2.0 / OpenID Connect 拿回令牌访问各自的接口。定位对标 authentik 的核心子集——不过超大而全,只把「发令牌」这一件事做对。
+Sakura-Auth-Server 是一个自托管的统一身份认证服务(IdP):业务系统统一跳转到这里登录,通过 OAuth 2.0 / OpenID Connect 拿回令牌访问各自的接口。定位对标 authentik 的核心子集——不过超大而全,只把「发令牌」这一件事做对。
 
 ## 快速开始
 
@@ -22,12 +22,55 @@ node server.js
 
 ## 部署
 
-两种官方部署方式:
+兼容说明:`SAKURAID_IMAGE`、`sakura-idp` / `sakuraid` 服务名、既有数据路径及 `sakuraid-backup-*` 备份前缀继续保留,避免升级时影响现有部署;项目名称统一为 **Sakura-Auth-Server**。实例的站点名称仍由配置向导或管理端定制,不会被本次更名覆盖。
 
-1. **Docker Compose(推荐)**:拉取官方镜像或本地构建,数据落在 `./data` 卷,升级只换镜像 —— 见 `deploy/docker.md`;
-2. **Node + systemd**:Ubuntu 上以 systemd 托管 Node 进程,开机自启、崩溃拉起 —— 见 `deploy/node.md`。
+支持 [Docker Compose](deploy/docker.md)、[Node + systemd](deploy/node.md) 和 [宝塔 PM2](deploy/baotao.md)。容器镜像基于 Node 24 Alpine,以非 root 的 `node` 用户(uid 1000)运行;当前 GHCR 构建平台为 **`linux/amd64`**,尚未提供 ARM64 镜像。
 
-宝塔面板(PM2)部署见 `deploy/baotao.md`;环境变量完整清单见 `.env.example`。
+### GHCR 镜像
+
+| 标签 | 用途 |
+| --- | --- |
+| `ghcr.io/guyao146/sakura-auth-server:1.6.1` | 本次正式版本,推荐部署时显式锁定 |
+| `ghcr.io/guyao146/sakura-auth-server:latest` | 滚动标签,随 `main` 或正式版本流水线更新 |
+| `ghcr.io/guyao146/sakura-auth-server:sha-<提交短哈希>` | 按源码提交追溯构建 |
+
+Git 标签使用 `v1.6.1`,镜像版本标签为 **`1.6.1`(不带 `v`)**。需要不可变引用时,使用镜像发布后的 `@sha256:...` 摘要。
+
+```bash
+docker pull ghcr.io/guyao146/sakura-auth-server:1.6.1
+```
+
+在源码目录复制配置样例(已有 `.env` 时不要覆盖):
+
+```bash
+cp .env.example .env
+```
+
+编辑 `.env`,将 `BASE_URL` 换成实际对外地址,并指定版本:
+
+```dotenv
+BASE_URL=https://sso.example.com
+SAKURAID_IMAGE=ghcr.io/guyao146/sakura-auth-server:1.6.1
+```
+
+首次本机试用可设 `BASE_URL=http://localhost:9000`;公网部署应使用 HTTPS 和正确的域名。然后启动:
+
+```bash
+docker compose pull
+docker compose up -d
+docker compose ps
+```
+
+浏览器访问对外地址的 `/setup` 完成初始化。`/healthz` 用于容器存活检查,`/api/heartbeat` 可核对运行版本。Compose 将宿主机 `data/` 挂载到 `/data`;若遇到写权限问题,按 [Docker 部署说明](deploy/docker.md)设置目录属主或改用命名卷。
+
+### 升级、备份与回滚
+
+1. 升级前备份数据和部署配置。Docker 部署应先停服再复制完整数据目录,详见 [升级与备份](deploy/docker.md#升级与备份);不要直接复制运行中的 SQLite 主文件。
+2. 修改 `.env` 的 `SAKURAID_IMAGE`,再执行 `docker compose pull && docker compose up -d`。
+3. 检查 `docker compose ps`、`/healthz` 和 `/api/heartbeat`。默认 `pull_policy: missing` 不会主动更新本地已有的 `latest`,因此升级时需要显式 `pull`。
+4. 回滚前先确认数据库兼容性;若新版本做过不兼容迁移,需停服并恢复升级前备份,不能只换旧镜像。恢复会丢失备份后的数据,也可能回退密码和凭据撤销状态。
+
+以下 npm 运维脚本在**源码目录**运行,要求可用的 Node.js 和正确的 `DATA_DIR`;当前精简运行时镜像不包含 `scripts/`,不能直接在容器内执行这些 npm 脚本。环境变量完整清单见 [.env.example](.env.example)。
 
 数据备份:`npm run backup` —— 一键备份到 `data/backups/sakuraid-backup-<时间戳>/`(idp.sqlite 用 VACUUM INTO 产生一致性快照 + uploads/ 整目录 + meta.txt,可选打包 .tar.gz),默认保留最近 14 份(`BACKUP_KEEP` 环境变量可调);可在服务运行中执行。
 
@@ -62,8 +105,8 @@ node server.js
 | 应用元数据 | 应用描述与 Logo(https)字段,门户磁贴/条状/同意页展示;应用详情「已授权用户」列表,可单独撤销某用户的授权与令牌 |
 | 品牌定制 | 管理端可视化配置:站点 Logo(上传/删除)、主题强调色(全站变量覆盖,防 CSS 注入)、品牌口号,保存即全站生效 |
 | 界面语言 | 简体中文 / English 切换(cookie + /-/lang/:code),登录/授权/门户/账号/控制台导航等高流量页面覆盖,缺词回退中文 |
-| Passkey | WebAuthn/Passkey 无密码登录:账号页注册凭据(上限 8 个),登录页一键登录;counter 防克隆、审计留痕;零依赖 CBOR/ES256 实现 |
-| 联邦登录 | Microsoft 账号 OIDC 登录与绑定:登录页一键登录、账号设置绑定/解绑、未绑定可关联本地账号或注册新号;管理端配置(client_id/secret/tenant) |
+| Passkey | WebAuthn/Passkey 无密码登录:账号页注册凭据(上限 8 个),要求 PIN/生物识别等用户验证(UV);检查非零 counter 的递增并支持双零计数器;零依赖 CBOR/ES256 实现 |
+| 联邦登录 | Microsoft 账号 OIDC 登录与绑定;UniLink 扫码登录,保留原授权目标并对已开启 TOTP 的账号继续执行第二因子验证 |
 | 流转 | 未登录访问首页跳登录页、登录后直达应用门户、已登录访问登录页跳门户 |
 | JSON API | /api/heartbeat 心跳(含版本/uptime/DB 探测)、/api/session 登录状态、/api/login 登录(支持 2FA)、/api/logout、/api/apps 可见应用、/api/sessions 会话列表与撤销、/api/registry 应用状态(令牌认证)。会话型写操作需带 `X-Requested-With: JSON` 头(防跨站纵深防御) |
 | 安全 | scrypt 口令哈希(异步并发限流)、CSRF 双提交、登录限流、授权码/刷新令牌哈希落库、授权码一次性、刷新令牌轮换与重放检测(全链作废)、改密/重置/禁用后统一凭据失效、防用户枚举(含登录耗时一致) |
@@ -81,12 +124,12 @@ node server.js
    introspect/discovery              src/services/setup
                                     配置向导(四步)
                ▼                         ▼                      ▼
-      src/models(7 张表的 CRUD)  ──▶  src/core(db/keys/jwt/password/http/config)
+      src/models(数据访问层)    ──▶  src/core(db/keys/jwt/password/http/config)
                ▼
       data/idp.sqlite(用户/应用/会话/授权码/令牌/同意/设置)
 ```
 
-视图层在 `src/views`,按樱落生态设计语言实现(明暗双 token、去边框靠明度差、轻投影、150–200ms 过渡),零 JavaScript、零外部字体。
+视图层在 `src/views`,使用服务端 HTML 渲染,按樱落生态设计语言实现明暗主题、轻投影和响应式布局,不依赖前端框架或外部字体。基础表单和手机菜单无需 JavaScript;Passkey、取色等增强交互使用项目内置脚本,并非所有页面都零脚本。
 
 ## 环境变量
 
@@ -105,29 +148,64 @@ node server.js
 
 ## 端到端示例(授权码 + PKCE)
 
+以下示例使用已配置的 **PKCE 公开客户端**。在 Linux/macOS shell 或 Windows Git Bash 中执行,替换 `app-xxx`、回调地址及 `<CODE>` / `<ACCESS_TOKEN>`;机密客户端还需按其认证方式提供客户端凭据。
+
 ```bash
-# 1. 生成 PKCE(Windows 用 Git Bash;Linux/macOS 相同)
-VERIFIER=$(head -c 48 /dev/urandom | base64url | tr -d '=')
-CHALLENGE=$(printf %s "$VERIFIER" | openssl sha256 -binary | base64 | tr '/+' '_-' | tr -d '=')
+# 1. 使用项目已要求的 Node.js 生成 PKCE 和随机 state
+VERIFIER=$(node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'))")
+CHALLENGE=$(node -e "console.log(require('node:crypto').createHash('sha256').update(process.argv[1]).digest('base64url'))" "$VERIFIER")
+STATE=$(node -e "console.log(require('node:crypto').randomBytes(24).toString('base64url'))")
 
-# 2. 浏览器打开授权端点(替换 client_id 与已注册的 redirect_uri)
-open "http://localhost:9000/authorize?client_id=app-xxx&redirect_uri=http%3A%2F%2Flocalhost%3A8080%2Fcb&response_type=code&scope=openid%20profile&state=xyz&code_challenge=$CHALLENGE&code_challenge_method=S256"
+# 2. 将输出的地址复制到浏览器(redirect_uri 必须与注册值一致)
+printf '%s\n' "http://localhost:9000/authorize?client_id=app-xxx&redirect_uri=http%3A%2F%2Flocalhost%3A8080%2Fcb&response_type=code&scope=openid%20profile&state=$STATE&code_challenge=$CHALLENGE&code_challenge_method=S256"
 
-# 3. 登录并同意后,用回调里的 code 换令牌
-curl -s http://localhost:9000/token -d grant_type=authorization_code -d code=<CODE> \
-  -d redirect_uri=http://localhost:8080/cb -d client_id=app-xxx -d code_verifier=$VERIFIER
+# 3. 登录同意后先校验回调 state 与 $STATE 一致,再用 code 换令牌
+curl -sS http://localhost:9000/token \
+  --data-urlencode 'grant_type=authorization_code' --data-urlencode 'code=<CODE>' \
+  --data-urlencode 'redirect_uri=http://localhost:8080/cb' \
+  --data-urlencode 'client_id=app-xxx' --data-urlencode "code_verifier=$VERIFIER"
 
 # 4. 携带 Bearer 访问用户信息
-curl -s http://localhost:9000/userinfo -H "Authorization: Bearer <ACCESS_TOKEN>"
+curl -sS http://localhost:9000/userinfo -H 'Authorization: Bearer <ACCESS_TOKEN>'
 ```
 
-测试工具链:`npm run smoke` 会自动拉起独立实例,端到端验证向导、登录、两步验证(TOTP/恢复代码/管理员重置)、找回密码、自助注册、权限组与应用访问控制、授权码 + PKCE、刷新轮换、内省/吊销、client_credentials 与控制台权限、我的授权管理、应用门户、JSON API 套件、Microsoft 账号登录绑定、审计日志、应用元数据、注册表 API、会话管理、Logo 上传、审计导出与双部署方式;协议合规加固、WebAuthn/Passkey 无密码登录、备份恢复与运维工具、「关于我们」公开页配置(486 项断言);另有 `node scripts/test-qr.mjs`(QR 编码器 46 项)与 `node scripts/test-smtp.mjs`(SMTP 对话 9 项)两个单元测试。
+## 测试与验证
 
-独立协议回归:`npm run test:oauth` 使用系统临时目录,验证 GET/POST PKCE 校验、授权错误回跳、OIDC at_hash、刷新元数据与 scope、JWT 边界、禁用用户令牌检查、审计上限和旧库迁移。CI 同时运行该回归与冒烟测试。冒烟测试也使用独立临时目录;并行执行时仍需用 `SMOKE_PORT` 错开端口。
+建议使用与 CI 相同的 Node.js 24,无需 `npm install`。
 
-独立安全回归:`npm run test:security` 使用临时数据库及独立 HTTP 子进程,覆盖异步认证竞态、MFA 中间态、会话撤销、刷新重放与签发事务回滚、权限组迁移、Passkey 用户验证/计数器、畸形 Cookie、CLI 改密与备份恢复。CI 同时运行协议、安全及冒烟测试。
+| 命令 | 覆盖范围 | 默认 CI |
+| --- | --- | --- |
+| `npm run smoke` | 486 项端到端断言:向导、认证、授权、管理、Passkey、品牌及备份恢复等 | 是 |
+| `npm run test:oauth` | 56 项 OAuth/OIDC、PKCE、刷新轮换、JWT 边界和旧库迁移检查 | 是 |
+| `npm run test:security` | 27 项认证竞态、凭据失效、权限组、Passkey 及运维安全回归 | 是 |
+| `npm run test:views` | 10 项 SSR 项目署名、导航、权限入口、表单、多语言和可访问性标记检查 | 是 |
+| `node scripts/test-qr.mjs` | QR 编码器,46 项 | 是 |
+| `node scripts/test-smtp.mjs` | SMTP 对话,9 项 | 是 |
+| `node scripts/test-ms.mjs` | Microsoft OIDC 本地模拟联邦,15 项 | 是 |
+| `npm run test:views -- --browser` | 共 64 项:SSR + Chromium 布局、主题及键盘检查 | 否,需本机浏览器 |
+| `node scripts/test-unilink.mjs` | 两个真实 HTTP 服务的隔离扫码联调 | 否,需 UniLink 源码及其 Python 依赖 |
 
-独立页面回归:`npm run test:views` 零依赖检查服务端生成的导航、权限入口、表单字段、Passkey 挂钩、多语言及可访问性标记,已纳入 CI。可选浏览器检查使用本机 Edge/Chrome(Chromium),通过 `BROWSER_PATH` 指定浏览器可执行文件的绝对路径,运行 `npm run test:views -- --browser`。它会启动仅监听本机随机端口的演示页面服务和临时浏览器配置,检查 320/390/768/1024/1440px 布局、明暗/自动主题及键盘操作,完成后清理;不会使用实际数据库或个人浏览器配置。设置 `UI_SCREENSHOT_DIR` 为绝对目录可保存截图。浏览器检查需要另行运行,不包含在默认 CI 中;这些检查不等同于完整的读屏器或跨浏览器可访问性审计。
+协议、安全和冒烟测试使用临时数据库,不读取生产数据。并行运行多份冒烟测试时,通过 `SMOKE_PORT` 错开端口。UniLink 联调通过 `UNILINK_SOURCE` 指定其 `auth-server` 绝对目录,通过 `PYTHON` 指定已安装该服务依赖的 Python 可执行文件。
+
+### 可选浏览器检查
+
+通过 `BROWSER_PATH` 指定本机 Edge/Chrome(Chromium)可执行文件的绝对路径。Windows PowerShell 示例:
+
+```powershell
+$env:BROWSER_PATH = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
+$env:UI_SCREENSHOT_DIR = Join-Path $env:TEMP 'sakura-ui-preview'
+npm.cmd run test:views -- --browser
+```
+
+测试启动只监听本机随机端口的演示页面服务和临时浏览器配置,检查 320/390/768/1024/1440px 布局、明暗/自动主题、禁用页面脚本后的手机菜单、跳转正文和表格滚动。浏览器配置会清理,可选的 `UI_SCREENSHOT_DIR` 截图目录会保留;不使用实际数据库或个人浏览器配置。这些检查不等同于真机、跨浏览器或完整读屏器可访问性审计。
+
+## 发布流程
+
+推送 `main` 或 `v*` 标签会触发 [GitHub Actions](https://github.com/Guyao146/Sakura-Auth-Server/actions/workflows/ci.yml):先运行默认回归,通过后构建并发布到 `ghcr.io/guyao146/sakura-auth-server`。拉取请求只执行测试,不发布镜像。
+
+发布前同步更新 `package.json`、README、CHANGELOG 和部署示例中的版本;使用新的附注 Git 标签,不要移动已发布标签。发布后应检查 Actions 结果、GHCR 镜像版本/提交标签及实际运行的 `/api/heartbeat`。当前仅构建 `linux/amd64`,本机没有 Docker 时可由该流水线完成镜像打包。
+
+## 安全与运维说明
 
 安全行为说明:撤销应用最后一个授权组后保持受限,不会自动向所有用户开放;Passkey 注册和登录要求认证器完成用户验证(PIN/生物识别等),仅支持用户在场、不支持 UV 的旧认证器将不能继续使用无密码登录。
 
@@ -145,8 +223,9 @@ curl -s http://localhost:9000/userinfo -H "Authorization: Bearer <ACCESS_TOKEN>"
 
 | 项 | 内容 |
 | --- | --- |
-| 项目名称 | SakuraID(`oauth2-idp`) |
-| 原始仓库 | `https://github.com/sakura-eco/oauth2-idp` |
+| 项目名称 | Sakura-Auth-Server(npm 标识:`sakura-auth-server`) |
+| 项目仓库 | `https://github.com/Guyao146/Sakura-Auth-Server` |
+| 上游来源 | `https://github.com/sakura-eco/oauth2-idp` |
 | 许可人 | 樱落生态(具体许可主体应由有权许可人填写确认) |
 | 适用文件 | 本仓库全部源码、文档与素材,即 `src/`、`server.js`、`scripts/`、`deploy/`、`README.md`、`LICENSE` 及 Dockerfile 等 |
 | 排除项 | 依赖与第三方内容保持其原始许可(本项目零 npm 依赖;Node.js 与 `node:sqlite` 属运行时,随其自身许可) |
@@ -159,7 +238,7 @@ curl -s http://localhost:9000/userinfo -H "Authorization: Bearer <ACCESS_TOKEN>"
 
 ## 安全边界(已知未实现)
 
-- 未内置 SAML、LDAP、社交登录等 authentik 高级流程(flows/表达式策略);找回密码依赖 SMTP 发信,未配置 SMTP 时邮件打到日志(开发模式);
+- 未内置 SAML、LDAP 或 authentik 的通用 flows/表达式策略;已实现的 Microsoft 与 UniLink 联邦入口见上文。找回密码依赖 SMTP 发信,未配置 SMTP 时邮件打到日志(开发模式);
 - SQLite 单写者,服务按单实例运行(PM2 配置已锁定);大规模并发建议评估外部数据库方案;
 - 反代部署时务必设置 `BASE_URL` 为 https 地址,会话 Cookie 会自动附加 `Secure`。
 

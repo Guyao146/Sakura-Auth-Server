@@ -1,6 +1,8 @@
 # Node 部署(systemd,Ubuntu 22.04)
 
-> Wiki 文档版本:`v1.0.0` · 更新日期:`2026-10-01`(SakuraID 独立版本)
+> 适用版本:`v1.6.1` · Sakura-Auth-Server · 推荐 Node.js 24
+
+为兼容既有部署,本文保留 `sakuraid` 系统账号、服务名及路径;它们是部署标识,不是项目名称。
 
 不用 Docker 时,用 systemd 托管 Node 进程:开机自启、崩溃自动拉起、日志进 journald。项目零 npm 依赖,全程无需 `npm install`。
 
@@ -33,7 +35,7 @@ node -v
 ```bash
 sudo useradd -r -s /usr/sbin/nologin sakuraid
 sudo mkdir -p /opt/sakuraid /var/lib/sakuraid
-sudo tar xzf oauth2-idp.tar.gz -C /opt/sakuraid     # 或 git clone / scp 上传整个项目
+sudo tar xzf Sakura-Auth-Server.tar.gz -C /opt/sakuraid # 使用内容位于归档根目录的源码包,或上传整个项目
 sudo chown -R sakuraid:sakuraid /opt/sakuraid /var/lib/sakuraid
 ```
 
@@ -45,7 +47,7 @@ sudo chown -R sakuraid:sakuraid /opt/sakuraid /var/lib/sakuraid
 
 ```ini
 [Unit]
-Description=SakuraID OAuth2/OIDC 认证服务
+Description=Sakura-Auth-Server OAuth2/OIDC 认证服务
 After=network-online.target
 Wants=network-online.target
 
@@ -108,18 +110,19 @@ systemctl status sakuraid
 
 ## 升级步骤
 
-覆盖代码并重启(数据在 `/var/lib/sakuraid`,不受影响)。
+升级前先备份数据与部署配置。以下示例保留现有 `/opt/sakuraid` 和 `/var/lib/sakuraid`,源码包需将程序文件放在归档根目录:
 
 ```bash
-sudo tar xzf oauth2-idp-new.tar.gz -C /opt/sakuraid
-sudo systemctl restart sakuraid
+sudo systemctl stop sakuraid && \
+  sudo tar czf "sakuraid-data-$(date +%Y%m%d-%H%M%S).tgz" -C /var/lib sakuraid && \
+  sudo tar xzf Sakura-Auth-Server-new.tar.gz -C /opt/sakuraid && \
+  sudo chown -R sakuraid:sakuraid /opt/sakuraid && \
+  sudo systemctl start sakuraid
 ```
 
-看到 `systemctl status sakuraid` 回到 `active (running)` 且 `journalctl -u sakuraid` 无报错即成功。备份只需打包数据目录:
+任一步失败都会停止后续操作;检查错误,必要时恢复备份和旧代码,确认无误后再启动服务。不要直接复制运行中的 SQLite 主文件;备份时也要保管好 systemd 单元、环境配置及外部证书。
 
-```bash
-sudo tar czf sakuraid-data-$(date +%F).tgz -C /var/lib sakuraid
-```
+升级后检查 `systemctl status sakuraid` 是否为 `active (running)`,通过 `journalctl -u sakuraid` 检查错误,并用 `/api/heartbeat` 核对版本。回滚须先确认旧程序能读取当前数据库;不兼容时需停服恢复升级前数据,并评估丢失新数据及回退凭据撤销状态的风险。
 
 > [!WARNING]
 > `/var/lib/sakuraid` 包含 RSA 签名私钥与全部用户数据,丢失后所有已签发令牌立即失效,请纳入备份。
@@ -128,7 +131,7 @@ sudo tar czf sakuraid-data-$(date +%F).tgz -C /var/lib sakuraid
 
 | 场景 | 放行 |
 | --- | --- |
-| 反代(Nginx/Caddy/宝塔) | 只放行 80/443,9000 仅监听本机 |
+| 反代(Nginx/Caddy/宝塔) | 只放行 80/443,用防火墙限制 9000,仅允许本机或可信反代访问 |
 | TLS 直连 | 放行 443 与(启用跳转时)80 |
 | 自定义端口 | 放行 `PORT` 对应端口 |
 

@@ -9,7 +9,7 @@ import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { bindSettings } from '../src/core/runtime.js';
 import { runWithLang } from '../src/core/i18n.js';
-import { adminPage, SAKURA_CSS } from '../src/views/layout.js';
+import { adminPage, authPage, brandPage, SAKURA_CSS } from '../src/views/layout.js';
 import { loginPage, registerPage, consentPage } from '../src/views/auth.js';
 import { dashboardPage, usersPage } from '../src/views/admin.js';
 import { portalPage } from '../src/views/portal.js';
@@ -47,6 +47,22 @@ const fixtures = {
 const render = (name, theme = 'day', lang = 'zh') => runWithLang(lang, () => fixtures[name]({ ...common, theme, lang }));
 let passed = 0;
 const check = async (name, fn) => { await fn(); passed++; console.log(`PASS ${name}`); };
+
+await check('项目署名为 Sakura-Auth-Server,保留自定义站点名和页脚开关', () => {
+  for (const lang of ['zh', 'en']) {
+    for (const name of ['login', 'register', 'consent', 'setup']) {
+      const html = render(name, 'day', lang);
+      assert.match(html, /<p class="(?:login-form-foot|auth-foot)">Sakura-Auth-Server · /);
+      assert.ok(html.includes(common.siteName));
+      assert.ok(!html.includes('SakuraID'));
+    }
+    for (const page of [authPage, brandPage]) {
+      const opts = { ...common, lang, title: 'Custom site', content: '<p>Content</p>', siteName: '团队 & Identity' };
+      assert.ok(page(opts).includes('团队 &amp; Identity'));
+      assert.ok(!page({ ...opts, footer: false }).includes('Sakura-Auth-Server'));
+    }
+  }
+});
 
 await check('手机菜单使用原生 details,与桌面共享导航及当前页标记', () => {
   const html = render('portal');

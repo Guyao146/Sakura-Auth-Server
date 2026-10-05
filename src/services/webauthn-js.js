@@ -5,7 +5,7 @@
  * - 账号页:#passkey-register-btn(按钮)、#passkey-name(备注输入)、#passkey-status(状态行)
  * 凭据删除为普通表单提交,不依赖本脚本。浏览器不支持 WebAuthn 时隐藏按钮并提示。
  */
-export const WEBAUTHN_JS = `/* SakuraID Passkey(WebAuthn)—— 零依赖,同源调用 */
+export const WEBAUTHN_JS = `/* Sakura-Auth-Server Passkey(WebAuthn)—— 零依赖,同源调用 */
 (function () {
   'use strict';
   var AJAX = { 'X-Requested-With': 'JSON' };
