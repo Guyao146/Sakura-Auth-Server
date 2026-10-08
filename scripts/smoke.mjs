@@ -2632,9 +2632,9 @@ async function main() {
 
     /* ---------- 备份与恢复(独立子进程跑脚本;restore 在临时 DATA_DIR 演练,不动 .smoke-data) ---------- */
     const backupsDir = path.join(DATA, 'backups');
-    const BACKUP_DIR_RE = /^sakuraid-backup-\d{8}-\d{6}(-\d+)?$/;
+    const BACKUP_DIR_RE = /^(?:sakuraid|sakura-auth-server)-backup-\d{8}-\d{6}(-\d+)?$/;
     const listBackupDirs = () => (fs.existsSync(backupsDir) ? fs.readdirSync(backupsDir).filter((n) => BACKUP_DIR_RE.test(n)).sort() : []);
-    const listBackupTars = () => (fs.existsSync(backupsDir) ? fs.readdirSync(backupsDir).filter((n) => /^sakuraid-backup-\d{8}-\d{6}(-\d+)?\.tar\.gz$/.test(n)).sort() : []);
+    const listBackupTars = () => (fs.existsSync(backupsDir) ? fs.readdirSync(backupsDir).filter((n) => /^(?:sakuraid|sakura-auth-server)-backup-\d{8}-\d{6}(-\d+)?\.tar\.gz$/.test(n)).sort() : []);
     const tarAvailable = spawnSync('tar', ['--version'], { encoding: 'utf8' }).status === 0;
     const runBackup = () => spawnSync(process.execPath, ['scripts/backup.mjs'], {
       cwd: ROOT, env: { ...process.env, DATA_DIR: DATA, BACKUP_KEEP: '2' }, encoding: 'utf8',
@@ -2660,6 +2660,9 @@ async function main() {
       `users=${snapInfo?.userCount}`);
     ok('备份:生成同名 .tar.gz(系统 tar 可用时)', !tarAvailable || listBackupTars().length === 1,
       `tars=${listBackupTars().length} tar=${tarAvailable}`);
+    ok('备份:目录采用 sakura-auth-server-backup-* 前缀(兼容历史 sakuraid-backup-*)',
+      listBackupDirs().length > 0 && listBackupDirs().every((n) => n.startsWith('sakura-auth-server-backup-')),
+      `dirs=${listBackupDirs().length}`);
 
     const b2 = runBackup();
     ok('备份:连跑两次生成两份备份', b2.status === 0 && listBackupDirs().length === 2, `dirs=${listBackupDirs().length}`);

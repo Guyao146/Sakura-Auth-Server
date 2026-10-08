@@ -1,5 +1,15 @@
 # 更新记录
 
+## 1.6.2
+
+### 部署标识统一为 Sakura-Auth-Server
+
+- Docker Compose 服务名与容器名改为 `sakura-auth-server`,镜像变量改名为 `SAKURA_AUTH_SERVER_IMAGE`;`.env` 中的旧变量 `SAKURAID_IMAGE` 需相应改名,未设置时默认 `ghcr.io/guyao146/sakura-auth-server:latest`。
+- systemd 账号、服务名与路径改为 `sakura-auth-server`(`/opt/sakura-auth-server`、`/var/lib/sakura-auth-server`);宝塔部署目录与 PM2 进程名改为 `/www/sakura-auth-server`、`sakura-auth-server`;三篇部署文档均附旧命名迁移步骤。
+- 备份目录前缀改为 `sakura-auth-server-backup-*`,备份与恢复脚本同时识别历史 `sakuraid-backup-*`;恢复脚本用法、临时目录与文档中的打包示例文件名一并更名。
+- GHCR 镜像地址不变(`ghcr.io/guyao146/sakura-auth-server`),镜像标题与许可证标签与 1.6.1 一致。
+- 本次不更改认证、授权逻辑或数据库结构。
+
 ## 1.6.1
 
 ### 文档、项目名称与镜像发布

@@ -1,7 +1,7 @@
 /**
  * 一键备份:npm run backup(或 node scripts/backup.mjs)
  *
- * 在 {DATA_DIR}/backups/ 下生成 sakuraid-backup-YYYYMMDD-HHmmss/:
+ * 在 {DATA_DIR}/backups/ 下生成 sakura-auth-server-backup-YYYYMMDD-HHmmss/（历史 sakuraid-backup-* 前缀同样纳入保留策略）:
  *   - idp.sqlite  用 `VACUUM INTO` 产生一致性快照(不是复制文件,规避 WAL 中间态;WAL/SHM 不带出)
  *   - uploads/    整目录复制(应用 Logo 等上传文件;目录不存在则跳过)
  *   - meta.txt    备份时间 / 版本(package.json)/ issuer / 站点名
@@ -39,8 +39,8 @@ const d = new Date();
 const stamp = `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}`;
 const backupsDir = path.join(DATA_DIR, 'backups');
 fs.mkdirSync(backupsDir, { recursive: true });
-let name = `sakuraid-backup-${stamp}`;
-for (let i = 2; fs.existsSync(path.join(backupsDir, name)); i++) name = `sakuraid-backup-${stamp}-${i}`;
+let name = `sakura-auth-server-backup-${stamp}`;
+for (let i = 2; fs.existsSync(path.join(backupsDir, name)); i++) name = `sakura-auth-server-backup-${stamp}-${i}`;
 const dest = path.join(backupsDir, name);
 fs.mkdirSync(dest);
 
@@ -109,7 +109,7 @@ try {
 }
 
 /* 5. 保留最近 KEEP 份:按名字倒序保留,超出的目录与同名 .tar.gz 一并删除 */
-const BASE_RE = /^sakuraid-backup-\d{8}-\d{6}(-\d+)?$/;
+const BASE_RE = /^(?:sakuraid|sakura-auth-server)-backup-\d{8}-\d{6}(-\d+)?$/;
 const names = fs.readdirSync(backupsDir)
   .filter((n) => BASE_RE.test(n))
   .sort()

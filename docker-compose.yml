@@ -2,16 +2,16 @@
 # 默认拉取官方镜像(路径 A);需要本地构建时见文件中部的 build 注释(路径 B)。
 # 环境变量完整清单与中文注释见项目根目录 .env.example(复制为 .env 后 compose 自动读取)。
 services:
-  sakura-idp:
+  sakura-auth-server:
     # 拉取优先:CI 会把镜像发布到 GHCR(ghcr.io/guyao146/sakura-auth-server),
-    # 地址可用 .env 里的 SAKURAID_IMAGE 覆盖(自托管 registry / 锁定版本)
-    image: ${SAKURAID_IMAGE:-ghcr.io/guyao146/sakura-auth-server:latest}
+    # 地址可用 .env 里的 SAKURA_AUTH_SERVER_IMAGE 覆盖(自托管 registry / 锁定版本)
+    image: ${SAKURA_AUTH_SERVER_IMAGE:-ghcr.io/guyao146/sakura-auth-server:latest}
     # 拉取策略:本地已有该标签就不再拉取;想让每次 up 都检查远端改为 always
     pull_policy: missing
     # 本地构建兜底(路径 B):注释掉上面的 image 行,再取消下面两行注释
     # build:
     #   context: .
-    container_name: sakura-idp
+    container_name: sakura-auth-server
     ports:
       # 宿主机端口:容器端口(容器内固定 9000,由 .env 的 PORT 控制宿主侧)
       - "${PORT:-9000}:9000"

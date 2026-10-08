@@ -1,6 +1,6 @@
 {
   "name": "sakura-auth-server",
-  "version": "1.6.1",
+  "version": "1.6.2",
   "private": true,
   "license": "Sakura-License-1.2",
   "type": "module",

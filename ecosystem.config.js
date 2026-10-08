@@ -2,7 +2,8 @@
 module.exports = {
   apps: [
     {
-      name: 'sakura-idp',
+      // 进程名统一为 sakura-auth-server;从 1.6.1 升级时先执行 pm2 delete sakura-idp
+      name: 'sakura-auth-server',
       script: 'server.js',
       cwd: __dirname,
       instances: 1,          // SQLite 单写者,保持单实例

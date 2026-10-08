@@ -1,8 +1,8 @@
 # 宝塔面板部署(Ubuntu)
 
-> 适用版本:`v1.6.1` · Sakura-Auth-Server
+> 适用版本:`v1.6.2` · Sakura-Auth-Server
 
-为兼容既有部署,本文保留 `/www/sakura-idp` 路径和 `sakura-idp` PM2 进程名。
+部署目录与 PM2 进程名统一为 `sakura-auth-server`(源码目录解压后即 `Sakura-Auth-Server`)。从 1.6.1 及更早版本升级时见文末「从旧版命名迁移」。
 
 宝塔部署分四步:装 Node → 起服务 → 建站反代 → 跑配置向导。全程不需要编译依赖,项目零 npm 包。
 
@@ -18,10 +18,10 @@ node -v
 
 ## 第 2 步:上传代码并启动
 
-把整个 `Sakura-Auth-Server` 目录上传到服务器,例如 `/www/sakura-idp`。
+把整个 `Sakura-Auth-Server` 目录上传到服务器,例如 `/www/sakura-auth-server`。
 
 ```bash
-cd /www/sakura-idp
+cd /www/sakura-auth-server
 node server.js
 ```
 
@@ -30,7 +30,7 @@ node server.js
 宝塔 →「软件商店」→ 安装「PM2 管理器」,然后:
 
 ```bash
-cd /www/sakura-idp
+cd /www/sakura-auth-server
 pm2 start ecosystem.config.js
 pm2 save
 ```
@@ -77,10 +77,23 @@ location / {
 ## 日常运维
 
 ```bash
-pm2 logs sakura-idp     # 看日志
-pm2 restart sakura-idp  # 重启
+pm2 logs sakura-auth-server     # 看日志
+pm2 restart sakura-auth-server  # 重启
 ```
 
-数据全部在 `/www/sakura-idp/data`(SQLite + 签名密钥),定期备份该目录即可。
+数据全部在 `/www/sakura-auth-server/data`(SQLite + 签名密钥),定期备份该目录即可。
+
+## 从旧版命名迁移(1.6.1 及更早)
+
+```bash
+pm2 delete sakura-idp
+sudo mv /www/sakura-idp /www/sakura-auth-server
+cd /www/sakura-auth-server
+git pull            # 或重新上传新版源码覆盖
+pm2 start ecosystem.config.js
+pm2 save
+```
+
+数据目录 `data/` 随项目目录一起移动,内容不变;宝塔反向代理仍指向 `http://127.0.0.1:9000`,无需改动。历史备份 `data/backups/sakuraid-backup-*` 仍可被恢复脚本识别。
 
 > 文档基于对应项目源码整理。实现变更后,以项目仓库、版本文件和 CHANGELOG 为最终依据。

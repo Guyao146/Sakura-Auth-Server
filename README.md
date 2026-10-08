@@ -1,6 +1,6 @@
 # Sakura-Auth-Server —— 类 authentik 的轻量 OAuth2 / OIDC 认证后台
 
-> 版本:`v1.6.1` · 零 npm 依赖 · Node.js ≥ 22.5(推荐 24 LTS) · SQLite 存储
+> 版本:`v1.6.2` · 零 npm 依赖 · Node.js ≥ 22.5(推荐 24 LTS) · SQLite 存储
 
 [CI 状态](https://github.com/Guyao146/Sakura-Auth-Server/actions/workflows/ci.yml) · [GHCR 镜像](https://github.com/Guyao146/Sakura-Auth-Server/pkgs/container/sakura-auth-server) · [更新记录与升级注意事项](CHANGELOG.md)
 
@@ -22,7 +22,7 @@ node server.js
 
 ## 部署
 
-兼容说明:`SAKURAID_IMAGE`、`sakura-idp` / `sakuraid` 服务名、既有数据路径及 `sakuraid-backup-*` 备份前缀继续保留,避免升级时影响现有部署;项目名称统一为 **Sakura-Auth-Server**。实例的站点名称仍由配置向导或管理端定制,不会被本次更名覆盖。
+命名说明:自 `v1.6.2` 起,部署标识统一为 **Sakura-Auth-Server** —— Compose 服务与容器名、systemd 账号/服务/路径、宝塔目录与 PM2 进程名均为 `sakura-auth-server`,镜像变量为 `SAKURA_AUTH_SERVER_IMAGE`,备份前缀为 `sakura-auth-server-backup-*`。从 1.6.1 升级时:`.env` 里的 `SAKURAID_IMAGE` 需改名为 `SAKURA_AUTH_SERVER_IMAGE`(旧容器 `sakura-idp` 先 `docker compose down` 移除,迁移步骤见 [Docker 部署](deploy/docker.md)、[Node 部署](deploy/node.md)、[宝塔部署](deploy/baotao.md));历史备份目录 `sakuraid-backup-*` 恢复脚本仍兼容,无需改名。实例的站点名称由配置向导或管理端定制,不受更名影响。
 
 支持 [Docker Compose](deploy/docker.md)、[Node + systemd](deploy/node.md) 和 [宝塔 PM2](deploy/baotao.md)。容器镜像基于 Node 24 Alpine,以非 root 的 `node` 用户(uid 1000)运行;当前 GHCR 构建平台为 **`linux/amd64`**,尚未提供 ARM64 镜像。
 
@@ -30,14 +30,14 @@ node server.js
 
 | 标签 | 用途 |
 | --- | --- |
-| `ghcr.io/guyao146/sakura-auth-server:1.6.1` | 本次正式版本,推荐部署时显式锁定 |
+| `ghcr.io/guyao146/sakura-auth-server:1.6.2` | 本次正式版本,推荐部署时显式锁定 |
 | `ghcr.io/guyao146/sakura-auth-server:latest` | 滚动标签,随 `main` 或正式版本流水线更新 |
 | `ghcr.io/guyao146/sakura-auth-server:sha-<提交短哈希>` | 按源码提交追溯构建 |
 
-Git 标签使用 `v1.6.1`,镜像版本标签为 **`1.6.1`(不带 `v`)**。需要不可变引用时,使用镜像发布后的 `@sha256:...` 摘要。
+Git 标签使用 `v1.6.2`,镜像版本标签为 **`1.6.2`(不带 `v`)**。需要不可变引用时,使用镜像发布后的 `@sha256:...` 摘要。
 
 ```bash
-docker pull ghcr.io/guyao146/sakura-auth-server:1.6.1
+docker pull ghcr.io/guyao146/sakura-auth-server:1.6.2
 ```
 
 在源码目录复制配置样例(已有 `.env` 时不要覆盖):
@@ -50,7 +50,7 @@ cp .env.example .env
 
 ```dotenv
 BASE_URL=https://sso.example.com
-SAKURAID_IMAGE=ghcr.io/guyao146/sakura-auth-server:1.6.1
+SAKURA_AUTH_SERVER_IMAGE=ghcr.io/guyao146/sakura-auth-server:1.6.2
 ```
 
 首次本机试用可设 `BASE_URL=http://localhost:9000`;公网部署应使用 HTTPS 和正确的域名。然后启动:
@@ -66,13 +66,13 @@ docker compose ps
 ### 升级、备份与回滚
 
 1. 升级前备份数据和部署配置。Docker 部署应先停服再复制完整数据目录,详见 [升级与备份](deploy/docker.md#升级与备份);不要直接复制运行中的 SQLite 主文件。
-2. 修改 `.env` 的 `SAKURAID_IMAGE`,再执行 `docker compose pull && docker compose up -d`。
+2. 修改 `.env` 的 `SAKURA_AUTH_SERVER_IMAGE`,再执行 `docker compose pull && docker compose up -d`。
 3. 检查 `docker compose ps`、`/healthz` 和 `/api/heartbeat`。默认 `pull_policy: missing` 不会主动更新本地已有的 `latest`,因此升级时需要显式 `pull`。
 4. 回滚前先确认数据库兼容性;若新版本做过不兼容迁移,需停服并恢复升级前备份,不能只换旧镜像。恢复会丢失备份后的数据,也可能回退密码和凭据撤销状态。
 
 以下 npm 运维脚本在**源码目录**运行,要求可用的 Node.js 和正确的 `DATA_DIR`;当前精简运行时镜像不包含 `scripts/`,不能直接在容器内执行这些 npm 脚本。环境变量完整清单见 [.env.example](.env.example)。
 
-数据备份:`npm run backup` —— 一键备份到 `data/backups/sakuraid-backup-<时间戳>/`(idp.sqlite 用 VACUUM INTO 产生一致性快照 + uploads/ 整目录 + meta.txt,可选打包 .tar.gz),默认保留最近 14 份(`BACKUP_KEEP` 环境变量可调);可在服务运行中执行。
+数据备份:`npm run backup` —— 一键备份到 `data/backups/sakura-auth-server-backup-<时间戳>/`(idp.sqlite 用 VACUUM INTO 产生一致性快照 + uploads/ 整目录 + meta.txt,可选打包 .tar.gz),默认保留最近 14 份(`BACKUP_KEEP` 环境变量可调);可在服务运行中执行。
 
 数据恢复:`npm run restore -- <备份目录或 .tar.gz> --force` —— 恢复前请先停止服务;不加 `--force` 不替换数据。脚本先复制到同文件系统的暂存目录并检查 SQLite 完整性,再将现有 data 目录改名为 `data-before-restore-<时间戳>/` 后切换;切换失败会尝试复位旧目录。支持恢复位于当前数据目录内的备份。仅恢复可信备份,旧数据及历史备份保留在改名后的目录中。
 
@@ -175,7 +175,7 @@ curl -sS http://localhost:9000/userinfo -H 'Authorization: Bearer <ACCESS_TOKEN>
 
 | 命令 | 覆盖范围 | 默认 CI |
 | --- | --- | --- |
-| `npm run smoke` | 486 项端到端断言:向导、认证、授权、管理、Passkey、品牌及备份恢复等 | 是 |
+| `npm run smoke` | 487 项端到端断言:向导、认证、授权、管理、Passkey、品牌及备份恢复等 | 是 |
 | `npm run test:oauth` | 56 项 OAuth/OIDC、PKCE、刷新轮换、JWT 边界和旧库迁移检查 | 是 |
 | `npm run test:security` | 27 项认证竞态、凭据失效、权限组、Passkey 及运维安全回归 | 是 |
 | `npm run test:views` | 10 项 SSR 项目署名、导航、权限入口、表单、多语言和可访问性标记检查 | 是 |

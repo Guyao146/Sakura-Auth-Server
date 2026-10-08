@@ -320,7 +320,7 @@ try {
     assert.equal(await pw.verifyPassword('CLI-new-password-123', users.byId(u.id).password_hash), true);
   });
   await check('备份在目标目录内也能恢复,损坏备份不会改动旧数据', () => {
-    const target = path.join(temp, 'restore-target'), source = path.join(target, 'backups', 'sakuraid-backup-test');
+    const target = path.join(temp, 'restore-target'), source = path.join(target, 'backups', 'sakura-auth-server-backup-test');
     fs.mkdirSync(path.join(source, 'uploads'), { recursive: true });
     db.exec(`VACUUM INTO '${path.join(source, 'idp.sqlite').replaceAll("'", "''")}'`);
     fs.writeFileSync(path.join(source, 'uploads', 'sample.txt'), 'snapshot-upload');

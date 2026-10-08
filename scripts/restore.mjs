@@ -24,7 +24,7 @@ const usage = () => {
   console.log([
     '用法:node scripts/restore.mjs <备份目录或 .tar.gz> [--force]',
     '',
-    '  <备份目录或 .tar.gz>  data/backups/ 下的 sakuraid-backup-* 目录或同名 .tar.gz',
+    '  <备份目录或 .tar.gz>  data/backups/ 下的 sakura-auth-server-backup-* 目录或同名 .tar.gz（历史 sakuraid-backup-* 同样兼容）',
     '  --force              确认已停止服务并覆盖现有数据(不加则仅打印提示不执行)',
     '',
     '说明:恢复前会把现有数据目录整体改名为 {DATA_DIR}-before-restore-<时间戳>/ 作为自动备份;',
@@ -44,7 +44,11 @@ const force = args.includes('--force');
 const target = args.find((a) => !a.startsWith('--'));
 if (!target) die('请指定备份目录或 .tar.gz 文件(见 --help)。');
 
-/* ---------- 定位备份源:目录 / tar.gz / 目录内嵌 sakuraid-backup 子目录 ---------- */
+/* 历史前缀 sakuraid-backup-* 与当前前缀 sakura-auth-server-backup-* 均视为有效备份目录名 */
+const BACKUP_NAME_RE = /^(?:sakuraid|sakura-auth-server)-backup-\d{8}-\d{6}(-\d+)?$/;
+const isBackupName = (n) => BACKUP_NAME_RE.test(n);
+
+/* ---------- 定位备份源:目录 / tar.gz / 目录内嵌备份子目录 ---------- */
 const sourceRaw = path.resolve(target);
 if (!fs.existsSync(sourceRaw)) die(`备份不存在:${sourceRaw}`);
 
@@ -54,7 +58,7 @@ let source = sourceRaw; // 实际包含 idp.sqlite 的目录
 try {
   if (fs.statSync(sourceRaw).isFile()) {
     if (!/\.tar\.gz$/.test(sourceRaw)) die('仅支持备份目录或 .tar.gz 文件(见 --help)。');
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sakuraid-restore-'));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sakura-auth-server-restore-'));
     try {
       execFileSync('tar', ['-xzf', sourceRaw, '-C', tmpDir], { stdio: 'pipe' });
     } catch {
@@ -66,12 +70,12 @@ try {
       }
     }
     const entries = fs.readdirSync(tmpDir);
-    // 标准备份 tar 解出单个 sakuraid-backup-*/ 目录;兼容直接把目录内容打包(顶层即 idp.sqlite)的情形
-    const inner = entries.find((n) => n.startsWith('sakuraid-backup-') && fs.statSync(path.join(tmpDir, n)).isDirectory());
+    // 标准备份 tar 解出单个备份目录;兼容直接把目录内容打包(顶层即 idp.sqlite)的情形
+    const inner = entries.find((n) => isBackupName(n) && fs.statSync(path.join(tmpDir, n)).isDirectory());
     source = inner ? path.join(tmpDir, inner) : tmpDir;
   } else if (!fs.existsSync(path.join(sourceRaw, 'idp.sqlite'))) {
     const inner = fs.readdirSync(sourceRaw)
-      .filter((n) => n.startsWith('sakuraid-backup-') && fs.existsSync(path.join(sourceRaw, n, 'idp.sqlite')))
+      .filter((n) => isBackupName(n) && fs.existsSync(path.join(sourceRaw, n, 'idp.sqlite')))
       .sort()
       .pop();
     if (inner) source = path.join(sourceRaw, inner);
