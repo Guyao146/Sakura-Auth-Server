@@ -1,5 +1,8 @@
 # Sakura-Auth-Server —— 类 authentik 的轻量 OAuth2 / OIDC 认证后台
 
+[![樱落生态成员](https://raw.githubusercontent.com/Guyao146/Sakura-EcoSystem-wiki/main/assets/ConnectEcoSystem.svg)](https://mcylyr.cn)
+[![已编写Wiki](https://raw.githubusercontent.com/Guyao146/Sakura-EcoSystem-wiki/main/assets/sakura-wiki.svg)](https://wiki.mcylyr.cn/)
+
 > 版本:`v1.6.2` · 零 npm 依赖 · Node.js ≥ 22.5(推荐 24 LTS) · SQLite 存储
 
 [CI 状态](https://github.com/Guyao146/Sakura-Auth-Server/actions/workflows/ci.yml) · [GHCR 镜像](https://github.com/Guyao146/Sakura-Auth-Server/pkgs/container/sakura-auth-server) · [更新记录与升级注意事项](CHANGELOG.md)
