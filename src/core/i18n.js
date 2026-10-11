@@ -47,6 +47,7 @@ const zh = {
   'nav.skip': '跳转到主要内容',
   'login.alternatives': '其他登录方式',
   'login.unilink': '使用 UniLink 手机扫码登录',
+  'login.google': '使用 Google 账号登录',
   'register.sub': '创建你的统一账号,开始访问已授权的应用。',
   'portal.emptyTitle': '应用即将从这里出发',
   'portal.emptyAction': '管理应用',
@@ -142,6 +143,20 @@ const zh = {
   'account.currentPassword': '当前密码',
   'account.newPassword': '新密码(至少 8 位)',
   'account.confirmNewPassword': '确认新密码',
+
+  /* ---- 登录页 Google One-Tap 气泡 ---- */
+  'gtap.title': '使用 Google 账号登录',
+  'gtap.sub': '本站支持 Google 账号,点一下继续,无需输入密码。',
+  'gtap.continue': '使用 Google 账号继续',
+  'gtap.usePassword': '使用账号密码登录',
+
+  /* ---- Google 绑定 ---- */
+  'google.title': 'Google 账号',
+  'google.boundEmail': '绑定邮箱',
+  'google.unbindHint': '解绑后将无法继续使用该 Google 账号登录本站。',
+  'google.unbind': '解绑 Google 账号',
+  'google.bindHint': '绑定后,可以使用 Google 账号一键登录,无需再输入本站密码。',
+  'google.bind': '绑定 Google 账号',
 
   /* ---- Microsoft 绑定 ---- */
   'ms.title': 'Microsoft 账号',
@@ -287,6 +302,7 @@ const en = {
   'nav.skip': 'Skip to main content',
   'login.alternatives': 'Other ways to sign in',
   'login.unilink': 'Sign in with UniLink QR code',
+  'login.google': 'Sign in with Google',
   'register.sub': 'Create your account to access the apps available to you.',
   'portal.emptyTitle': 'Your apps start here',
   'portal.emptyAction': 'Manage apps',
@@ -378,6 +394,19 @@ const en = {
   'account.confirmNewPassword': 'Confirm new password',
 
   'ms.title': 'Microsoft account',
+
+  /* ---- 登录页 Google One-Tap 气泡 / Google 绑定 ---- */
+  'gtap.title': 'Sign in with Google',
+  'gtap.sub': 'This site supports Google accounts — continue in one click, no password needed.',
+  'gtap.continue': 'Continue with Google',
+  'gtap.usePassword': 'Use your account password',
+  'google.title': 'Google account',
+  'google.boundEmail': 'Linked email',
+  'google.unbindHint': 'After unbinding, this Google account can no longer be used to sign in here.',
+  'google.unbind': 'Unbind Google account',
+  'google.bindHint': 'Once linked, you can sign in with your Google account without typing your password here.',
+  'google.bind': 'Link Google account',
+
   'ms.boundEmail': 'Linked email',
   'ms.unbindHint': 'After unbinding, this Microsoft account can no longer be used to sign in here.',
   'ms.unbind': 'Unbind Microsoft account',

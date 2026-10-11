@@ -142,10 +142,11 @@ export function groupDetailPage({ theme, siteName, user, cur, group, members = [
 }
 
 /* ---------------- 控制台首页(仅页头/统计/卡片标题/按钮接入 i18n,深度表单保持中文) ---------------- */
-export function dashboardPage({ theme, siteName, user, cur, stats, issuer, allowRegister, csrf, msg, err, msOAuth = {}, lang,
+export function dashboardPage({ theme, siteName, user, cur, stats, issuer, allowRegister, csrf, msg, err, msOAuth = {}, googleOAuth = {}, lang,
   brandLogoUrl = '', brandAccent = '', brandTagline = '' }) {
   const L = normalizeLang(lang || currentLang());
   const ms = { enabled: false, clientId: '', clientSecret: '', tenant: 'common', redirectUri: '', ...msOAuth };
+  const g = { enabled: false, clientId: '', clientSecret: '', authority: '', tokenEndpoint: '', jwksUri: '', redirectUri: '', ...googleOAuth };
   return adminPage({
     theme, siteName, user, cur, active: 'dashboard', lang: L, title: `${t(L, 'nav.dashboard')} · ${siteName}`,
     content: `
@@ -231,6 +232,36 @@ export function dashboardPage({ theme, siteName, user, cur, stats, issuer, allow
             placeholder="${ms.clientSecret ? '留空则保留已保存的密钥' : 'Microsoft 应用的客户端密钥'}">
           ${kvRow('回调地址', ms.redirectUri ? esc(ms.redirectUri) : '-')}
           <div class="actions"><button class="btn btn-primary" type="submit">保存 Microsoft 登录设置</button></div>
+        </form>
+      </div>
+      <div class="card">
+        <h3 style="margin-top:0">Google 登录</h3>
+        <p class="small" style="margin:var(--s2) 0">当前状态:${g.enabled ? badge('已启用') : badge('未启用', '')}</p>
+        <p class="muted small">启用后,登录页上方出现 Google 账号一键登录气泡;未绑定的 Google 身份可在首次登录时关联已有本地账号或注册新号。需先在 Google Cloud Console 创建 OAuth 凭据(Web 应用类型),并把下方回调地址加入「已授权的重定向 URI」。</p>
+        <form method="post" action="/admin/google-oauth">
+          ${hiddenInputs({ _csrf: csrf })}
+          <label class="checkline"><input type="checkbox" name="google_enabled" value="1"${g.enabled ? ' checked' : ''}>
+            <span>启用 Google 账号登录<span class="muted">气泡按钮使用 Google 品牌四色 G 标,无外部资源引用</span></span></label>
+          <div class="grid2">
+            <div><label>Client ID</label>
+              <input type="text" name="google_client_id" value="${esc(g.clientId)}" placeholder="Google 应用的客户端 ID"></div>
+            <div><label>Client Secret${g.clientSecret ? '(已配置,留空保留)' : ''}</label>
+              <input type="password" name="google_client_secret" value="" autocomplete="new-password"
+                placeholder="${g.clientSecret ? '留空则保留已保存的密钥' : 'Google 应用的客户端密钥'}"></div>
+          </div>
+          ${kvRow('回调地址', g.redirectUri ? esc(g.redirectUri) : '-')}
+          <details style="margin:var(--s2) 0">
+            <summary class="small" style="cursor:pointer;color:var(--muted)">自定义端点(可选;留空使用 Google 官方地址,自托管或联调可改)</summary>
+            <div style="margin-top:var(--s2)">
+              <label>授权地址(Authority)</label>
+              <input type="text" name="google_authority" value="${esc(g.authority)}" placeholder="https://accounts.google.com">
+              <label>令牌端点</label>
+              <input type="text" name="google_token_endpoint" value="${esc(g.tokenEndpoint)}" placeholder="https://oauth2.googleapis.com/token">
+              <label>JWKS 地址</label>
+              <input type="text" name="google_jwks_uri" value="${esc(g.jwksUri)}" placeholder="https://openidconnect.googleapis.com/v1/jwks">
+            </div>
+          </details>
+          <div class="actions"><button class="btn btn-primary" type="submit">保存 Google 登录设置</button></div>
         </form>
       </div>
       <div class="card">

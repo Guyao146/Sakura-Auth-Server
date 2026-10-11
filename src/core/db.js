@@ -20,6 +20,8 @@ CREATE TABLE IF NOT EXISTS users (
   totp_enabled  INTEGER NOT NULL DEFAULT 0,
   ms_sub        TEXT,
   ms_email      TEXT,
+  google_sub    TEXT,
+  google_email  TEXT,
   created_at    INTEGER NOT NULL,
   updated_at    INTEGER NOT NULL
 );
@@ -147,15 +149,21 @@ function migrate(hadGroups) {
   if (!cols.includes('totp_enabled')) db.exec('ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0');
   if (!cols.includes('ms_sub')) db.exec('ALTER TABLE users ADD COLUMN ms_sub TEXT');
   if (!cols.includes('ms_email')) db.exec('ALTER TABLE users ADD COLUMN ms_email TEXT');
-  // ms_sub 索引须在列补齐之后建(老库 users 无该列);微软联邦登录按 ms_sub 查用户
+  if (!cols.includes('google_sub')) db.exec('ALTER TABLE users ADD COLUMN google_sub TEXT');
+  if (!cols.includes('google_email')) db.exec('ALTER TABLE users ADD COLUMN google_email TEXT');
+  // ms_sub / google_sub 索引须在列补齐之后建(老库 users 无该列);联邦登录按 sub 查用户
   db.exec('CREATE INDEX IF NOT EXISTS idx_users_ms_sub ON users(ms_sub);');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_users_google_sub ON users(google_sub);');
   if (!cols.includes('credential_version')) db.exec('ALTER TABLE users ADD COLUMN credential_version INTEGER NOT NULL DEFAULT 0');
   // 数据库级递增也覆盖脚本/直接 SQL,避免同一秒内改密或禁用再启用的 ABA 竞态。
-  db.exec(`CREATE TRIGGER IF NOT EXISTS users_credential_version
-    AFTER UPDATE OF password_hash, disabled, is_admin, totp_secret, totp_enabled, ms_sub ON users
+  // 列表变化时先 DROP 再 CREATE(IF NOT EXISTS 不会更新旧定义)。
+  db.exec('DROP TRIGGER IF EXISTS users_credential_version');
+  db.exec(`CREATE TRIGGER users_credential_version
+    AFTER UPDATE OF password_hash, disabled, is_admin, totp_secret, totp_enabled, ms_sub, google_sub ON users
     WHEN OLD.password_hash IS NOT NEW.password_hash OR OLD.disabled IS NOT NEW.disabled
       OR OLD.is_admin IS NOT NEW.is_admin OR OLD.totp_secret IS NOT NEW.totp_secret
       OR OLD.totp_enabled IS NOT NEW.totp_enabled OR OLD.ms_sub IS NOT NEW.ms_sub
+      OR OLD.google_sub IS NOT NEW.google_sub
     BEGIN UPDATE users SET credential_version = credential_version + 1 WHERE id = NEW.id; END;`);
   const ccols = db.prepare('PRAGMA table_info(clients)').all().map((c) => c.name);
   if (!ccols.includes('access_mode')) {

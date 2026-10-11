@@ -10,6 +10,7 @@ import * as register from './services/auth/register.js';
 import * as logout from './services/auth/logout.js';
 import * as account from './services/auth/account.js';
 import * as microsoft from './services/auth/microsoft.js';
+import * as google from './services/auth/google.js';
 import * as about from './services/about.js';
 import * as unilink from './services/auth/unilink.js';
 import * as reset from './services/auth/reset.js';
@@ -98,6 +99,13 @@ export function registerRoutes() {
   r('POST', '/auth/microsoft/register', microsoft.registerNew);
   r('POST', '/auth/microsoft/unbind', microsoft.unbind, { auth: 'user' });
 
+  // Google 账号登录与绑定(与 Microsoft 同构;One-Tap 气泡入口渲染在登录页)
+  r('GET', '/auth/google', google.startAuth);
+  r('GET', '/auth/google/callback', google.callback);
+  r('POST', '/auth/google/link', google.link);
+  r('POST', '/auth/google/register', google.registerNew);
+  r('POST', '/auth/google/unbind', google.unbind, { auth: 'user' });
+
   r('GET', '/setup', wizard.showSetup);
   r('POST', '/setup/step1', wizard.step1);
   r('POST', '/setup/step2', wizard.step2);
@@ -118,6 +126,7 @@ export function registerRoutes() {
   r('GET', '/admin', admin.showDashboard, { auth: 'admin' });
   r('POST', '/admin/register-toggle', admin.toggleRegister, { auth: 'admin' });
   r('POST', '/admin/ms-oauth', admin.saveMsOAuth, { auth: 'admin' });
+  r('POST', '/admin/google-oauth', admin.saveGoogleOAuth, { auth: 'admin' });
   // 站点品牌定制:强调色/口号保存(普通表单)、Logo 上传(multipart)与删除 —— 全站即时生效
   r('POST', '/admin/branding', admin.saveBranding, { auth: 'admin' });
   r('POST', '/admin/branding/logo', admin.uploadSiteLogo, { auth: 'admin' });

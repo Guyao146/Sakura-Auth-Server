@@ -109,7 +109,7 @@ docker compose ps
 | 品牌定制 | 管理端可视化配置:站点 Logo(上传/删除)、主题强调色(全站变量覆盖,防 CSS 注入)、品牌口号,保存即全站生效 |
 | 界面语言 | 简体中文 / English 切换(cookie + /-/lang/:code),登录/授权/门户/账号/控制台导航等高流量页面覆盖,缺词回退中文 |
 | Passkey | WebAuthn/Passkey 无密码登录:账号页注册凭据(上限 8 个),要求 PIN/生物识别等用户验证(UV);检查非零 counter 的递增并支持双零计数器;零依赖 CBOR/ES256 实现 |
-| 联邦登录 | Microsoft 账号 OIDC 登录与绑定;UniLink 扫码登录,保留原授权目标并对已开启 TOTP 的账号继续执行第二因子验证 |
+| 联邦登录 | Microsoft 与 Google 账号 OIDC 登录与绑定(Google 在登录页以 One-Tap 风格气泡呈现,零 JS);UniLink 扫码登录,保留原授权目标并对已开启 TOTP 的账号继续执行第二因子验证 |
 | 流转 | 未登录访问首页跳登录页、登录后直达应用门户、已登录访问登录页跳门户 |
 | JSON API | /api/heartbeat 心跳(含版本/uptime/DB 探测)、/api/session 登录状态、/api/login 登录(支持 2FA)、/api/logout、/api/apps 可见应用、/api/sessions 会话列表与撤销、/api/registry 应用状态(令牌认证)。会话型写操作需带 `X-Requested-With: JSON` 头(防跨站纵深防御) |
 | 安全 | scrypt 口令哈希(异步并发限流)、CSRF 双提交、登录限流、授权码/刷新令牌哈希落库、授权码一次性、刷新令牌轮换与重放检测(全链作废)、改密/重置/禁用后统一凭据失效、防用户枚举(含登录耗时一致) |
@@ -178,13 +178,14 @@ curl -sS http://localhost:9000/userinfo -H 'Authorization: Bearer <ACCESS_TOKEN>
 
 | 命令 | 覆盖范围 | 默认 CI |
 | --- | --- | --- |
-| `npm run smoke` | 487 项端到端断言:向导、认证、授权、管理、Passkey、品牌及备份恢复等 | 是 |
+| `npm run smoke` | 517 项端到端断言:向导、认证、授权、管理、Passkey、Microsoft/Google 联邦、品牌及备份恢复等 | 是 |
 | `npm run test:oauth` | 56 项 OAuth/OIDC、PKCE、刷新轮换、JWT 边界和旧库迁移检查 | 是 |
 | `npm run test:security` | 27 项认证竞态、凭据失效、权限组、Passkey 及运维安全回归 | 是 |
-| `npm run test:views` | 10 项 SSR 项目署名、导航、权限入口、表单、多语言和可访问性标记检查 | 是 |
+| `npm run test:views` | 13 项 SSR 项目署名、导航、权限入口、表单、Google 气泡与绑定区块、多语言和可访问性标记检查 | 是 |
 | `node scripts/test-qr.mjs` | QR 编码器,46 项 | 是 |
 | `node scripts/test-smtp.mjs` | SMTP 对话,9 项 | 是 |
 | `node scripts/test-ms.mjs` | Microsoft OIDC 本地模拟联邦,15 项 | 是 |
+| `node scripts/test-google.mjs` | Google OIDC 本地模拟联邦,15 项 | 是 |
 | `npm run test:views -- --browser` | 共 64 项:SSR + Chromium 布局、主题及键盘检查 | 否,需本机浏览器 |
 | `node scripts/test-unilink.mjs` | 两个真实 HTTP 服务的隔离扫码联调 | 否,需 UniLink 源码及其 Python 依赖 |
 
@@ -241,7 +242,7 @@ npm.cmd run test:views -- --browser
 
 ## 安全边界(已知未实现)
 
-- 未内置 SAML、LDAP 或 authentik 的通用 flows/表达式策略;已实现的 Microsoft 与 UniLink 联邦入口见上文。找回密码依赖 SMTP 发信,未配置 SMTP 时邮件打到日志(开发模式);
+- 未内置 SAML、LDAP 或 authentik 的通用 flows/表达式策略;已实现的 Microsoft、Google 与 UniLink 联邦入口见上文。找回密码依赖 SMTP 发信,未配置 SMTP 时邮件打到日志(开发模式);
 - SQLite 单写者,服务按单实例运行(PM2 配置已锁定);大规模并发建议评估外部数据库方案;
 - 反代部署时务必设置 `BASE_URL` 为 https 地址,会话 Cookie 会自动附加 `Secure`。
 

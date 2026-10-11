@@ -8,6 +8,8 @@ const KEYS = [
   'site_name', 'issuer', 'access_ttl', 'refresh_ttl', 'session_ttl', 'allow_register',
   'smtp_host', 'smtp_port', 'smtp_user', 'smtp_pass', 'smtp_from',
   'ms_enabled', 'ms_client_id', 'ms_client_secret', 'ms_tenant', 'ms_authority',
+  'google_enabled', 'google_client_id', 'google_client_secret',
+  'google_authority', 'google_token_endpoint', 'google_jwks_uri',
   'unilink_enabled', 'unilink_issuer', 'unilink_client_id', 'unilink_client_secret',
   'about_title', 'about_content',
   'brand_logo_url', 'brand_accent', 'brand_tagline',
@@ -75,6 +77,16 @@ export function reloadRuntime() {
       tenant: s.ms_tenant || 'common',
       authority: (s.ms_authority || 'https://login.microsoftonline.com').replace(/\/+$/, ''),
       redirectUri: `${issuer}/auth/microsoft/callback`,
+    },
+    // Google 账号登录(联邦 OIDC):端点默认为 Google 官方地址,自托管/联调可覆盖
+    googleOAuth: {
+      enabled: String(s.google_enabled || '') === '1',
+      clientId: s.google_client_id || '',
+      clientSecret: s.google_client_secret || '',
+      authority: (s.google_authority || 'https://accounts.google.com').replace(/\/+$/, ''),
+      tokenEndpoint: (s.google_token_endpoint || 'https://oauth2.googleapis.com/token').trim(),
+      jwksUri: (s.google_jwks_uri || 'https://openidconnect.googleapis.com/v1/jwks').trim(),
+      redirectUri: `${issuer}/auth/google/callback`,
     },
   };
   return rt;

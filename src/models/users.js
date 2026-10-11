@@ -75,3 +75,16 @@ export function bindMicrosoft(id, sub, email = '') {
 
 export const unbindMicrosoft = (id) =>
   getDb().prepare('UPDATE users SET ms_sub = NULL, ms_email = NULL, updated_at = ? WHERE id = ?').run(nowSec(), id);
+
+/* ---- Google 账号绑定 ---- */
+export const byGoogleSub = (sub) =>
+  getDb().prepare('SELECT * FROM users WHERE google_sub = ?').get(sub);
+
+export function bindGoogle(id, sub, email = '') {
+  getDb().prepare('UPDATE users SET google_sub = ?, google_email = ?, updated_at = ? WHERE id = ?')
+    .run(sub, email || '', nowSec(), id);
+}
+
+export const unbindGoogle = (id) =>
+  getDb().prepare('UPDATE users SET google_sub = NULL, google_email = NULL, updated_at = ? WHERE id = ?').run(nowSec(), id);
+

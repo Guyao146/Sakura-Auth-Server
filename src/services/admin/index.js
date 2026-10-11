@@ -26,6 +26,7 @@ import { dashboardPage, groupsPage, groupDetailPage, usersPage, userFormPage, ap
 import { errorPage } from '../../views/error.js';
 import { record, csvCell } from '../audit.js';
 import { isValidMsTenant } from '../auth/microsoft.js';
+import { isValidGoogleEndpoint } from '../auth/google.js';
 import * as appHealth from '../app-health.js';
 
 const CSRF = (ctx) => ctx.session.csrf;
@@ -40,6 +41,7 @@ export function showDashboard(ctx) {
     issuer: rt.issuer,
     allowRegister: rt.allowRegister,
     msOAuth: rt.msOAuth,
+    googleOAuth: rt.googleOAuth,
     brandLogoUrl: rt.brandLogoUrl,
     brandAccent: rt.brandAccent,
     brandTagline: rt.brandTagline,
@@ -83,6 +85,36 @@ export function saveMsOAuth(ctx) {
   record(ctx, 'admin.ms_oauth_saved', fields.ms_enabled === '1' ? '启用 Microsoft 登录' : '停用 Microsoft 登录');
   logger.info('管理员更新了 Microsoft 登录配置', { enabled: fields.ms_enabled });
   redirect(ctx.res, '/admin?msg=' + encodeURIComponent('Microsoft 登录设置已保存。'));
+}
+
+/* ---------------- Google 登录配置 ---------------- */
+export function saveGoogleOAuth(ctx) {
+  const b = ctx.body || {};
+  if (b._csrf !== CSRF(ctx)) {
+    return redirect(ctx.res, '/admin?err=' + encodeURIComponent('页面已过期,请重试。'));
+  }
+  const fields = {
+    google_enabled: b.google_enabled === '1' ? '1' : '0',
+    google_client_id: String(b.google_client_id || '').trim(),
+  };
+  const secret = String(b.google_client_secret || '');
+  if (secret) fields.google_client_secret = secret; // 留空 = 保留已保存的密钥
+  // authority / token / jwks 拼进 fetch 与重定向 URL:必须是 http(s) 形态,非法拒绝并回显
+  const endpoints = {
+    google_authority: String(b.google_authority || '').trim().replace(/\/+$/, ''),
+    google_token_endpoint: String(b.google_token_endpoint || '').trim(),
+    google_jwks_uri: String(b.google_jwks_uri || '').trim(),
+  };
+  for (const [key, value] of Object.entries(endpoints)) {
+    if (value && !isValidGoogleEndpoint(value)) {
+      return redirect(ctx.res, '/admin?err=' + encodeURIComponent('Google 端点地址不合法,必须是 http(s) 开头的完整 URL。'));
+    }
+    if (value) fields[key] = value;
+  }
+  updateRuntime(fields, settingsApi.setSetting);
+  record(ctx, 'admin.google_oauth_saved', fields.google_enabled === '1' ? '启用 Google 登录' : '停用 Google 登录');
+  logger.info('管理员更新了 Google 登录配置', { enabled: fields.google_enabled });
+  redirect(ctx.res, '/admin?msg=' + encodeURIComponent('Google 登录设置已保存。'));
 }
 
 /* ---------------- 权限组管理 ---------------- */

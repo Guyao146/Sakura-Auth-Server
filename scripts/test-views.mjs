@@ -10,7 +10,7 @@ import { spawn } from 'node:child_process';
 import { bindSettings } from '../src/core/runtime.js';
 import { runWithLang } from '../src/core/i18n.js';
 import { adminPage, authPage, brandPage, SAKURA_CSS } from '../src/views/layout.js';
-import { loginPage, registerPage, consentPage } from '../src/views/auth.js';
+import { loginPage, registerPage, consentPage, accountPage, googleLinkPage } from '../src/views/auth.js';
 import { dashboardPage, usersPage } from '../src/views/admin.js';
 import { portalPage } from '../src/views/portal.js';
 import { setupStep2, setupStep3 } from '../src/views/setup.js';
@@ -81,6 +81,60 @@ await check('登录方式只分隔一次,保留 CSRF/next/密码自动填充和 
   assert.equal((html.match(/class="login-divider"/g) || []).length, 1);
   for (const value of ['name="_csrf"', 'name="next"', 'autocomplete="current-password"', 'id="passkey-login-btn"', 'id="passkey-status"', 'href="/auth/microsoft"', 'href="/auth/unilink?next=']) assert.ok(html.includes(value), value);
   assert.match(html, /name="next" value="\/authorize\?client_id=demo&amp;scope=openid"/);
+});
+await check('Google One-Tap 气泡随开关出现/消失,next 转义且回链 #login-form', () => {
+  try {
+    bindSettings(() => ({ ms_enabled: '1', unilink_enabled: '0' })); // 排除其它登录方式干扰,只验气泡
+    const on = loginPage({ ...common, googleEnabled: true, next: '/authorize?client_id=demo&scope=openid' });
+    assert.match(on, /<div class="gtap" role="region" aria-label="使用 Google 账号登录"/);
+    assert.ok(on.includes('href="/auth/google?next=%2Fauthorize%3Fclient_id%3Ddemo%26scope%3Dopenid"'), 'next 必须 encodeURIComponent');
+    assert.ok(on.includes('href="#login-form"') && on.includes('id="login-form"')); // 回链锚点与表单 id 成对
+    assert.equal((on.match(/class="gtap"/g) || []).length, 1);
+    const en = runWithLang('en', () => loginPage({ ...common, googleEnabled: true }));
+    assert.ok(en.includes('Continue with Google') && en.includes('Sign in with Google'));
+    for (const value of ['accounts.google.com', 'oauth2.googleapis.com']) assert.ok(!on.includes(value)); // 气泡零外部资源
+    const off = loginPage({ ...common, googleEnabled: false });
+    assert.ok(!off.includes('class="gtap"') && !off.includes('href="/auth/google?next='));
+  } finally { bindSettings(() => ({ ms_enabled: '1', unilink_enabled: '1' })); }
+});
+await check('Google 关联页两表单携带一次性 linkToken 与 CSRF,邮箱回显转义,注册表单随开关', () => {
+  const html = googleLinkPage({ ...common, linkToken: 'lt-1', googleEmail: 'ev"il@example.com', allowRegister: true });
+  assert.match(html, /<h3 style="margin-top:0">关联本地账号<\/h3>/);
+  assert.ok(!html.includes('ev"il@example.com') && html.includes('ev&quot;il@example.com')); // 邮箱回显必须转义
+  const linkForm = html.match(/<form[^>]+action="\/auth\/google\/link"[^>]*>([\s\S]*?)<\/form>/)?.[1];
+  assert.ok(linkForm, '表单 A 存在');
+  assert.ok(linkForm.includes('name="state" value="lt-1"') && linkForm.includes('name="_csrf" value="view-test-csrf"'));
+  const regForm = html.match(/<form[^>]+action="\/auth\/google\/register"[^>]*>([\s\S]*?)<\/form>/)?.[1];
+  assert.ok(regForm, '表单 B 存在');
+  assert.ok(regForm.includes('name="state" value="lt-1"') && regForm.includes('name="_csrf" value="view-test-csrf"')
+    && regForm.includes('minlength="8"'));
+  const noReg = googleLinkPage({ ...common, linkToken: 'lt-1', allowRegister: false });
+  assert.ok(!noReg.includes('action="/auth/google/register"'));
+});
+await check('账号页 Google 绑定区块随开关展示,绑定/解绑表单含 CSRF', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sakura-views-g-'));
+  try {
+    // 视图层只读 webauthn 凭据列表:用内存库初始化,避免触碰开发库,也免文件锁
+    const { config } = await import('../src/core/config.js');
+    config.dataDir = dir;
+    Object.defineProperty(config, 'dbFile', { get: () => ':memory:' });
+    const { initDb } = await import('../src/core/db.js');
+    initDb();
+    const opts = { ...common, user: { ...user, is_admin: 0 }, cur: '/account', twoFa: {} };
+    bindSettings(() => ({ ms_enabled: '1', unilink_enabled: '1', google_enabled: '1', google_client_id: 'g-id' }));
+    const fresh = accountPage(opts);
+    assert.match(fresh, /href="\/auth\/google\?bind=1"/);
+    assert.ok(!fresh.includes('action="/auth/google/unbind"') && !fresh.includes('accounts.google.com'));
+    const bound = accountPage({ ...opts, user: { ...user, is_admin: 0, google_sub: 'g-sub-1', google_email: 'g@example.com' } });
+    assert.match(bound, /action="\/auth\/google\/unbind"/);
+    assert.ok(bound.includes('g@example.com') && bound.includes('name="_csrf" value="view-test-csrf"'));
+    bindSettings(() => ({ ms_enabled: '1', unilink_enabled: '1', google_enabled: '0', google_client_id: '' }));
+    const off = accountPage(opts);
+    assert.ok(!off.includes('href="/auth/google?bind=1"') && !off.includes('action="/auth/google/unbind"'));
+  } finally {
+    bindSettings(() => ({ ms_enabled: '1', unilink_enabled: '1' }));
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  }
 });
 await check('登录方式开关组合不出现空分隔区或残留脚本', () => {
   try {

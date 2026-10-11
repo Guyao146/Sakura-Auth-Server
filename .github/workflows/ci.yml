@@ -29,11 +29,12 @@ jobs:
         run: npm run test:views
       - name: 端到端冒烟测试(自动拉起独立实例)
         run: npm run smoke
-      - name: 单元测试(QR / SMTP / MS 联邦)
+      - name: 单元测试(QR / SMTP / MS / Google 联邦)
         run: |
           node scripts/test-qr.mjs
           node scripts/test-smtp.mjs
           node scripts/test-ms.mjs
+          node scripts/test-google.mjs
 
   docker:
     name: 构建并发布镜像

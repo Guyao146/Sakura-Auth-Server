@@ -1,5 +1,16 @@
 # 更新记录
 
+## 1.7.0
+
+### Google 账号联邦登录与登录页 One-Tap 气泡
+
+- 新增 Google 账号(OAuth2 / OIDC)登录与绑定,与 Microsoft 联邦同构:登录页 One-Tap 风格气泡卡片(纯服务端渲染、零 JS、暗色模式双保险)、账号设置页绑定/解绑区块、未绑定身份回落到「关联本地账号 / 注册新号」二选一页;`?bind=1` 可由已登录用户主动绑定,重复绑定显式拒绝(必须先解绑,防止静默覆盖)。
+- 联邦客户端为自研零依赖实现(`src/core/google-oidc.js`):授权码 + PKCE(S256)换取令牌、id_token 的 RS256 JWKS 验签(缓存 1 小时)与 aud/exp/iss 校验;`email_verified !== false` 时才采信邮箱 claim。
+- 数据库:`users` 表新增 `google_sub` / `google_email` 列(幂等迁移)与 `idx_users_google_sub` 索引,`credential_version` 触发器覆盖 google_sub 变更,实现与密码/2FA 一致的统一凭据失效语义。
+- 管理控制台新增 Google 登录配置卡(`POST /admin/google-oauth`):client_id / client_secret(留空保留旧值)、authority / 令牌端点 / JWKS 地址可覆盖(默认为 Google 官方端点,自托管或联调可改);端点必须是 http(s) 形态,非法值保存被拒并回显,避免 SSRF 与重定向滥用。
+- 回调地址恒为 `{issuer}/auth/google/callback`,不落库、不合并上游 id_token 的任何 claim;state 与 linkToken 内存暂存(500 上限、10 分钟 TTL),关联令牌一次性。
+- 测试:`scripts/test-google.mjs`(15 项核心件:授权 URL、换令牌、JWKS 验签、aud/iss/exp/签名/邮箱验证拒绝路径)、冒烟测试新增 30 项 Google 端到端断言、视图回归新增气泡与账号区块检查;CI 加入 test-google。
+
 ## 1.6.3
 
 ### 启动诊断

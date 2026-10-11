@@ -200,6 +200,65 @@ function startMockMs({ clientId = 'smoke-ms-client', sub = 'ms-sub-123', email =
   });
 }
 
+/* ---------- 本地 mock Google(OIDC 提供方,与被测服务并行运行) ---------- */
+function startMockGoogle({ clientId = 'smoke-google-client', clientSecret = 'smoke-google-secret', sub = 'google-sub-123', email = 'googleuser@example.com', name = 'Google 测试用户' } = {}) {
+  const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const jwk = { kid: 'test-kid', alg: 'RS256', use: 'sig', ...publicKey.export({ format: 'jwk' }) };
+  const b64u = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
+  const server = http.createServer(async (req, res) => {
+    const url = new URL(req.url, 'http://mock');
+    const json = (status, obj) => {
+      res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify(obj));
+    };
+    // JWKS:测试公钥(kid='test-kid')
+    if (req.method === 'GET' && url.pathname === '/openidconnect/v1/jwks') {
+      return json(200, { keys: [jwk] });
+    }
+    if (req.method === 'GET' && url.pathname === '/o/oauth2/v2.0/auth') {
+      // 原样转发 redirect_uri:由 query 构造回跳地址,携带 code 与 state
+      const ru = url.searchParams.get('redirect_uri');
+      if (!ru) { res.writeHead(400); res.end('missing redirect_uri'); return; }
+      const sep = ru.includes('?') ? '&' : '?';
+      res.writeHead(302, {
+        Location: `${ru}${sep}code=GCIRCLE&state=${encodeURIComponent(url.searchParams.get('state') || '')}`,
+      });
+      res.end();
+      return;
+    }
+    if (req.method === 'POST' && url.pathname === '/o/oauth2/v2.0/token') {
+      let raw = '';
+      for await (const ch of req) raw += ch;
+      const form = new URLSearchParams(raw);
+      if (form.get('grant_type') !== 'authorization_code' || form.get('client_id') !== clientId
+        || form.get('client_secret') !== clientSecret
+        || !form.get('code') || !form.get('code_verifier') || !form.get('redirect_uri')) {
+        return json(400, { error: 'invalid_grant', error_description: 'mock: 表单校验失败' });
+      }
+      const authority = `http://127.0.0.1:${server.address().port}`;
+      const header = b64u({ alg: 'RS256', typ: 'JWT', kid: 'test-kid' });
+      const now = Math.floor(Date.now() / 1000);
+      const payload = b64u({ iss: authority, sub, email, email_verified: true, name, aud: clientId, iat: now, exp: now + 3600 });
+      const sig = crypto.createSign('RSA-SHA256').update(`${header}.${payload}`).sign(privateKey, 'base64url');
+      return json(200, {
+        access_token: 'mock-g-access', token_type: 'Bearer', expires_in: 3600,
+        id_token: `${header}.${payload}.${sig}`,
+      });
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  return new Promise((resolve) => {
+    server.listen(0, '0.0.0.0', () => {
+      const port = server.address().port;
+      resolve({
+        authority: `http://127.0.0.1:${port}`,
+        close: () => { server.closeAllConnections(); return new Promise((r) => server.close(r)); },
+      });
+    });
+  });
+}
+
 /* ---------- 断言 ---------- */
 let failed = 0;
 const ok = (name, cond, extra = '') => {
@@ -240,6 +299,7 @@ async function main() {
   child.stderr.on('data', (d) => { serverLog += d; });
 
   let msMock = null;
+let googleMock = null;
   let fixtureDb = null;
   try {
     let ready = false;
@@ -251,6 +311,8 @@ async function main() {
 
     // 本地 mock Microsoft(0.0.0.0 随机端口),供 MS 登录链路联调
     msMock = await startMockMs();
+    // 本地 mock Google(0.0.0.0 随机端口),供 Google 登录链路联调
+    googleMock = await startMockGoogle();
 
     /* ---------- 夹具:测试进程直连同一 SQLite ---------- */
     const { initDb } = await import('../src/core/db.js');
@@ -1790,6 +1852,192 @@ async function main() {
     const regToggleMs2 = extractHidden(await r.text());
     await call(aj, '/admin/register-toggle', { method: 'POST', form: { _csrf: regToggleMs2._csrf } });
 
+    /* ---------- Google 登录与绑定(本地 mock OIDC 提供方,端点可覆盖) ---------- */
+    const gOffHtml = await (await call(new Jar(), '/login')).text();
+    ok('Google:默认关闭时登录页无气泡', !gOffHtml.includes('class="gtap"') && !gOffHtml.includes('href="/auth/google?next='));
+    r = await call(new Jar(), '/auth/google');
+    ok('Google:默认关闭时 /auth/google 重定向登录页并带 err', r.status === 302
+      && location(r).startsWith('/login?err='), `loc=${location(r)}`);
+
+    // 管理端:控制台卡片 + 保存启用(含指向 mock 的 authority/token/jwks)
+    r = await call(aj, '/admin');
+    const gDashHtml = await r.text();
+    ok('Google:控制台出现 Google 登录卡片与回调地址', gDashHtml.includes('Google 登录')
+      && gDashHtml.includes('/admin/google-oauth') && gDashHtml.includes('/auth/google/callback'));
+    const gDashForm = extractHidden(gDashHtml);
+    r = await call(aj, '/admin/google-oauth', {
+      method: 'POST',
+      form: {
+        google_enabled: '1', google_client_id: 'smoke-google-client', google_client_secret: 'smoke-google-secret',
+        google_authority: googleMock.authority,
+        google_token_endpoint: `${googleMock.authority}/o/oauth2/v2.0/token`,
+        google_jwks_uri: `${googleMock.authority}/openidconnect/v1/jwks`, _csrf: gDashForm._csrf,
+      },
+    });
+    ok('Google:管理端保存 Google 登录配置', r.status === 302 && location(r).startsWith('/admin?msg='), `loc=${location(r)}`);
+    const gSaved = settings.getMap();
+    ok('Google:enabled/client_id/secret/端点写入 settings', gSaved.google_enabled === '1'
+      && gSaved.google_client_id === 'smoke-google-client' && gSaved.google_client_secret === 'smoke-google-secret'
+      && gSaved.google_authority === googleMock.authority
+      && gSaved.google_token_endpoint === `${googleMock.authority}/o/oauth2/v2.0/token`
+      && gSaved.google_jwks_uri === `${googleMock.authority}/openidconnect/v1/jwks`);
+
+    // 加固:端点拼进 fetch 与重定向 URL,非法值保存被拒并回显
+    r = await call(aj, '/admin/google-oauth', {
+      method: 'POST',
+      form: {
+        google_enabled: '1', google_client_id: 'smoke-google-client', google_client_secret: 'smoke-google-secret',
+        google_authority: 'javascript:alert(1)',
+        google_token_endpoint: `${googleMock.authority}/o/oauth2/v2.0/token`,
+        google_jwks_uri: `${googleMock.authority}/openidconnect/v1/jwks`, _csrf: gDashForm._csrf,
+      },
+    });
+    ok('加固:google_authority 非法值保存被拒并回显错误', r.status === 302 && location(r).startsWith('/admin?err=')
+      && settings.getMap().google_authority === googleMock.authority);
+
+    // 加固:client_secret 留空 = 保留已保存的密钥(编辑配置时不回显明文)
+    r = await call(aj, '/admin/google-oauth', {
+      method: 'POST',
+      form: {
+        google_enabled: '1', google_client_id: 'smoke-google-client',
+        google_authority: googleMock.authority,
+        google_token_endpoint: `${googleMock.authority}/o/oauth2/v2.0/token`,
+        google_jwks_uri: `${googleMock.authority}/openidconnect/v1/jwks`, _csrf: gDashForm._csrf,
+      },
+    });
+    ok('Google:client_secret 留空保留旧密钥', r.status === 302 && location(r).startsWith('/admin?msg=')
+      && settings.getMap().google_client_secret === 'smoke-google-secret');
+
+    r = await call(new Jar(), '/login');
+    const gOnHtml = await r.text();
+    ok('Google:启用后登录页出现 One-Tap 气泡', r.status === 200
+      && gOnHtml.includes('class="gtap"') && gOnHtml.includes('使用 Google 账号继续')
+      && gOnHtml.includes('href="/auth/google?next='));
+
+    r = await call(new Jar(), '/auth/google/callback?code=X&state=forged-state');
+    ok('Google:callback 伪造 state 返回 400 错误页', r.status === 400
+      && (await r.text()).includes('Google 登录失败'));
+
+    // 完整链路:发起 → mock authorize → callback → 关联页
+    const gj = new Jar();
+    r = await call(gj, '/auth/google');
+    const gAuthLoc = location(r);
+    ok('Google:/auth/google 302 到 mock authorize(含 client_id 与 state)', r.status === 302
+      && gAuthLoc.startsWith(`${googleMock.authority}/o/oauth2/v2.0/auth?`)
+      && gAuthLoc.includes('client_id=smoke-google-client') && gAuthLoc.includes('state=')
+      && gAuthLoc.includes('code_challenge_method=S256'), `loc=${gAuthLoc}`);
+    r = await call(gj, gAuthLoc);
+    const gCbLoc = location(r);
+    ok('Google:mock authorize 302 回本站 callback 并带 code/state', r.status === 302
+      && gCbLoc.startsWith(`${BASE}/auth/google/callback`) && gCbLoc.includes('code=GCIRCLE'), `loc=${gCbLoc}`);
+    r = await call(gj, gCbLoc);
+    const gLinkHtml = await r.text();
+    ok('Google:未绑定用户渲染关联本地账号页并显示 Google 邮箱', r.status === 200
+      && gLinkHtml.includes('关联本地账号') && gLinkHtml.includes('googleuser@example.com'));
+    const gLinkForm = extractHidden(gLinkHtml);
+    ok('Google:关联页携带 linkToken 与 CSRF', !!gLinkForm.state && !!gLinkForm._csrf);
+
+    r = await call(gj, '/auth/google/link', {
+      method: 'POST',
+      form: { state: gLinkForm.state, username: 'bob', password: 'wrong-pass', _csrf: gLinkForm._csrf },
+    });
+    ok('Google:关联本地账号密码错误被拒', r.status === 400 && (await r.text()).includes('用户名或密码不正确'));
+    r = await call(gj, '/auth/google/link', {
+      method: 'POST',
+      form: { state: gLinkForm.state, username: 'bob', password: 'BobPassw0rd!', _csrf: gLinkForm._csrf },
+    });
+    ok('Google:绑定 bob 成功并建立会话跳转 /apps', r.status === 302 && location(r) === '/apps', `loc=${location(r)}`);
+    r = await call(gj, '/apps');
+    ok('Google:登录后的会话可访问门户', r.status === 200);
+    ok('Google:byGoogleSub 命中 bob', !!users.byGoogleSub('google-sub-123')
+      && users.byGoogleSub('google-sub-123').id === bob.id);
+
+    r = await call(new Jar(), '/auth/google/link', {
+      method: 'POST',
+      form: { state: gLinkForm.state, username: 'bob', password: 'BobPassw0rd!', _csrf: gLinkForm._csrf },
+    });
+    ok('Google:linkToken 一次性(重放被拒)', r.status === 400);
+
+    // 已绑定:再次 Google 登录直达 /apps
+    const gj2 = new Jar();
+    r = await call(gj2, '/auth/google');
+    r = await call(gj2, location(r));
+    r = await call(gj2, location(r));
+    ok('Google:已绑定用户再次 Google 登录直达 /apps', r.status === 302 && location(r) === '/apps',
+      `status=${r.status} loc=${location(r)}`);
+
+    // 账号页区块 + 解绑
+    r = await call(gj, '/account');
+    const gAcctHtml = await r.text();
+    ok('Google:账号页出现 Google 绑定区块与邮箱', gAcctHtml.includes('Google 账号')
+      && gAcctHtml.includes('googleuser@example.com') && gAcctHtml.includes('解绑 Google 账号'));
+    const gAcctForm = extractHidden(gAcctHtml);
+    r = await call(gj, '/auth/google/unbind', { method: 'POST', form: { _csrf: gAcctForm._csrf } });
+    ok('Google:解绑成功回账号页', r.status === 302 && location(r).startsWith('/account?msg='), `loc=${location(r)}`);
+    ok('Google:解绑后 byGoogleSub 为空', !users.byGoogleSub('google-sub-123'));
+
+    // bind=1:已登录用户把 Google 身份绑定到当前账号(alice)
+    const ajG = new Jar();
+    r = await call(ajG, '/login');
+    const agf = extractHidden(await r.text());
+    r = await call(ajG, '/login', { method: 'POST', form: { username: 'alice', password: 'NewPass#123', _csrf: agf._csrf } });
+    ok('Google:alice 本地登录成功(准备 bind=1)', r.status === 302);
+    r = await call(ajG, '/auth/google?bind=1');
+    r = await call(ajG, location(r));
+    r = await call(ajG, location(r));
+    ok('Google:bind=1 回调后绑定到当前账号并回账号页', r.status === 302
+      && location(r).startsWith('/account?msg=') && decodeURIComponent(location(r)).includes('已绑定'),
+      `loc=${location(r)}`);
+    const boundAliceG = users.byGoogleSub('google-sub-123');
+    ok('Google:bind=1 后 byGoogleSub 命中 alice', !!boundAliceG && boundAliceG.id === users.byUsername('alice').id);
+
+    // 已绑定账号再次发起 bind=1:拒绝静默换绑,提示先解绑(绑定仍保留)
+    r = await call(ajG, '/auth/google?bind=1');
+    r = await call(ajG, location(r));
+    r = await call(ajG, location(r));
+    ok('Google:已绑定账号重复 bind=1 被拒(需先解绑,绑定不被覆盖)', r.status === 302
+      && location(r).startsWith('/account?err=') && users.byGoogleSub('google-sub-123')?.id === users.byUsername('alice').id,
+      `loc=${location(r)}`);
+
+    if (boundAliceG) users.unbindGoogle(boundAliceG.id); // 清理绑定,供注册链路复用同一 mock 身份
+
+    // 表单 B:自助注册开启时注册新号并绑定
+    r = await call(aj, '/admin');
+    const regToggleG1 = extractHidden(await r.text());
+    await call(aj, '/admin/register-toggle', { method: 'POST', form: { _csrf: regToggleG1._csrf } });
+    const grj = new Jar();
+    r = await call(grj, '/auth/google');
+    r = await call(grj, location(r));
+    r = await call(grj, location(r));
+    const gRegHtml = await r.text();
+    ok('Google:自助注册开启时关联页显示注册新账号表单', r.status === 200 && gRegHtml.includes('注册并绑定'));
+    const gRegForm = extractHidden(gRegHtml);
+    r = await call(grj, '/auth/google/register', {
+      method: 'POST',
+      form: {
+        state: gRegForm.state, username: 'googlereg', password: 'GReg#12345',
+        password2: 'GReg#99999', name: '谷歌用户', _csrf: gRegForm._csrf,
+      },
+    });
+    ok('Google:注册新号两次密码不一致被拒', r.status === 400 && (await r.text()).includes('两次输入的密码不一致'));
+    r = await call(grj, '/auth/google/register', {
+      method: 'POST',
+      form: {
+        state: gRegForm.state, username: 'googlereg', password: 'GReg#12345',
+        password2: 'GReg#12345', name: '谷歌用户', _csrf: gRegForm._csrf,
+      },
+    });
+    ok('Google:注册新号成功并自动登录跳转 /apps', r.status === 302 && location(r) === '/apps',
+      `status=${r.status} loc=${location(r)}`);
+    const gRegUser = users.byUsername('googlereg');
+    ok('Google:注册的新用户已绑定 Google 身份且非管理员', !!gRegUser
+      && gRegUser.google_sub === 'google-sub-123' && gRegUser.email === 'googleuser@example.com' && !gRegUser.is_admin);
+    // 恢复自助注册开关
+    r = await call(aj, '/admin');
+    const regToggleG2 = extractHidden(await r.text());
+    await call(aj, '/admin/register-toggle', { method: 'POST', form: { _csrf: regToggleG2._csrf } });
+    if (gRegUser) users.unbindGoogle(gRegUser.id); // 保持环境干净
+
     /* ---------- 操作审计日志(放最后段:向导重跑段之前) ---------- */
     const auditM = await import('../src/models/audit.js');
 
@@ -3228,6 +3476,7 @@ async function main() {
   } finally {
     child.kill();
     if (msMock) { try { await msMock.close(); } catch { /* 关闭失败不掩盖测试结果 */ } }
+  if (googleMock) { try { await googleMock.close(); } catch { /* 关闭失败不掩盖测试结果 */ } }
     await sleep(800);
     fixtureDb?.close();
     // Windows 下 SQLite WAL 句柄释放稍慢,失败不掩盖真实测试结果
