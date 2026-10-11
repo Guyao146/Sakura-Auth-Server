@@ -211,6 +211,24 @@ async function main() {
   fs.rmSync(DATA, { recursive: true, force: true });
   process.env.DATA_DIR = DATA;
 
+  /* ---------- 启动诊断:数据目录只读时明确提示属主/权限(仅 Linux 能可靠模拟只读目录) ---------- */
+  if (process.platform === 'linux') {
+    const roDir = path.join(DATA, 'readonly');
+    fs.mkdirSync(roDir, { recursive: true });
+    fs.chmodSync(roDir, 0o555);
+    const ro = spawnSync(process.execPath, ['server.js'], {
+      cwd: ROOT,
+      env: { ...process.env, PORT: String(PORT + 1), BASE_URL: `http://localhost:${PORT + 1}`, DATA_DIR: roDir },
+      encoding: 'utf8', timeout: 20000,
+    });
+    fs.chmodSync(roDir, 0o755);
+    ok('启动诊断:数据目录只读时进程退出且报错含 chown 提示与 uid 诊断',
+      ro.status !== 0 && `${ro.stdout}${ro.stderr}`.includes('chown') && `${ro.stdout}${ro.stderr}`.includes('进程uid='),
+      `status=${ro.status} err=${(ro.stderr || '').slice(-160)}`);
+  } else {
+    ok(`启动诊断:数据目录只读时报错含提示(Linux 模拟,本平台跳过;platform=${process.platform})`, true);
+  }
+
   // 先启动服务(独立进程),测试进程随后用同一数据目录造夹具
   const child = spawn(process.execPath, ['server.js'], {
     cwd: ROOT,

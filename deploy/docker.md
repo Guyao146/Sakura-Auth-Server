@@ -129,6 +129,15 @@ docker compose ps            # 容器名应为 sakura-auth-server
 
 停服备份应包含完整 `data/`,其中 `idp.sqlite` 包含用户和签名密钥,`uploads/` 包含上传资源。若容器日志报 `/data` 无写入权限,在 Linux 宿主机执行 `chown -R 1000:1000 ./data`(容器内 node 用户 uid 1000)后 `docker compose restart`;也可改用命名卷 `sakura-auth-server-data:/data`,但备份时必须针对该命名卷,不能套用上面的目录打包命令。
 
+## 故障排查
+
+| 症状 | 处理 |
+| --- | --- |
+| 容器反复重启,日志 `unable to open database file`(errcode 14) | `./data` 绑定挂载在宿主机属主不是容器内 `node` 用户:执行 `docker compose down && sudo chown -R 1000:1000 ./data && docker compose up -d`。SELinux 主机可对卷加 `:z` 标签。1.6.3 起日志会直接给出 `进程uid=…` 与 `chown` 修复命令 |
+| `container_name` 冲突(`sakura-idp` 仍存在) | `docker rm -f sakura-idp` 后重新 `docker compose up -d`(见上文迁移步骤) |
+| 拉取镜像 401/404 | 确认镜像名 `ghcr.io/guyao146/sakura-auth-server` 与网络;自托管 registry 时用 `SAKURA_AUTH_SERVER_IMAGE` 覆盖 |
+| 端口 9000 被占用 | 改 `.env` 的 `PORT`(宿主机映射端口),容器内固定 9000 |
+
 ## 环境变量
 
 | 变量 | 默认 | 说明 |

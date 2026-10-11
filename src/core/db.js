@@ -263,7 +263,25 @@ export function initDb() {
   const synchronous = (process.env.SQLITE_SYNCHRONOUS || 'FULL').trim().toUpperCase();
   if (!['FULL', 'NORMAL'].includes(synchronous)) throw new Error('SQLITE_SYNCHRONOUS 仅支持 FULL 或 NORMAL');
   fs.mkdirSync(config.dataDir, { recursive: true });
-  db = new DatabaseSync(config.dbFile);
+  try {
+    db = new DatabaseSync(config.dbFile);
+  } catch (err) {
+    // SQLITE_CANTOPEN(14):数据目录存在但当前进程无写权限 ——
+    // Docker 绑定挂载属主不是容器内 node 用户(uid 1000)时最常见。
+    let diag = '';
+    try {
+      const st = fs.statSync(config.dataDir);
+      let writable = false;
+      try { fs.accessSync(config.dataDir, fs.constants.W_OK); writable = true; } catch { /* 不可写 */ }
+      const uid = typeof process.getuid === 'function' ? process.getuid() : 'n/a';
+      const gid = typeof process.getgid === 'function' ? process.getgid() : 'n/a';
+      diag = `目录存在=${st.isDirectory()} 可写=${writable} mode=0${(st.mode & 0o777).toString(8)} 进程uid=${uid} gid=${gid}`;
+    } catch { diag = `目录不存在:${config.dataDir}`; }
+    const hint = process.env.DATA_DIR
+      ? 'Docker 部署:在宿主机执行 sudo chown -R 1000:1000 <映射到 DATA_DIR 的目录> 后 docker compose restart(容器内 node 用户 uid=1000);SELinux 主机亦可对卷加 :z 标签'
+      : '检查数据目录属主(如 systemd 部署:sudo chown -R <运行用户> <数据目录>)';
+    throw new Error(`无法打开数据库文件 ${config.dbFile}:${err.message}(code=${err.code ?? 'unknown'} errcode=${err.errcode ?? '?'}。${hint}。诊断:${diag}`);
+  }
   db.exec('PRAGMA journal_mode = WAL;');
   // 认证数据默认优先持久性;只有显式选择 NORMAL 才接受断电/系统崩溃时丢失已提交事务的风险。
   db.exec(`PRAGMA synchronous = ${synchronous};`);

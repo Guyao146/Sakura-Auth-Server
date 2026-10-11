@@ -1,5 +1,12 @@
 # 更新记录
 
+## 1.6.3
+
+### 启动诊断
+
+- 数据库打开失败(`unable to open database file`,SQLITE errcode 14)时,报错改为包含 `进程uid/ gid`、目录是否存在/可写/权限位与具体修复命令(Docker 绑定挂载属主不是容器内 `node` 用户 uid 1000 时最常见),避免误以为业务故障。
+- 冒烟测试在 Linux 下覆盖「只读数据目录 → 明确报错」路径。
+
 ## 1.6.2
 
 ### 部署标识统一为 Sakura-Auth-Server
