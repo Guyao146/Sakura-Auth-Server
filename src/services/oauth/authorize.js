@@ -149,7 +149,11 @@ export function authorizePost(ctx) {
   const challengeError = pkceError(client, challenge, challengeMethod);
   if (challengeError) return bad('invalid_request', challengeError);
 
-  if (body.decision !== 'approve') {
+  // decision 可能以数组到达:浏览器提交表单时按钮的 name/value 会与
+  // 任何同名隐藏字段合并成数组（历史页面缓存仍可能携带隐藏 decision)。
+  // 按钮在表单中位于隐藏字段之后,取最后一个即用户实际点击的决定。
+  const decision = Array.isArray(body.decision) ? body.decision[body.decision.length - 1] : body.decision;
+  if (decision !== 'approve') {
     return errRedirect(ctx, redirectUri, { error: 'access_denied', error_description: '用户拒绝了授权', state });
   }
   if (body.remember === 'on') consents.grant(ctx.user.id, client.client_id, scopeList.join(' '));

@@ -457,6 +457,26 @@ let googleMock = null;
     const code = new URL(loc, BASE).searchParams.get('code');
     ok('同意后签发授权码并回跳', r.status === 302 && !!code && new URL(loc, BASE).searchParams.get('state') === state);
 
+    // 浏览器真实提交:同名按钮与隐藏字段的残余会让 decision 以重复键（数组）到达,
+    // 必须按用户实际点击的按钮判定,不能误判为拒绝（曾导致点同意却被 access_denied)
+    const dupApprove = new URLSearchParams();
+    for (const [k, v] of Object.entries(consentForm)) dupApprove.set(k, v);
+    dupApprove.append('decision', 'approve'); // 旧版缓存页面隐藏字段的残余
+    dupApprove.append('decision', 'approve'); // 实际点击的按钮
+    r = await call(uj, '/authorize', { method: 'POST', raw: dupApprove.toString(),
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+    ok('同意授权:decision 以重复键提交时按同意处理(浏览器真实行为)', r.status === 302
+      && new URL(location(r), BASE).searchParams.get('state') === state
+      && !!new URL(location(r), BASE).searchParams.get('code'), `loc=${location(r)}`);
+    const dupDeny = new URLSearchParams();
+    for (const [k, v] of Object.entries(consentForm)) dupDeny.set(k, v);
+    dupDeny.append('decision', 'approve'); // 隐藏残余
+    dupDeny.append('decision', 'deny');    // 实际点了拒绝
+    r = await call(uj, '/authorize', { method: 'POST', raw: dupDeny.toString(),
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+    ok('拒绝授权:重复键中含 deny 时按拒绝处理', r.status === 302
+      && new URL(location(r), BASE).searchParams.get('error') === 'access_denied', `loc=${location(r)}`);
+
     /* ---------- 令牌端点 ---------- */
     r = await fetch(BASE + '/token', {
       method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },

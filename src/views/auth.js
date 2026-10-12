@@ -303,12 +303,12 @@ export function consentPage({ theme, siteName, user, client, scopeList: scopes, 
         </div>`).join('\n')}
       </div>
       <form method="post" action="/authorize">
-        ${hiddenInputs({ ...replay, _csrf: csrf, decision: 'approve' })}
+        ${hiddenInputs({ ...replay, _csrf: csrf })}
         ${remember ? `<label class="checkline"><input type="checkbox" name="remember" value="on" checked><span>${esc(t(L, 'consent.remember'))}<span class="muted">${esc(t(L, 'consent.rememberHint'))}</span></span></label>` : ''}
         <p class="muted small" style="margin:var(--s2) 0 0">${fmt(t(L, 'consent.redirectHint'), { target: `<code>${esc(target)}</code>` })}</p>
         <div class="consent-actions">
-          <button class="btn btn-ghost" type="submit" name="decision" value="deny">${esc(t(L, 'consent.deny'))}</button>
           <button class="btn btn-primary" type="submit" name="decision" value="approve">${esc(t(L, 'consent.approve'))}</button>
+          <button class="btn btn-ghost" type="submit" name="decision" value="deny">${esc(t(L, 'consent.deny'))}</button>
         </div>
       </form>`,
   });

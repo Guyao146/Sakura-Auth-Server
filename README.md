@@ -7,7 +7,7 @@
 
 [CI 状态](https://github.com/Guyao146/Sakura-Auth-Server/actions/workflows/ci.yml) · [GHCR 镜像](https://github.com/Guyao146/Sakura-Auth-Server/pkgs/container/sakura-auth-server) · [更新记录与升级注意事项](CHANGELOG.md)
 
-Sakura-Auth-Server 是一个自托管的统一身份认证服务(IdP):业务系统统一跳转到这里登录,通过 OAuth 2.0 / OpenID Connect 拿回令牌访问各自的接口。定位对标 authentik 的核心子集——不过超大而全,只把「发令牌」这一件事做对。
+Sakura-Auth-Server 是一个自托管的统一身份认证服务(IdP):业务系统统一跳转到这里登录,通过 OAuth 2.0 / OpenID Connect 拿回令牌访问各自的接口。
 
 ## 快速开始
 
@@ -179,7 +179,7 @@ curl -sS http://localhost:9000/userinfo -H 'Authorization: Bearer <ACCESS_TOKEN>
 
 | 命令 | 覆盖范围 | 默认 CI |
 | --- | --- | --- |
-| `npm run smoke` | 541 项端到端断言:向导、认证、授权、管理、Passkey、Microsoft/Google 联邦与续流、一键登录气泡、品牌及备份恢复等 | 是 |
+| `npm run smoke` | 543 项端到端断言:向导、认证、授权（含同意页重复键提交）、管理、Passkey、Microsoft/Google 联邦与续流、一键登录气泡、品牌及备份恢复等 | 是 |
 | `npm run test:oauth` | 56 项 OAuth/OIDC、PKCE、刷新轮换、JWT 边界和旧库迁移检查 | 是 |
 | `npm run test:security` | 27 项认证竞态、凭据失效、权限组、Passkey 及运维安全回归 | 是 |
 | `npm run test:views` | 15 项 SSR 项目署名、导航、权限入口、表单、Google/记住我 气泡与绑定区块、多语言和可访问性标记检查 | 是 |
