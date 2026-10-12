@@ -97,7 +97,30 @@ await check('Google One-Tap 气泡随开关出现/消失,next 转义且回链 #l
     assert.ok(!off.includes('class="gtap"') && !off.includes('href="/auth/google?next='));
   } finally { bindSettings(() => ({ ms_enabled: '1', unilink_enabled: '1' })); }
 });
+await check('登录页「记住我」一键登录气泡:随 tapUser 出现,含 CSRF/next/回链/忘掉入口', () => {
+  const opts = { ...common, next: '/authorize?client_id=demo&scope=openid' };
+  const on = loginPage({ ...opts, tapUser: { username: 'sakura', name: '小樱 & Sakura' } });
+  assert.match(on, /<div class="gtap" role="region" aria-label="欢迎回来"/);
+  assert.ok(on.includes('以 小樱 &amp; Sakura 继续'), '气泡按钮回显姓名且转义');
+  assert.ok(on.includes('action="/login/tap"') && on.includes('name="_csrf" value="view-test-csrf"')
+    && on.includes('name="next" value="/authorize?client_id=demo&amp;scope=openid"'));
+  assert.ok(on.includes('href="#login-form"') && on.includes('id="login-form"'));
+  assert.ok(on.includes('action="/login/tap-forget"') && on.includes('不再记住此设备'));
+  assert.ok(on.includes('class="tap-avatar"') && on.includes('>小</span>'), '头像取姓名首字');
+  const off = loginPage(opts);
+  assert.ok(!off.includes('action="/login/tap"') && !off.includes('action="/login/tap-forget"')
+    && !off.includes('不再记住此设备')); // 标题「欢迎回来」与气泡无关,不作为判据
+});
+await check('tapUser 存在时登录表单仍有「记住我」复选框,且记住态气泡盖过 Google 气泡', () => {
+  const opts = { ...common, googleEnabled: true, tapUser: { username: 'u', name: '小樱' } };
+  const both = loginPage(opts);
+  assert.match(both, /<label class="checkline"><input type="checkbox" name="remember" value="1">/);
+  assert.ok(!both.includes('使用 Google 账号登录') && both.includes('action="/login/tap"'), '同位置只展示一个气泡');
+  const en = runWithLang('en', () => loginPage({ ...opts, tapUser: { username: 'u', name: 'Sakura' } }));
+  assert.ok(en.includes('Continue as Sakura') && en.includes("Don&#39;t remember this device")); // ' 会被 esc 转义
+});
 await check('Google 关联页两表单携带一次性 linkToken 与 CSRF,邮箱回显转义,注册表单随开关', () => {
+
   const html = googleLinkPage({ ...common, linkToken: 'lt-1', googleEmail: 'ev"il@example.com', allowRegister: true });
   assert.match(html, /<h3 style="margin-top:0">关联本地账号<\/h3>/);
   assert.ok(!html.includes('ev"il@example.com') && html.includes('ev&quot;il@example.com')); // 邮箱回显必须转义

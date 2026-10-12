@@ -53,6 +53,8 @@ export function registerRoutes() {
   r('GET', '/login', login.showLogin);
   r('POST', '/login', login.handleLogin);
   r('POST', '/login/2fa', login.handleTwoFa);
+  r('POST', '/login/tap', login.handleTap);           // 一键登录气泡(记住态免密回归)
+  r('POST', '/login/tap-forget', login.forgetTap);    // 气泡上的「不再记住此设备」
   r('GET', '/register', register.showRegister);
   r('POST', '/register', register.handleRegister);
   r('GET', '/logout', logout.showLogout);

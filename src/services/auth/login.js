@@ -8,6 +8,7 @@ import { randomToken, sha256hex, timingSafeEqStr, nowSec } from '../../core/cryp
 import { verifyTotp } from '../../core/totp.js';
 import { getSigningKey } from '../../core/keys.js';
 import { setCookie, clearCookie, redirect, sendHtml } from '../../core/http.js';
+import { TAP_COOKIE, signTap, verifyTapSig, setTapCookie, clearTapCookie } from '../../core/tap.js';
 import { hiddenInputs } from '../../views/components.js';
 import { escapeHtml as esc } from '../../core/util.js';
 import { getRuntime } from '../../core/runtime.js';
@@ -86,8 +87,8 @@ const hmacKey = () => {
 };
 const b64u = (buf) => Buffer.from(buf).toString('base64url');
 
-function signPending(user, csrf, ttl = 300) {
-  const payload = b64u(JSON.stringify({ uid: user.id, version: user.credential_version, csrf, exp: nowSec() + ttl }));
+function signPending(user, csrf, ttl = 300, remember = false) {
+  const payload = b64u(JSON.stringify({ uid: user.id, version: user.credential_version, csrf, rm: !!remember, exp: nowSec() + ttl }));
   const sig = b64u(crypto.createHmac('sha256', hmacKey()).update(payload).digest());
   return `${payload}.${sig}`;
 }
@@ -117,11 +118,16 @@ export function showLogin(ctx, { err, username = '' } = {}) {
     setCookie(ctx.res, 'csrf', csrf, { maxAge: 600, secure: ctx.runtime.secureCookies });
   }
   const nextRaw = ctx.query.get('next') || '';
+  // 一键登录气泡:此前在此设备勾选过「记住我」,且令牌仍有效(签名+时效+人员校验)
+  const tapClaims = verifyTapSig(ctx.cookies[TAP_COOKIE]);
+  const tapUser = tapClaims ? users.byId(tapClaims.uid) : null;
+  const tapOk = !!(tapUser && !tapUser.disabled && tapUser.credential_version === tapClaims.cv);
   sendHtml(ctx.res, err ? 401 : 200, loginPage({
     theme: ctx.theme, siteName: ctx.runtime.siteName,
     csrf, next: safeNext(nextRaw, ''), err, username,
     msg: ctx.query.get('msg') || '',
     allowRegister: ctx.runtime.allowRegister,
+    tapUser: tapOk ? tapUser : null,
   }));
 }
 
@@ -146,15 +152,15 @@ export async function handleLogin(ctx) {
     return showLogin(ctx, { err: '用户名或密码不正确。', username: body.username });
   }
 
-  // 已开启两步验证:先不出会话,进入第二因子
+  // 已开启两步验证:先不出会话,进入第二因子(记住选择一并带到二步验证后)
   if (user.totp_enabled && user.totp_secret) {
     return sendHtml(ctx.res, 200, twofaPage({
       theme: ctx.theme, siteName: ctx.runtime.siteName,
-      csrf: cookieCsrf, pending: signPending(user, cookieCsrf), next,
+      csrf: cookieCsrf, pending: signPending(user, cookieCsrf, 300, body.remember === '1'), next,
       username: user.username,
     }));
   }
-  return finishLogin(ctx, user, next, cookieCsrf);
+  return finishLogin(ctx, user, next, body.remember === '1');
 }
 
 /** POST /login/2fa —— 第二因子:TOTP 或恢复代码 */
@@ -188,7 +194,45 @@ export function handleTwoFa(ctx) {
   }
   if (okRecovery) logger.info('恢复代码已使用', { username: user.username });
   clearFails(ctx, user.username);
-  return finishLogin(ctx, user, next, cookieCsrf);
+  return finishLogin(ctx, user, next, !!pending.rm);
+}
+
+/** POST /login/tap —— 一键登录气泡:校验签名记住令牌后直接建立会话 */
+export function handleTap(ctx) {
+  const b = ctx.body || {};
+  const cookieCsrf = ctx.cookies.csrf || '';
+  if (!cookieCsrf || typeof b._csrf !== 'string' || b._csrf !== cookieCsrf) {
+    return showLogin(ctx, { err: '页面已过期,请重试。' });
+  }
+  const claims = verifyTapSig(ctx.cookies[TAP_COOKIE]);
+  const user = claims ? users.byId(claims.uid) : null;
+  if (!user || user.disabled || user.credential_version !== claims.cv) {
+    // 令牌无效一般是过期或改密后:清掉残留 cookie,引导回密码登录
+    if (ctx.cookies[TAP_COOKIE]) clearTapCookie(ctx.res, ctx.runtime.secureCookies);
+    return showLogin(ctx, { err: '一键登录已失效,请重新输入密码登录。' });
+  }
+  const next = safeNext(b.next, '');
+  // 2FA 账号:不因记住态绕过第二因子,保留 pending 并带到二步验证页
+  if (user.totp_enabled && user.totp_secret) {
+    return sendHtml(ctx.res, 200, twofaPage({
+      theme: ctx.theme, siteName: ctx.runtime.siteName,
+      csrf: cookieCsrf, pending: signPending(user, cookieCsrf, 300, true), next,
+      username: user.username,
+    }));
+  }
+  logger.info('一键登录(记住态气泡)', { username: user.username });
+  startSession(ctx.res, user, undefined, sessionMeta(ctx));
+  redirect(ctx.res, next || '/apps');
+}
+
+/** POST /login/tap-forget —— 「不再记住此设备」:清除记住令牌 */
+export function forgetTap(ctx) {
+  const cookieCsrf = ctx.cookies.csrf || '';
+  if (cookieCsrf && ctx.body?._csrf !== cookieCsrf) {
+    return redirect(ctx.res, '/login?err=' + encodeURIComponent('页面已过期,请重试。'));
+  }
+  clearTapCookie(ctx.res, ctx.runtime.secureCookies);
+  redirect(ctx.res, '/login?msg=' + encodeURIComponent('已取消记住此设备,下次将需要输入密码。'));
 }
 
 /** 从请求提取会话设备信息(IP / User-Agent),各登录入口统一传给 startSession 落库 */
@@ -249,8 +293,9 @@ export function startSession(res, user, secureCookies, meta = {}) {
   return sid;
 }
 
-function finishLogin(ctx, user, next, cookieCsrf) {
+function finishLogin(ctx, user, next, remember = false) {
   startSession(ctx.res, user, undefined, sessionMeta(ctx));
+  if (remember) setTapCookie(ctx.res, signTap(user), ctx.runtime.secureCookies);
   redirect(ctx.res, next || '/apps');
 }
 

@@ -102,8 +102,19 @@ export async function verifyIdToken(idToken, { clientId, tenant, authority = 'ht
   try { payload = JSON.parse(Buffer.from(p, 'base64url').toString()); } catch { throw new Error('id_token 载荷无法解析'); }
   if (payload.aud !== clientId) throw new Error('id_token 的 aud 与 client_id 不符');
   if (payload.exp !== undefined && payload.exp <= nowSec()) throw new Error('id_token 已过期');
-  const expectedIss = `${base}/${tenant}/v2.0`;
-  if (payload.iss !== expectedIss) throw new Error(`id_token 的 iss 不符(期望 ${expectedIss})`);
+  /* iss 校验:Azure 的 iss 形如 {base}/{tid}/v2.0。tid 是令牌内已签名的真实租户标识,
+   * common/organizations/consumers 等多租户端点下 tid 是用户归属租户的 GUID,而非配置的字面值,
+   * 所以不能用配置的 tenant 硬拼期望值;正确做法是要求 iss 与令牌自身的 tid 一致。
+   * 且 iss 的主机部分必须就是配置的 authority(防其它 issuer 的自洽令牌)。 */
+  const issRe = new RegExp(`^${base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/([^/]+)/v2\\.0$`);
+  const issMatch = issRe.exec(String(payload.iss || ''));
+  if (!issMatch || !payload.tid || issMatch[1] !== payload.tid) {
+    throw new Error(`id_token 的 iss 与 tid 不一致(令牌 iss=${payload.iss || '(空)'},tid=${payload.tid || '(空)'})`);
+  }
+  if (tenant && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(tenant)
+    && String(payload.tid).toLowerCase() !== tenant.toLowerCase()) {
+    throw new Error(`id_token 的租户与配置不符(令牌 tid=${payload.tid},配置 tenant=${tenant})`);
+  }
   return {
     sub: payload.sub,
     email: payload.email || '',

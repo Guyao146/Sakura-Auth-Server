@@ -141,6 +141,8 @@ const makeAssertion = ({ challenge, credIdB64, counter = 1, origin = BASE, userH
 
 /* ---------- 本地 mock Microsoft(OIDC 提供方,与被测服务并行运行) ---------- */
 function startMockMs({ clientId = 'smoke-ms-client', sub = 'ms-sub-123', email = 'msuser@example.com', name = 'MS 测试用户' } = {}) {
+  // 模拟真实 Azure:令牌 tid 是租户 GUID,与 common 端点形态解耦
+  const MOCK_TID = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
   const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
   const jwk = { kid: 'test-kid', alg: 'RS256', use: 'sig', ...publicKey.export({ format: 'jwk' }) };
   const b64u = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
@@ -168,7 +170,7 @@ function startMockMs({ clientId = 'smoke-ms-client', sub = 'ms-sub-123', email =
       res.end();
       return;
     }
-    // token:校验 form 后签发 id_token(iss 规则与 verifyIdToken 保持一致)
+    // token:校验 form 后签发 id_token(iss/tid 规则与真实 Azure 一致:tid 为租户 GUID)
     let raw = '';
     for await (const ch of req) raw += ch;
     const form = new URLSearchParams(raw);
@@ -180,7 +182,8 @@ function startMockMs({ clientId = 'smoke-ms-client', sub = 'ms-sub-123', email =
     const header = b64u({ alg: 'RS256', typ: 'JWT', kid: 'test-kid' });
     const now = Math.floor(Date.now() / 1000);
     const payload = b64u({
-      iss: `${authority}/${tenantSeg}/v2.0`, sub, email, preferred_username: email, name,
+      iss: `${authority}/${MOCK_TID}/v2.0`, tid: MOCK_TID,
+      sub, email, preferred_username: email, name,
       aud: clientId, iat: now, exp: now + 3600,
     });
     const sig = crypto.createSign('RSA-SHA256').update(`${header}.${payload}`).sign(privateKey, 'base64url');
@@ -2037,6 +2040,87 @@ let googleMock = null;
     const regToggleG2 = extractHidden(await r.text());
     await call(aj, '/admin/register-toggle', { method: 'POST', form: { _csrf: regToggleG2._csrf } });
     if (gRegUser) users.unbindGoogle(gRegUser.id); // 保持环境干净
+
+    /* ---------- 登录页 One-Tap 气泡(勾选「记住我」后的免密回归,零 JS) ---------- */
+    const { invalidateUserCredentials } = await import('../src/services/auth/credentials.js');
+    const aliceRow = users.byUsername('alice');
+
+    // 未勾选记住我:登录成功但不签发记住令牌
+    const tj0 = new Jar();
+    let tl0 = extractHidden(await (await call(tj0, '/login')).text());
+    r = await call(tj0, '/login', { method: 'POST', form: { username: 'alice', password: 'NewPass#123', _csrf: tl0._csrf } });
+    ok('气泡:未勾选记住我登录成功', r.status === 302, `loc=${location(r)}`);
+    ok('气泡:未勾选记住我不写入 tap cookie', !tj0.map.has('sakura-tap'));
+    await call(tj0, '/logout', { method: 'POST', form: { _csrf: extractHidden(await (await call(tj0, '/logout')).text())._csrf } });
+    ok('气泡:无记住令牌时登录页无气泡', !(await (await call(tj0, '/login')).text()).includes('以 爱丽丝 继续'));
+
+    // 勾选记住我:登录成功并写入 tap cookie(30 天)
+    const tj = new Jar();
+    let tl1 = extractHidden(await (await call(tj, '/login')).text());
+    r = await call(tj, '/login', { method: 'POST', form: { username: 'alice', password: 'NewPass#123', remember: '1', _csrf: tl1._csrf } });
+    ok('气泡:勾选记住我登录成功并写入 tap cookie', r.status === 302 && tj.map.has('sakura-tap'), `loc=${location(r)}`);
+    await call(tj, '/logout', { method: 'POST', form: { _csrf: extractHidden(await (await call(tj, '/logout')).text())._csrf } });
+    r = await call(tj, '/login');
+    const tapHtml = await r.text();
+    ok('气泡:会话过期后登录页出现「欢迎回来」气泡', r.status === 200
+      && tapHtml.includes('aria-label="欢迎回来"') && tapHtml.includes('以 爱丽丝 继续')
+      && tapHtml.includes('action="/login/tap"') && tapHtml.includes('不再记住此设备')
+      && tapHtml.includes('href="#login-form"'));
+    ok('气泡:记住态气泡盖过 Google 气泡(同位置只展示一个)', !tapHtml.includes('使用 Google 账号登录'));
+
+    // 一键登录:缺 CSRF 被拒(双提交 cookie)
+    r = await call(tj, '/login/tap', { method: 'POST', form: { next: '/apps' } });
+    ok('气泡:一键登录缺 CSRF 被拒', r.status === 401 && (await r.text()).includes('页面已过期'));
+    // 一键登录:带 CSRF 直接建立会话
+    const tapCsrf = extractHidden(tapHtml)._csrf;
+    r = await call(tj, '/login/tap', { method: 'POST', form: { _csrf: tapCsrf, next: '/apps' } });
+    ok('气泡:一键登录成功并跳转 /apps', r.status === 302 && location(r) === '/apps', `loc=${location(r)}`);
+    r = await call(tj, '/apps');
+    ok('气泡:一键登录后的会话可访问门户', r.status === 200);
+
+    // 「不再记住此设备」:清除令牌并回登录页
+    await call(tj, '/logout', { method: 'POST', form: { _csrf: extractHidden(await (await call(tj, '/logout')).text())._csrf } });
+    r = await call(tj, '/login/tap-forget', { method: 'POST', form: { _csrf: tapCsrf } });
+    ok('气泡:「不再记住此设备」清除令牌并回登录页', r.status === 302 && location(r).startsWith('/login?msg=')
+      && !tj.map.has('sakura-tap'), `loc=${location(r)}`);
+    ok('气泡:取消记住后登录页不再有气泡', !(await (await call(tj, '/login')).text()).includes('以 爱丽丝 继续'));
+
+    // 凭据失效（改密/重置/禁用都用同一通道):旧记住令牌立刻作废
+    const tj2 = new Jar();
+    let tl2 = extractHidden(await (await call(tj2, '/login')).text());
+    r = await call(tj2, '/login', { method: 'POST', form: { username: 'alice', password: 'NewPass#123', remember: '1', _csrf: tl2._csrf } });
+    ok('气泡:重新勾选记住我登录成功', r.status === 302 && tj2.map.has('sakura-tap'));
+    invalidateUserCredentials(aliceRow.id); // 改密/重置走同一函数:会话与记住态一并作废
+    ok('气泡:凭据失效后登录页无气泡(令牌随 credential_version 作废)',
+      !(await (await call(tj2, '/login')).text()).includes('以 爱丽丝 继续'));
+
+    // 2FA 账号:记住态只省第一因子,第二因子仍必须
+    const aliceTotp = totp.generateSecret();
+    users.setTotpSecret(aliceRow.id, aliceTotp);
+    users.enableTotp(aliceRow.id);
+    const tj3 = new Jar();
+    let tl3 = extractHidden(await (await call(tj3, '/login')).text());
+    r = await call(tj3, '/login', { method: 'POST', form: { username: 'alice', password: 'NewPass#123', remember: '1', _csrf: tl3._csrf } });
+    const twoHtml2 = await r.text();
+    ok('气泡:2FA 账号密码通过后进二步验证页(记住选择随 pending 传递)', r.status === 200 && twoHtml2.includes('两步验证'));
+    r = await call(tj3, '/login/2fa', {
+      method: 'POST',
+      form: { code: totp.currentCode(aliceTotp), _csrf: extractHidden(twoHtml2)._csrf, pending: extractHidden(twoHtml2).pending },
+    });
+    ok('气泡:二步验证通过后登录并签发 tap cookie', r.status === 302 && location(r) === '/apps' && tj3.map.has('sakura-tap'),
+      `loc=${location(r)}`);
+    await call(tj3, '/logout', { method: 'POST', form: { _csrf: extractHidden(await (await call(tj3, '/logout')).text())._csrf } });
+    const tapTwo = extractHidden(await (await call(tj3, '/login')).text());
+    r = await call(tj3, '/login/tap', { method: 'POST', form: { _csrf: tapTwo._csrf } });
+    const tapTwoHtml = await r.text();
+    ok('气泡:2FA 账号点一键登录进入二步验证页(不绕过 TOTP)', r.status === 200 && tapTwoHtml.includes('两步验证')
+      && !!extractHidden(tapTwoHtml).pending);
+    r = await call(tj3, '/login/2fa', {
+      method: 'POST',
+      form: { code: totp.currentCode(aliceTotp), _csrf: extractHidden(tapTwoHtml)._csrf, pending: extractHidden(tapTwoHtml).pending },
+    });
+    ok('气泡:2FA + 一键登录完整通过', r.status === 302 && location(r) === '/apps', `loc=${location(r)}`);
+    users.clearTotp(aliceRow.id); // 恢复环境
 
     /* ---------- 操作审计日志(放最后段:向导重跑段之前) ---------- */
     const auditM = await import('../src/models/audit.js');

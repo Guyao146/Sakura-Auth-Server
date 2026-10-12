@@ -20,14 +20,21 @@ const b64u = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
 /* ---------- mock Microsoft:JWKS / authorize / token ---------- */
 const CLIENT_ID = 'test-ms-client';
 const SUB = 'ms-sub-abc123', EMAIL = 'msuser@example.com', NAME = 'MS 测试用户';
+/* 模拟真实 Azure:tid 是租户 GUID,iss 形如 {base}/{tid}/v2.0(common 端点下 tid ≠ 'common') */
+const TEST_TID = '11111111-2222-3333-4444-555555555555';
+const OTHER_TID = '99999999-8888-7777-6666-555555555555';
 const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
 const jwk = { kid: 'test-kid', alg: 'RS256', use: 'sig', ...publicKey.export({ format: 'jwk' }) };
 
-/** 签发 id_token;expOffset 负数模拟过期,tamper 交换载荷字节模拟签名失败 */
-function makeIdToken(iss, { aud = CLIENT_ID, expOffset = 3600, tamper = false } = {}) {
+/** 签发 id_token;tid 缺省为 TEST_TID,iss 缺省按 {base}/{tid}/v2.0 拼接;
+ *  expOffset 负数模拟过期,tamper 交换载荷字节模拟签名失败 */
+function makeIdToken({ iss, tid = TEST_TID, aud = CLIENT_ID, expOffset = 3600, tamper = false } = {}) {
+  const finalIss = iss || (tid ? `${authority}/${tid}/v2.0` : `${authority}/common/v2.0`);
   const header = b64u({ alg: 'RS256', typ: 'JWT', kid: 'test-kid' });
   const now = Math.floor(Date.now() / 1000);
-  const payload = b64u({ iss, sub: SUB, email: EMAIL, preferred_username: EMAIL, name: NAME, aud, iat: now, exp: now + expOffset });
+  const claims = { iss: finalIss, sub: SUB, email: EMAIL, preferred_username: EMAIL, name: NAME, aud, iat: now, exp: now + expOffset };
+  if (tid !== null) claims.tid = tid;
+  const payload = b64u(claims);
   const sig = crypto.createSign('RSA-SHA256').update(`${header}.${payload}`).sign(privateKey, 'base64url');
   const broken = tamper ? payload.slice(0, -2) + 'xx' : payload;
   return `${header}.${broken}.${sig}`;
@@ -56,7 +63,7 @@ const server = http.createServer(async (req, res) => {
     res.end();
     return;
   }
-  // token:校验 form 后返回自签 id_token(iss 与 verifyIdToken 的规则保持一致)
+  // token:校验 form 后返回自签 id_token(iss/tid 规则与真实 Azure 一致:tid 为租户 GUID)
   let raw = '';
   for await (const ch of req) raw += ch;
   const form = new URLSearchParams(raw);
@@ -64,10 +71,9 @@ const server = http.createServer(async (req, res) => {
     || !form.get('code') || !form.get('code_verifier') || !form.get('redirect_uri')) {
     return json(400, { error: 'invalid_grant', error_description: 'mock: 表单校验失败' });
   }
-  const authority = `http://127.0.0.1:${server.address().port}`;
   return json(200, {
     access_token: 'mock-access-token', token_type: 'Bearer', expires_in: 3600,
-    id_token: makeIdToken(`${authority}/${tenantSeg}/v2.0`),
+    id_token: makeIdToken(),
   });
 });
 
@@ -115,13 +121,23 @@ try {
   /* ---------- 拒绝路径 ---------- */
   const throws = async (fn) => { try { await fn(); return false; } catch { return true; } };
   ok('MSAL:aud 与 client_id 不符被拒绝', await throws(() =>
-    verifyIdToken(makeIdToken(`${authority}/common/v2.0`, { aud: 'other-client' }), { clientId: CLIENT_ID, tenant: 'common', authority })));
-  ok('MSAL:iss(tenant)不符被拒绝', await throws(() =>
-    verifyIdToken(makeIdToken(`${authority}/other-tenant/v2.0`), { clientId: CLIENT_ID, tenant: 'common', authority })));
+    verifyIdToken(makeIdToken({ aud: 'other-client' }), { clientId: CLIENT_ID, tenant: 'common', authority })));
+  ok('MSAL:iss 与 tid 不一致被拒绝', await throws(() =>
+    verifyIdToken(makeIdToken({ iss: `${authority}/${TEST_TID}/v2.0`, tid: OTHER_TID }),
+      { clientId: CLIENT_ID, tenant: 'common', authority })));
+  ok('MSAL:缺少 tid claim 被拒绝', await throws(() =>
+    verifyIdToken(makeIdToken({ tid: null }), { clientId: CLIENT_ID, tenant: 'common', authority })));
+  ok('MSAL:iss 主机不是配置的 authority 被拒绝', await throws(() =>
+    verifyIdToken(makeIdToken({ iss: `https://evil.example.com/${TEST_TID}/v2.0` }),
+      { clientId: CLIENT_ID, tenant: 'common', authority })));
+  ok('MSAL:配置具体租户 GUID 时令牌 tid 不符被拒绝', await throws(() =>
+    verifyIdToken(makeIdToken(), { clientId: CLIENT_ID, tenant: OTHER_TID, authority })));
+  ok('MSAL:配置具体租户 GUID 且令牌 tid 一致时通过', !!(await verifyIdToken(makeIdToken(),
+    { clientId: CLIENT_ID, tenant: TEST_TID, authority })).sub);
   ok('MSAL:过期 id_token 被拒绝', await throws(() =>
-    verifyIdToken(makeIdToken(`${authority}/common/v2.0`, { expOffset: -10 }), { clientId: CLIENT_ID, tenant: 'common', authority })));
+    verifyIdToken(makeIdToken({ expOffset: -10 }), { clientId: CLIENT_ID, tenant: 'common', authority })));
   ok('MSAL:篡改载荷验签失败被拒绝', await throws(() =>
-    verifyIdToken(makeIdToken(`${authority}/common/v2.0`, { tamper: true }), { clientId: CLIENT_ID, tenant: 'common', authority })));
+    verifyIdToken(makeIdToken({ tamper: true }), { clientId: CLIENT_ID, tenant: 'common', authority })));
   ok('MSAL:token 端点拒绝时 exchangeCode 抛错', await throws(() =>
     exchangeCode({ tenant: 'common', clientId: CLIENT_ID, clientSecret: 'x', redirectUri, code: '', codeVerifier: 'v', authority })));
   ok('MSAL:格式不完整的 id_token 被拒绝', await throws(() =>

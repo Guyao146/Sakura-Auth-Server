@@ -1,5 +1,20 @@
 # 更新记录
 
+## 1.7.1
+
+### Microsoft 联邦登录:修复真实 Azure 下 iss 校验误报
+
+- 修复使用真实 Azure AD 时必然报「id_token 的 iss 不符（期望 https://login.microsoftonline.com/common/v2.0)」的问题：Azure 签发的 iss 形如 `{authority}/{租户GUID}/v2.0`,而 `common`/`organizations`/`consumers` 多租户端点下 tid 是用户归属租户的 GUID,**不等于**配置的字面值，因此不能用配置的 tenant 硬拼期望值。
+- 新校验规则：iss 必须与令牌内已签名的 `tid` claim 一致，且主机部分就是配置的 authority;管理员配置具体租户 GUID 时，追加校验令牌必须来自该租户。
+- mock 测试与冒烟的 Microsoft 链路全部改为真实 Azure 的 GUID 形态 iss/tid(test-ms 19 项、smoke MS 全链路通过）。
+
+### 登录页「记住我」一键登录气泡（类 Google One-Tap 的自家实现）
+
+- 登录表单新增「记住我」复选框（默认不勾选，最保守策略）：勾选后登录成功（含二步验证完成）签发 30 天 HttpOnly 记住令牌——无状态 HMAC 令牌，派生自本库签名密钥，不落库、无独立密钥。
+- 会话过期后访问登录页：令牌有效时在表单上方渲染 One-Tap 风格气泡「以 {姓名} 继续」，点一下免密回归应用(`POST /login/tap`，双提交 CSRF);气泡含「使用其它账号登录」回链与「不再记住此设备」(`POST /login/tap-forget`)。
+- 安全特性：令牌载荷含 `credential_version`——改密/重置/禁用/2FA 变更同一通道作废旧令牌；已开启 2FA 的账号点一键登录仍进入二步验证页，不绕过第二因子；记住态气泡与 Google 气泡同位置只展示一个。
+- 测试：冒烟新增 17 项断言（签发/气泡渲染/CSRF 拒绝/免密回归/取消记住/凭据失效/2FA 互动），视图回归新增 2 项。
+
 ## 1.7.0
 
 ### Google 账号联邦登录与登录页 One-Tap 气泡

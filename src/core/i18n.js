@@ -150,6 +150,14 @@ const zh = {
   'gtap.continue': '使用 Google 账号继续',
   'gtap.usePassword': '使用账号密码登录',
 
+  /* ---- 登录页「记住我」一键登录气泡 ---- */
+  'tap.welcome': '欢迎回来',
+  'tap.sub': '此设备已记住你的账号,点一下继续,无需输入密码。',
+  'tap.continue': '以 {name} 继续',
+  'tap.useOther': '使用其它账号登录',
+  'tap.forget': '不再记住此设备',
+  'login.remember': '在此设备记住我(下次可一键登录)',
+
   /* ---- Google 绑定 ---- */
   'google.title': 'Google 账号',
   'google.boundEmail': '绑定邮箱',
@@ -400,6 +408,14 @@ const en = {
   'gtap.sub': 'This site supports Google accounts — continue in one click, no password needed.',
   'gtap.continue': 'Continue with Google',
   'gtap.usePassword': 'Use your account password',
+
+  /* ---- 登录页「记住我」一键登录气泡 ---- */
+  'tap.welcome': 'Welcome back',
+  'tap.sub': 'This device remembers your account — continue in one click, no password needed.',
+  'tap.continue': 'Continue as {name}',
+  'tap.useOther': 'Use another account',
+  'tap.forget': "Don't remember this device",
+  'login.remember': 'Remember me on this device (one-tap sign-in next time)',
   'google.title': 'Google account',
   'google.boundEmail': 'Linked email',
   'google.unbindHint': 'After unbinding, this Google account can no longer be used to sign in here.',

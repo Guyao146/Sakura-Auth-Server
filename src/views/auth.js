@@ -43,8 +43,9 @@ const MS_LOGO = `<svg width="16" height="16" viewBox="0 0 23 23" aria-hidden="tr
 const GOOGLE_LOGO = `<svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true" style="flex:none"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>`;
 
 /** 登录页(品牌化分栏:左侧品牌渐变面板 + 右侧登录表单;窄屏仅表单)。
- *  msEnabled 缺省时回退读运行时配置(启用后表单下方出现 Microsoft 登录入口)。 */
-export function loginPage({ theme, siteName, csrf, next, err, username = '', allowRegister = false, msg = '', msEnabled, showPasskey = true, lang, googleEnabled }) {
+ *  msEnabled 缺省时回退读运行时配置(启用后表单下方出现 Microsoft 登录入口)。
+ *  tapUser 非空时渲染「欢迎回来」一键登录气泡(沿用 gtap 气泡外观),并盖过 Google 气泡。 */
+export function loginPage({ theme, siteName, csrf, next, err, username = '', allowRegister = false, msg = '', msEnabled, showPasskey = true, lang, googleEnabled, tapUser }) {
   const L = normalizeLang(lang || currentLang());
   const rt = getRuntime();
   const showMs = msEnabled !== undefined ? !!msEnabled : !!(rt && rt.msOAuth && rt.msOAuth.enabled);
@@ -52,24 +53,48 @@ export function loginPage({ theme, siteName, csrf, next, err, username = '', all
     : !!(rt && rt.googleOAuth && rt.googleOAuth.enabled && rt.googleOAuth.clientId);
   const showUniLink = !!rt?.unilink?.enabled;
   const divider = `<div class="login-divider">${esc(t(L, 'login.alternatives'))}</div>`;
-  const gtap = showGoogle ? `
+  const tapInitial = tapUser ? (String(tapUser.name || tapUser.username).trim()[0] || '?').toUpperCase() : '';
+  // 记住态一键登录气泡:记住的是本站账号,沿用 Google 气泡外观(.gtap-*),头像取姓名首字
+  const tapBubble = tapUser ? `
+      <div class="gtap" role="region" aria-label="${esc(t(L, 'tap.welcome'))}">
+        <p class="gtap-head"><span class="tap-avatar">${esc(tapInitial)}</span>${esc(t(L, 'tap.welcome'))}</p>
+        <p class="gtap-sub">${esc(t(L, 'tap.sub'))}</p>
+        <form method="post" action="/login/tap">
+          ${hiddenInputs({ _csrf: csrf, next: next || '' })}
+          <button class="gtap-btn" type="submit"><span class="tap-avatar">${esc(tapInitial)}</span>${esc(fmt(t(L, 'tap.continue'), { name: tapUser.name || tapUser.username }))}</button>
+        </form>
+        <div class="gtap-foot"><a href="#login-form">${esc(t(L, 'tap.useOther'))}</a>
+          <form class="tap-forget" method="post" action="/login/tap-forget">
+            ${hiddenInputs({ _csrf: csrf })}
+            <button type="submit">${esc(t(L, 'tap.forget'))}</button>
+          </form>
+        </div>
+      </div>` : '';
+  // 已登录态气泡优先:同一位置只展示一个气泡(Google 气泡让位给「欢迎回来」)
+  const showGoogleBubble = showGoogle && !tapUser;
+  const gtapStyle = (showGoogle || tapUser) ? `
       <style>
       .gtap{position:relative;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow-md);padding:var(--s4) var(--s4) var(--s3);margin:0 0 var(--s4)}
       .gtap::after{content:"";position:absolute;left:28px;bottom:-7px;width:13px;height:13px;background:var(--surface);border-right:1px solid var(--border);border-bottom:1px solid var(--border);transform:rotate(45deg)}
       .gtap-head{display:flex;align-items:center;gap:var(--s2);margin:0 0 var(--s2);color:var(--text);font-weight:650}
       .gtap-sub{color:var(--muted);font-size:14px;margin:0 0 var(--s3)}
-      .gtap-btn{display:flex;align-items:center;justify-content:center;gap:var(--s2);width:100%;padding:10px 12px;border-radius:8px;border:1px solid var(--border);background:#fff;color:#1f1f1f;font-weight:600;text-decoration:none;box-shadow:var(--shadow-sm);box-sizing:border-box}
+      .gtap-btn{display:flex;align-items:center;justify-content:center;gap:var(--s2);width:100%;padding:10px 12px;border-radius:8px;border:1px solid var(--border);background:#fff;color:#1f1f1f;font-weight:600;text-decoration:none;box-shadow:var(--shadow-sm);box-sizing:border-box;cursor:pointer}
       .gtap-btn:hover{background:#f7f8fa;text-decoration:none}
-      .gtap-foot{margin:var(--s2) 0 0;text-align:center}
-      .gtap-foot a{color:var(--muted);font-size:13px;text-decoration:underline}
+      .gtap-foot{margin:var(--s2) 0 0;text-align:center;display:flex;flex-direction:column;align-items:center;gap:4px}
+      .gtap-foot>a{color:var(--muted);font-size:13px;text-decoration:underline}
+      .tap-avatar{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;background:var(--accent,#c94f7d);color:#fff;font-size:12px;font-weight:600;flex:none}
+      .gtap-btn .tap-avatar{width:18px;height:18px;font-size:11px}
+      .tap-forget{margin:0}
+      .tap-forget button{background:none;border:none;padding:0;color:var(--muted);font-size:12px;text-decoration:underline;cursor:pointer}
       @media (prefers-color-scheme: dark){html:not([data-theme="day"]) .gtap-btn{background:#1e1e25;color:#f1f1f3;border-color:#303036}}
       html[data-theme="night"] .gtap-btn{background:#1e1e25;color:#f1f1f3;border-color:#303036}
-      </style>
+      </style>` : '';
+  const googleBubble = showGoogleBubble ? `
       <div class="gtap" role="region" aria-label="${esc(t(L, 'gtap.title'))}">
         <p class="gtap-head">${GOOGLE_LOGO}${esc(t(L, 'gtap.title'))}</p>
         <p class="gtap-sub">${esc(t(L, 'gtap.sub'))}</p>
         <a class="gtap-btn" href="/auth/google?next=${encodeURIComponent(next || '/apps')}">${GOOGLE_LOGO}${esc(t(L, 'gtap.continue'))}</a>
-        <p class="gtap-foot"><a href="#login-form">${esc(t(L, 'gtap.usePassword'))}</a></p>
+        <div class="gtap-foot"><a href="#login-form">${esc(t(L, 'gtap.usePassword'))}</a></div>
       </div>` : '';
   return brandPage({
     theme, siteName, lang: L, title: `${t(L, 'page.login')} · ${siteName}`,
@@ -80,7 +105,7 @@ export function loginPage({ theme, siteName, csrf, next, err, username = '', all
     content: `
       ${banner(err ? esc(trPassed(err, L)) : '', 'err')}
       ${banner(msg ? esc(trPassed(msg, L)) : '', 'ok')}
-      ${gtap}
+      ${gtapStyle}${tapBubble || googleBubble}
       <h2 class="login-form-title">${esc(t(L, 'login.welcome'))}</h2>
       <p class="login-form-sub muted small">${fmt(t(L, 'login.sub'), { site: esc(siteName) })}</p>
       <form id="login-form" method="post" action="/login">
@@ -90,6 +115,7 @@ export function loginPage({ theme, siteName, csrf, next, err, username = '', all
         <div class="field-heading"><label for="password">${esc(t(L, 'login.password'))}</label>
           <a href="/forgot-password">${esc(t(L, 'login.forgot'))}</a></div>
         <input type="password" id="password" name="password" required autocomplete="current-password">
+        <label class="checkline"><input type="checkbox" name="remember" value="1"><span>${esc(t(L, 'login.remember'))}</span></label>
         <div class="actions">
           <button class="btn btn-primary" type="submit">${esc(t(L, 'login.submit'))}</button>
         </div>

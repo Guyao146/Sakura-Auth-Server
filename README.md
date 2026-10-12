@@ -110,6 +110,7 @@ docker compose ps
 | 界面语言 | 简体中文 / English 切换(cookie + /-/lang/:code),登录/授权/门户/账号/控制台导航等高流量页面覆盖,缺词回退中文 |
 | Passkey | WebAuthn/Passkey 无密码登录:账号页注册凭据(上限 8 个),要求 PIN/生物识别等用户验证(UV);检查非零 counter 的递增并支持双零计数器;零依赖 CBOR/ES256 实现 |
 | 联邦登录 | Microsoft 与 Google 账号 OIDC 登录与绑定(Google 在登录页以 One-Tap 风格气泡呈现,零 JS);UniLink 扫码登录,保留原授权目标并对已开启 TOTP 的账号继续执行第二因子验证 |
+| 一键登录 | 登录勾选「记住我」后,会话过期再访问登录页弹出 One-Tap 风格气泡「以 {姓名} 继续」,点一下免密回归(无状态签名令牌,改密/重置/禁用/2FA 变更即作废;2FA 账号仍需第二因子) |
 | 流转 | 未登录访问首页跳登录页、登录后直达应用门户、已登录访问登录页跳门户 |
 | JSON API | /api/heartbeat 心跳(含版本/uptime/DB 探测)、/api/session 登录状态、/api/login 登录(支持 2FA)、/api/logout、/api/apps 可见应用、/api/sessions 会话列表与撤销、/api/registry 应用状态(令牌认证)。会话型写操作需带 `X-Requested-With: JSON` 头(防跨站纵深防御) |
 | 安全 | scrypt 口令哈希(异步并发限流)、CSRF 双提交、登录限流、授权码/刷新令牌哈希落库、授权码一次性、刷新令牌轮换与重放检测(全链作废)、改密/重置/禁用后统一凭据失效、防用户枚举(含登录耗时一致) |
@@ -178,10 +179,10 @@ curl -sS http://localhost:9000/userinfo -H 'Authorization: Bearer <ACCESS_TOKEN>
 
 | 命令 | 覆盖范围 | 默认 CI |
 | --- | --- | --- |
-| `npm run smoke` | 517 项端到端断言:向导、认证、授权、管理、Passkey、Microsoft/Google 联邦、品牌及备份恢复等 | 是 |
+| `npm run smoke` | 534 项端到端断言：向导、认证、授权、管理、Passkey、Microsoft/Google 联邦、一键登录气泡、品牌及备份恢复等 | 是 |
 | `npm run test:oauth` | 56 项 OAuth/OIDC、PKCE、刷新轮换、JWT 边界和旧库迁移检查 | 是 |
 | `npm run test:security` | 27 项认证竞态、凭据失效、权限组、Passkey 及运维安全回归 | 是 |
-| `npm run test:views` | 13 项 SSR 项目署名、导航、权限入口、表单、Google 气泡与绑定区块、多语言和可访问性标记检查 | 是 |
+| `npm run test:views` | 15 项 SSR 项目署名、导航、权限入口、表单、Google/记住我 气泡与绑定区块、多语言和可访问性标记检查 | 是 |
 | `node scripts/test-qr.mjs` | QR 编码器,46 项 | 是 |
 | `node scripts/test-smtp.mjs` | SMTP 对话,9 项 | 是 |
 | `node scripts/test-ms.mjs` | Microsoft OIDC 本地模拟联邦,15 项 | 是 |
