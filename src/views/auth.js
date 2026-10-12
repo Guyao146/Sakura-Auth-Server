@@ -122,7 +122,7 @@ export function loginPage({ theme, siteName, csrf, next, err, username = '', all
       </form>
       ${showMs || showPasskey || showUniLink ? `${divider}<div class="login-methods">
         ${showPasskey ? `<button class="btn" type="button" id="passkey-login-btn" aria-describedby="passkey-status">${featIcon('<circle cx="5.5" cy="6" r="3"/><path d="m8 8 5 5m-2-2 2-2"/>')}${esc(t(L, 'login.passkey'))}</button>` : ''}
-        ${showMs ? `<a class="btn" href="/auth/microsoft">${MS_LOGO}${esc(t(L, 'login.ms'))}</a>` : ''}
+        ${showMs ? `<a class="btn" href="/auth/microsoft${next ? `?next=${encodeURIComponent(next)}` : ''}">${MS_LOGO}${esc(t(L, 'login.ms'))}</a>` : ''}
         ${showUniLink ? `<a class="btn" href="/auth/unilink?next=${encodeURIComponent(next || '/apps')}">${esc(t(L, 'login.unilink'))}</a>` : ''}
       </div>` : ''}
       ${showPasskey ? '<p class="login-status" id="passkey-status" role="status" aria-live="polite"></p>' : ''}

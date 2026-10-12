@@ -1,5 +1,20 @@
 # 更新记录
 
+## 1.7.2
+
+### 联邦登录的授权链路续流
+
+- 修复经 Google / Microsoft 联邦登录后回不到原应用的问题：发起授权时携带的 `next`(如 `/authorize?client_id=…`)此前未被保存，回调写死跳 `/apps`。现在 `next` 经 state 暂存随回调回放——气泡登录、关联本地账号、注册新号三条路径完成后都回到原来的授权页（与密码登录同一 next 语义，经 safeNext 消毒）。
+- 登录页 Microsoft 入口链接现在与 Google 气泡、UniLink 一样携带 `next`。
+
+### 管理端 Client Secret 明文回显
+
+- Google / Microsoft 登录配置卡的 Client Secret 由「只能输入一次、保存后再也看不到」改为**回显已保存的明文，随时可看**（密钥本就以明文存于 settings 表——联邦认证换取上游令牌必须用明文，展示不新增暴露面）。清空提交仍保留旧值，输入新值即替换；Client ID 保持回显不变。
+
+### 测试
+
+- 冒烟新增 7 项断言（MS/Google 各自的授权链路续流闭环、配置卡密钥回显），视图回归同步更新 Microsoft 入口断言。
+
 ## 1.7.1
 
 ### Microsoft 联邦登录:修复真实 Azure 下 iss 校验误报

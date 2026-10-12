@@ -1785,6 +1785,24 @@ let googleMock = null;
     ok('MS:已绑定用户再次 Microsoft 登录直达 /apps', r.status === 302 && location(r) === '/apps',
       `status=${r.status} loc=${location(r)}`);
 
+    // 授权链路续流:经 Microsoft 登录后回到 /authorize(与密码登录同一 next 语义)
+    const msNj = new Jar();
+    const msAuthChain = '/authorize?' + new URLSearchParams({
+      client_id: web.client_id, redirect_uri: 'http://127.0.0.1:8080/cb',
+      response_type: 'code', scope: 'openid profile', state: 'ms-chain-st',
+      code_challenge: b64urlSha256('ms-chain-verifier-0123456789abcdef'),
+      code_challenge_method: 'S256',
+    }).toString();
+    r = await call(msNj, msAuthChain);
+    const msChainLoc = location(r);
+    ok('MS:未登录授权链路 302 到登录页并带 next', r.status === 302 && msChainLoc.startsWith('/login?next='), `loc=${msChainLoc}`);
+    r = await call(msNj, msChainLoc);
+    ok('MS:登录页 Microsoft 入口链接携带 next', (await r.text()).includes(`href="/auth/microsoft?next=${encodeURIComponent(msAuthChain)}"`));
+    r = await call(msNj, `/auth/microsoft?next=${encodeURIComponent(msAuthChain)}`);
+    r = await call(msNj, location(r));
+    r = await call(msNj, location(r));
+    ok('MS:授权链路经联邦登录后回到 /authorize', r.status === 302 && location(r) === msAuthChain, `loc=${location(r)}`);
+
     // 账号页区块 + 解绑
     r = await call(msj, '/account');
     const msAcctHtml = await r.text();
@@ -1911,6 +1929,11 @@ let googleMock = null;
     ok('Google:client_secret 留空保留旧密钥', r.status === 302 && location(r).startsWith('/admin?msg=')
       && settings.getMap().google_client_secret === 'smoke-google-secret');
 
+    // 配置卡回显:已保存的 Client Secret 以明文展示,可随时查看
+    r = await call(aj, '/admin');
+    ok('Google:配置卡回显已保存的 Client Secret 明文（可随时查看）',
+      (await r.text()).includes('value="smoke-google-secret"'));
+
     r = await call(new Jar(), '/login');
     const gOnHtml = await r.text();
     ok('Google:启用后登录页出现 One-Tap 气泡', r.status === 200
@@ -2035,6 +2058,25 @@ let googleMock = null;
     const gRegUser = users.byUsername('googlereg');
     ok('Google:注册的新用户已绑定 Google 身份且非管理员', !!gRegUser
       && gRegUser.google_sub === 'google-sub-123' && gRegUser.email === 'googleuser@example.com' && !gRegUser.is_admin);
+
+    // 授权链路续流:经 Google 气泡登录后回到 /authorize(气泡入口本身就带 next)
+    const gNj = new Jar();
+    const gAuthChain = '/authorize?' + new URLSearchParams({
+      client_id: web.client_id, redirect_uri: 'http://127.0.0.1:8080/cb',
+      response_type: 'code', scope: 'openid profile', state: 'g-chain-st',
+      code_challenge: b64urlSha256('g-chain-verifier-0123456789abcdef'),
+      code_challenge_method: 'S256',
+    }).toString();
+    r = await call(gNj, gAuthChain);
+    const gChainLoc = location(r);
+    ok('Google:未登录授权链路 302 到登录页并带 next', r.status === 302 && gChainLoc.startsWith('/login?next='), `loc=${gChainLoc}`);
+    r = await call(gNj, gChainLoc);
+    ok('Google:登录页气泡链接携带完整 next', (await r.text()).includes(`href="/auth/google?next=${encodeURIComponent(gAuthChain)}"`));
+    r = await call(gNj, `/auth/google?next=${encodeURIComponent(gAuthChain)}`);
+    r = await call(gNj, location(r));
+    r = await call(gNj, location(r));
+    ok('Google:授权链路经气泡联邦登录后回到 /authorize', r.status === 302 && location(r) === gAuthChain, `loc=${location(r)}`);
+
     // 恢复自助注册开关
     r = await call(aj, '/admin');
     const regToggleG2 = extractHidden(await r.text());

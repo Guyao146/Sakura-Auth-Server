@@ -79,7 +79,7 @@ await check('普通用户的手机及桌面菜单均不显示管理入口', () =
 await check('登录方式只分隔一次,保留 CSRF/next/密码自动填充和 Passkey ID', () => {
   const html = render('login');
   assert.equal((html.match(/class="login-divider"/g) || []).length, 1);
-  for (const value of ['name="_csrf"', 'name="next"', 'autocomplete="current-password"', 'id="passkey-login-btn"', 'id="passkey-status"', 'href="/auth/microsoft"', 'href="/auth/unilink?next=']) assert.ok(html.includes(value), value);
+  for (const value of ['name="_csrf"', 'name="next"', 'autocomplete="current-password"', 'id="passkey-login-btn"', 'id="passkey-status"', 'href="/auth/microsoft?next=%2Fauthorize%3Fclient_id%3Ddemo%26scope%3Dopenid"', 'href="/auth/unilink?next=']) assert.ok(html.includes(value), value);
   assert.match(html, /name="next" value="\/authorize\?client_id=demo&amp;scope=openid"/);
 });
 await check('Google One-Tap 气泡随开关出现/消失,next 转义且回链 #login-form', () => {

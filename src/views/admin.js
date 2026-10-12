@@ -227,9 +227,10 @@ export function dashboardPage({ theme, siteName, user, cur, stats, issuer, allow
             <div><label>Tenant(common / 组织 ID / consumers)</label>
               <input type="text" name="ms_tenant" value="${esc(ms.tenant)}" placeholder="common"></div>
           </div>
-          <label>Client Secret${ms.clientSecret ? '(已配置,留空保留)' : ''}</label>
-          <input type="password" name="ms_client_secret" value="" autocomplete="new-password"
-            placeholder="${ms.clientSecret ? '留空则保留已保存的密钥' : 'Microsoft 应用的客户端密钥'}">
+          <div><label>Client Secret</label>
+            <input type="text" name="ms_client_secret" value="${esc(ms.clientSecret)}" autocomplete="off"
+              placeholder="Microsoft 应用的客户端密钥">
+            <p class="muted small">已保存的密钥以明文回显,可随时查看;清空提交仍保留旧值,输入新值即替换。</p></div>
           ${kvRow('回调地址', ms.redirectUri ? esc(ms.redirectUri) : '-')}
           <div class="actions"><button class="btn btn-primary" type="submit">保存 Microsoft 登录设置</button></div>
         </form>
@@ -245,9 +246,10 @@ export function dashboardPage({ theme, siteName, user, cur, stats, issuer, allow
           <div class="grid2">
             <div><label>Client ID</label>
               <input type="text" name="google_client_id" value="${esc(g.clientId)}" placeholder="Google 应用的客户端 ID"></div>
-            <div><label>Client Secret${g.clientSecret ? '(已配置,留空保留)' : ''}</label>
-              <input type="password" name="google_client_secret" value="" autocomplete="new-password"
-                placeholder="${g.clientSecret ? '留空则保留已保存的密钥' : 'Google 应用的客户端密钥'}"></div>
+            <div><label>Client Secret</label>
+              <input type="text" name="google_client_secret" value="${esc(g.clientSecret)}" autocomplete="off"
+                placeholder="Google 应用的客户端密钥">
+              <p class="muted small">已保存的密钥以明文回显,可随时查看;清空提交仍保留旧值,输入新值即替换。</p></div>
           </div>
           ${kvRow('回调地址', g.redirectUri ? esc(g.redirectUri) : '-')}
           <details style="margin:var(--s2) 0">
